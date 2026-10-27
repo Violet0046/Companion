@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from companion_ever.application.authz import Authorizer
 from companion_ever.application.chat.conversation_service import ConversationService
+from companion_ever.infrastructure.trace import trace_scope
 
 if TYPE_CHECKING:
     from langgraph.graph import CompiledGraph
@@ -91,24 +92,42 @@ class SessionCloseService:
         Raises:
             PermissionError: user 不拥有 persona
         """
-        self.authorizer.require_persona(user_id, persona_id)
+        import time as _time
 
-        # 1. 写 sentinel marker
-        marker_id = self.conversation_service.log_session_close(
-            user_id=user_id, persona_id=persona_id,
-        )
+        with trace_scope("extraction", user_id, persona_id) as tr:
+            _t0 = _time.perf_counter()
+            self.authorizer.require_persona(user_id, persona_id)
 
-        # 2. 触发 extraction_workflow
-        state: ExtractionState = self.extraction_graph.invoke({
-            "user_id": user_id,
-            "persona_id": persona_id,
-        })
-        report = _report_from_state(state)
+            # 1. 写 sentinel marker
+            marker_id = self.conversation_service.log_session_close(
+                user_id=user_id, persona_id=persona_id,
+            )
+            tr.step(
+                "db.log_session_close",
+                ms=(_time.perf_counter() - _t0) * 1000,
+                marker_id=marker_id,
+            )
 
-        return SessionCloseReport(
-            marker_id=marker_id,
-            extraction=report,
-        )
+            # 2. 触发 extraction_workflow
+            _t1 = _time.perf_counter()
+            state: ExtractionState = self.extraction_graph.invoke({
+                "user_id": user_id,
+                "persona_id": persona_id,
+            })
+            tr.step(
+                "extraction.workflow",
+                ms=(_time.perf_counter() - _t1) * 1000,
+                messages_loaded=len(state.get("messages") or []),
+                facts_created=state.get("facts_created", 0),
+                blocks_updated=state.get("blocks_updated", 0),
+                errors=list(state.get("errors") or []),
+            )
+            report = _report_from_state(state)
+
+            return SessionCloseReport(
+                marker_id=marker_id,
+                extraction=report,
+            )
 
 
 __all__ = ["SessionCloseReport", "ExtractionReport", "SessionCloseService"]

@@ -25,6 +25,7 @@ from companion_ever.config import RetrievalConfig
 from companion_ever.domain.entities import Note
 from companion_ever.domain.enums import NoteType
 from companion_ever.infrastructure.persistence.note_repo import NoteRepo
+from companion_ever.infrastructure.trace import current_trace
 
 
 class RetrievalService:
@@ -57,6 +58,9 @@ class RetrievalService:
         Returns:
             按 score 降序排列的 notes 列表
         """
+        import time as _time
+        _t0 = _time.perf_counter()
+
         # 权限校验
         self.authorizer.require_persona(user_id, persona_id)
 
@@ -97,7 +101,36 @@ class RetrievalService:
         scored.sort(key=lambda x: -x[0])  # 降序
 
         # 5. 取 top_k
-        return [n for _, n in scored[:top_k]]
+        result = [n for _, n in scored[:top_k]]
+
+        # --- trace：记下召回了什么、为什么 ---
+        tr = current_trace()
+        if tr is not None:
+            tr.step(
+                "retrieval.retrieve",
+                ms=(_time.perf_counter() - _t0) * 1000,
+                query=query[:120],
+                top_k=top_k,
+                always_included=len(always_notes),
+                fts_hits=len(fts_hits),
+                candidates=len(candidates),
+                returned=len(result),
+                notes=[
+                    {
+                        "id": n.id,
+                        "type": n.type.value,
+                        "score": round(sc, 3),
+                        "importance": n.importance,
+                        "content": (
+                            n.content if isinstance(n.content, str)
+                            else str(n.content)
+                        )[:80],
+                    }
+                    for sc, n in scored[:top_k]
+                ],
+            )
+
+        return result
 
     def _score(
         self,

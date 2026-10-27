@@ -101,6 +101,71 @@ $env:PYTHONPATH='src'
 
 ---
 
+## 4.5 trace 诊断系统（2026-10-27 新增）⭐
+
+**回答一个问题：这一轮模型究竟看到了什么、为什么这么答、花了多少。**
+
+### 用法
+
+```powershell
+# 1) 列出最近的 trace（耗时、输入字符数一眼看到）
+companion-cli trace list --user yike --persona 柳如烟 --last 10
+
+# 2) 看某一轮的完整链路
+companion-cli trace show <trace_id>
+
+# 3) 看模型实际收到的完整请求（system prompt + 全部历史 + 召回的记忆）
+companion-cli trace show <trace_id> --request
+
+# 4) 看模型实际返回的内容
+companion-cli trace show <trace_id> --response
+
+# 5) 清理 7 天前的 trace
+companion-cli trace prune --days 7
+```
+
+### 存储位置
+
+```
+memory/traces/2026-10-27/
+  ├──<trace_id>.json          # 元数据 + 链路步骤
+  ├── <trace_id>.request.txt   # 实际发给 LLM 的完整请求  ← "模型究竟看到了什么"
+  └── <trace_id>.response.txt  # 实际收到的回复
+```
+
+### 开关
+
+| 环境变量 | 默认 | 作用 |
+|---|---|---|
+| `COMPANION_TRACE` | `1`（开） | 关掉就完全不写 trace |
+| `COMPANION_TRACE_STRICT` | `0`（关） | 开启后不变量违规直接抛异常（开发期用）|
+| `COMPANION_PROMPT_BUDGET_CHARS` | `40000` | prompt 字符预算，超了报违规 |
+
+### 两种 trace
+
+| kind | 什么时候产生 | 关键步骤 |
+|---|---|---|
+| `chat` | 每轮对话 | `retrieval.retrieve` → `prompt.build` → `invariants.check` → `llm.chat` → `db.log_turn` |
+| `extraction` | `/quit` 触发抽取 | `db.log_session_close` → `llm.chat`（抽取）→ `extraction.workflow` |
+
+### 内置的廉价不变量（`application/invariants.py`）
+
+trace 里 `invariants.check` 这一步会自动检查，违规会在 `trace show` 里高亮：
+
+| 规则 | 抓什么 |
+|---|---|
+| `history_not_duplicated` | 历史被送了两遍 |
+| `history_is_recent` | 历史取到了**最早**的 N 条而不是最近的 N 条 |
+| `prompt_within_budget` | prompt 超过预算 |
+| `retrieval_not_empty` | 有记忆却一条都召不到（检索静默失效）|
+| `facts_not_exploded` | LLM 抽取数量爆炸（幻觉）|
+| `notes_unique` | 写入了重复 note |
+
+### 它已经抓到的真实 bug
+
+见下面第 4 节 —— 这三个 bug 都是 trace 上线后立刻暴露的，
+**日志系统抓不到，只有"看实际发了什么"才能发现**。
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

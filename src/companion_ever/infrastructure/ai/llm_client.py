@@ -13,6 +13,7 @@ from typing import Protocol
 from companion_ever.config import LLMConfig
 
 from .openai_client import OpenAICompatibleClient
+from .traced_client import TracedLLMClient
 
 
 class LLMClient(Protocol):
@@ -33,12 +34,14 @@ def create_llm_client(cfg: LLMConfig) -> LLMClient:
     当前仅支持 OpenAI 兼容协议（OpenAI / DeepSeek / MiniMax / Qwen 等）。
     将来可在此扩展按 cfg 字段分派不同实现。
     """
-    return OpenAICompatibleClient(
+    inner = OpenAICompatibleClient(
         api_key=cfg.api_key,
         base_url=cfg.base_url,
         model=cfg.model,
         timeout=cfg.timeout,
     )
+    # 包一层 trace —— 与"用哪个模型"解耦，换实现也不会漏埋点
+    return TracedLLMClient(inner)
 
 
 __all__ = ["LLMClient", "create_llm_client"]

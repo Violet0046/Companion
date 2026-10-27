@@ -114,6 +114,26 @@ PYTHONPATH=src python -m companion_ever.cli show \
 
 详见 [TESTING.md](TESTING.md)。
 
+## 诊断：trace（看模型究竟看到了什么）
+
+```bash
+# 列出最近的 trace
+companion-cli trace list --user yike --persona 柳如烟 --last 10
+
+# 看某一轮的完整链路
+companion-cli trace show <trace_id>
+
+# 看模型实际收到的完整请求（system prompt + 历史 + 召回的记忆）
+companion-cli trace show <trace_id> --request
+```
+
+trace 落盘在 `memory/traces/<日期>/`，包含元数据（链路步骤 + 耗时 + token）
+和产物（实际发出的请求 / 实际收到的回复）。
+内置的廉价不变量会自动检查 prompt 组装是否正常（历史重复 / 历史取错 /
+超预算 / 召回失效等），违规会在 `trace show` 里高亮。
+
+详见 [START_HERE.md](START_HERE.md)。
+
 ## 测试
 
 ```bash

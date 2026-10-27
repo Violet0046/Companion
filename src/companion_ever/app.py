@@ -41,6 +41,7 @@ from companion_ever.infrastructure.persistence.conversation_repo import Conversa
 from companion_ever.infrastructure.persistence.db import init_db
 from companion_ever.infrastructure.persistence.note_repo import NoteRepo
 from companion_ever.infrastructure.persistence.user_repo import UserRepo
+from companion_ever.infrastructure.trace import TraceStore, default_trace_dir, set_default_store
 from companion_ever.workflows import build_chat_graph, build_extraction_graph
 
 
@@ -94,6 +95,9 @@ def build_app(cfg: AppConfig) -> AppContext:
     """根据 cfg 构造完整的 AppContext。"""
     # 1. Connection
     conn = init_db(cfg.db_path, check_same_thread=cfg.check_same_thread)
+
+    # 1b. trace 存储（诊断数据落文件，默认 <db 同级>/traces/）
+    set_default_store(TraceStore(default_trace_dir(cfg.db_path)))
 
     # 2. Repos（无依赖）
     repos = Repos(

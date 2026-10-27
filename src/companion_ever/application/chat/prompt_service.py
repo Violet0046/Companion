@@ -32,9 +32,14 @@ from typing import Optional
 from companion_ever.application.authz import Authorizer
 from companion_ever.application.chat.conversation_service import ConversationService
 from companion_ever.application.chat.retrieval_service import RetrievalService
+from companion_ever.application.invariants import (
+    check_prompt_invariants,
+    strict_mode,
+)
 from companion_ever.application.memory.note_service import NoteService
 from companion_ever.application.persona.block_service import BlockService
 from companion_ever.domain.enums import NoteType
+from companion_ever.infrastructure.trace import current_trace
 from companion_ever.prompts import CHAT_FOOTER
 from companion_ever.utils.time import format_now
 
@@ -105,6 +110,9 @@ class PromptService:
         Raises:
             PermissionError: user 不存在 / 不拥有 persona
         """
+        import time as _time
+        _t0 = _time.perf_counter()
+
         # 0. 权限校验
         self.authorizer.require_persona(user_id, persona_id)
 
@@ -132,11 +140,12 @@ class PromptService:
             persona_basics=persona_basics,
             blocks=blocks,
             last_conv_at=last_conv_at,
-            recent_messages=recent_messages,
             related_notes=related_notes,
         )
 
-        # 3. 拼装 messages 列表（system + history）
+        # 3. 拼装 messages 列表
+        #    历史对话只在这里出现一次（作为原生 role 消息）——
+        #    不要再在 system_prompt 里渲染一遍 "## 对话历史"，否则会重复送两遍。
         messages = [{"role": "system", "content": system_prompt}]
         for msg in recent_messages:
             messages.append({
@@ -144,10 +153,89 @@ class PromptService:
                 "content": self._render_message(msg),
             })
 
+        self._record_trace(
+            user_id, persona_id, system_prompt, messages,
+            related_notes=related_notes,
+            ms=(_time.perf_counter() - _t0) * 1000,
+        )
+
         return {
             "system_prompt": system_prompt,
             "messages": messages,
         }
+
+    def _record_trace(
+        self,
+        user_id: str,
+        persona_id: str,
+        system_prompt: str,
+        messages: list[dict],
+        related_notes: list,
+        ms: float,
+    ) -> None:
+        """把 prompt 组装的细节记进 trace，并跑一遍廉价不变量检查。"""
+        tr = current_trace()
+        if tr is None:
+            return
+
+        history = messages[1:]
+        history_chars = sum(len(str(m.get("content", ""))) for m in history)
+        note_chars = sum(
+            len(n.content) if isinstance(n.content, str) else len(str(n.content))
+            for n in related_notes
+        )
+
+        tr.step(
+            "prompt.build",
+            ms=ms,
+            system_chars=len(system_prompt),
+            history_msgs=len(history),
+            history_chars=history_chars,
+            notes=len(related_notes),
+            note_chars=note_chars,
+            total_chars=len(system_prompt) + history_chars,
+        )
+
+        # --- 不变量检查 ---
+        last_db_message = None
+        try:
+            recent = self.conversation_service.get_recent_messages(
+                user_id, persona_id, limit=1,
+            )
+            if recent:
+                last_db_message = recent[0].content
+        except Exception:
+            last_db_message = None
+
+        # 只数"用户/角色记忆"，persona_basics 是人设定义不算
+        total_notes = 0
+        try:
+            memory_types = [
+                t for t in NoteType if t != NoteType.PERSONA_BASICS
+            ]
+            total_notes = len(self.note_service.find_notes(
+                user_id=user_id, persona_id=persona_id,
+                types=memory_types, limit=1000,
+            ))
+        except Exception:
+            total_notes = 0
+
+        violations = check_prompt_invariants(
+            messages=messages,
+            system_prompt=system_prompt,
+            retrieved_count=len(related_notes),
+            last_db_message=last_db_message,
+            total_notes=total_notes,
+        )
+        tr.step(
+            "invariants.check",
+            passed=not violations,
+            violations=[v.to_dict() for v in violations],
+        )
+        if violations and strict_mode():
+            raise ValueError(
+                "prompt 不变量被违反: " + "; ".join(v.message for v in violations)
+            )
 
     # === 内部 helper ===
 
@@ -226,18 +314,20 @@ class PromptService:
         persona_basics: dict | None,
         blocks: list,
         last_conv_at: str | None,
-        recent_messages: list,
         related_notes: list | None = None,
     ) -> str:
         """渲染完整 system prompt 文本。
 
-        包含 6 个段落：
+        包含 5 个段落：
         1. 当前时间 + 上次对话
         2. persona_basics JSON
         3. 3 个 Block（persona_runtime / user_profile / relationship_state）
-        4. 当前 session 的对话历史
-        5. 相关记忆（retrieval from notes）
-        6. 结尾指令
+        4. 相关记忆（retrieval from notes）
+        5. 结尾指令
+
+        注意：**对话历史不在这里**。
+        历史以原生 role 消息的形式放在 messages 列表里（见 build()），
+        避免同一段历史被送两遍（system prompt 一遍 + messages 一遍）。
         """
         sections: list[str] = []
 
@@ -250,14 +340,11 @@ class PromptService:
         # 段落 3：3 个 Block
         sections.append(self._render_blocks(blocks))
 
-        # 段落 4：对话历史（跨 session 全部最近的消息）
-        sections.append(self._render_recent_messages(recent_messages))
-
-        # 段落 5：相关记忆（如果有）
+        # 段落 4：相关记忆（如果有）
         if related_notes:
             sections.append(self._render_related_notes(related_notes))
 
-        # 段落 6：结尾指令
+        # 段落 5：结尾指令
         sections.append(self._render_footer())
 
         return "\n\n".join(sections)
@@ -311,22 +398,6 @@ class PromptService:
             )
 
         return "\n\n".join(sections)
-
-    def _render_recent_messages(self, messages: list) -> str:
-        """对话历史（跨 session 最近的 N 条，拼接进 prompt）。
-
-        注意：这里包含所有 session 的 user/assistant 消息（session_close 行
-        已被 get_messages_between 自动过滤）。LLM 在每轮对话时看到完整历史。
-        """
-        if not messages:
-            return "## 对话历史\n（暂无）"
-        lines = [f"## 对话历史（共 {len(messages)} 条）"]
-        for m in messages:
-            ts = m.created_at or ""
-            if ts and " " in ts:
-                ts = ts.split(".")[0]
-            lines.append(f"- [{ts}] {m.role}: {m.content}")
-        return "\n".join(lines)
 
     def _render_related_notes(self, notes: list) -> str:
         """相关记忆（query 召回，来自历史 session 抽取的 notes）。"""

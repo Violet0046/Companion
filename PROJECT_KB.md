@@ -44,7 +44,7 @@
 | 上下文控制 | 历史被 cap 在 `history_max_messages=50`（可配）|
 | 抽取粒度 | 单 session 内平均 N 个 facts + 1-3 个 block 更新 |
 | 跨 session 记忆 | 旧 session 经抽取后，新 session 通过 retrieval 召回 |
-| prompt 体积 | Chat LLM 的 prompt 包含 6 段（时间 / 人设 / 当前状态 / 对话历史 / 相关记忆 / 行为指引） |
+| prompt 体积 | Chat LLM 的 system prompt 5 段（时间 / 人设 / 当前状态 / 相关记忆 / 行为指引）+ 独立的历史 role 消息 |
 
 ---
 
@@ -55,12 +55,13 @@
     ↓
 [chat_workflow] chat_node
     ├─ prompt_service.build(query=user_input)
-    │    ├─ 当前时间（本地时区）
-    │    ├─ persona_basics JSON（人设宪法）
-    │    ├─ 3 个 Block（persona_runtime / user_profile / relationship_state）
-    │    ├─ 对话历史（跨 session，按 history_max_messages cap）
-    │    ├─ 相关记忆（retrieval → top_k from notes）
-    │    └─ 行为指引（CHAT_FOOTER）
+    │    ├─ system prompt（5 段）
+    │    │    ├─ 当前时间（本地时区）
+    │    │    ├─ persona_basics JSON（人设宪法）
+    │    │    ├─ 3 个 Block（persona_runtime / user_profile / relationship_state）
+    │    │    ├─ 相关记忆（retrieval → top_k from notes）
+    │    │    └─ 行为指引（CHAT_FOOTER）
+    │    └─ messages = [system] + 历史 role 消息（跨 session，cap 50）+ [当前 user_input]
     ├─ Chat LLM（仅生成回复，不做任何抽取/更新）
     └─ conversation_log: user + assistant 各一行
     ↓
@@ -84,7 +85,7 @@
 
 ### 决策 1：双 LLM 分离 ⭐⭐⭐
 
-- **Chat LLM prompt**：人设 + 当前状态 + 对话历史 + 相关记忆 + 行为指引
+- **Chat LLM prompt**：system prompt 5 段（人设 + 当前状态 + 相关记忆 + 行为指引 + 时间）+ 独立的历史 role 消息
 - **Extraction LLM prompt**：抽取指令 + 当前 session 对话
 - **为什么分离**：
   - 单一 LLM 既要对话又要抽取，prompt 会非常臃肿
@@ -222,12 +223,13 @@ def _utc_ts_to_local(ts_str, tz_offset_hours):
 
 **为什么关键**：之前 LLM 看到 11:38（UTC）但用户是 UTC+8 → LLM 以为自己也是 UTC，导致 "我发这条消息的时间"答错。
 
-### 7.3 Chat LLM 的 prompt 渲染（6 段）
+### 7.3 Chat LLM 的 prompt 渲染（system 5 段 + 独立历史 role 消息）⭐⭐⭐
 
+**system prompt（5 段）**：
 ```
 ## 当前时间信息
 - **现在（这是用户发本条消息的时间）**：2026-09-29 周二 19:48 (UTC+8)
-- 用户上次对话的起始时间（注意：这不是当前消息时间，是历史）：2026-09-29 11:38
+- 用户上次对话的起始时间（注意：这不是当前消息时间，是历史）：2026-09-29 19:38
 
 ## 人设基础
 ```json
@@ -246,11 +248,7 @@ def _utc_ts_to_local(ts_str, tz_offset_hours):
 ### 关系进展
 ```json
 {}
-
-## 对话历史（共 10 条）
-- [2026-09-29 19:30:00] 你好，我叫周艺科
-- [2026-09-29 19:30:05] 你好呀周艺科~
-...
+```
 
 ## 相关记忆
 - (profile_fact, importance=0.95) 用户叫周艺科
@@ -259,6 +257,29 @@ def _utc_ts_to_local(ts_str, tz_offset_hours):
 - 你必须严格按 persona_basics 中定义的角色与用户互动
 ...
 ```
+
+**messages 列表（历史以原生 role 消息出现，不在 system prompt 里）**：
+```python
+[
+  {"role": "system", "content": "<上面 5 段>"},
+  {"role": "user",      "content": "[2026-09-29 19:30:00] 你好，我叫周艺科"},
+  {"role": "assistant", "content": "[2026-09-29 19:30:05] 你好呀周艺科~"},
+  {"role": "user",      "content": "[2026-09-29 19:31:00] 我今天有点累"},
+  {"role": "assistant", "content": "[2026-09-29 19:31:05] 那就早点休息~"},
+  {"role": "user",      "content": "<当前 user_input>"},
+]
+```
+
+**踩过的坑 ⭐⭐⭐**：早期版本同时做了两件事——① 把历史渲染进 system prompt 的
+`## 对话历史` 文本段 ② 又把历史作为 role 消息追加到 messages。
+结果**每条历史被送给 LLM 两次**（浪费一半 token，且 LLM 可能误解为"对话重复了"）。
+**修复**：历史只以原生 role 消息形式出现，system prompt 不再渲染历史段。
+回归测试见 `tests/test_prompt_no_duplicate.py`。
+
+**为什么用原生 role 消息而不是文本段**：
+- 模型的 chat template 原生支持多轮，天然知道"谁说了什么"
+- 对角色扮演 companion 尤其重要——LLM 能明确区分"用户说的"和"自己之前说的"
+- 文本段是无 multi-turn 支持时的 workaround，我们支持
 
 ### 7.4 Marker 的 turn_index 自动分配
 
@@ -304,7 +325,7 @@ chat_node:
        ├─ block_service.get_blocks()       ← 当前 3 个 Block
        ├─ note_service (persona_basics)    ← 人设 JSON
        ├─ retrieval_service.retrieve()     ← FTS5 召回
-       └─ _render_system_prompt()           ← 6 段拼装
+       └─ _render_system_prompt()           ← 5 段拼装（不含历史）
     2. messages = [system, *history, user_input]
     3. llm.chat(messages)                  ← Chat LLM
     4. conversation_service.log_turn() × 2 ← user + assistant
@@ -451,11 +472,27 @@ Session 2 开始:
 
 ### Q18: 怎么测试
 
-> 3 个测试套件 + CLI 端到端：
+> 4 个测试套件 + CLI 端到端：
 > - `test_persona_service.py`：persona 创建 / 权限
 > - `test_sentinel_flow.py`：marker 边界 + extraction 流程
 > - `test_chat_workflow.py`：LangGraph 工作流
+> - `test_prompt_no_duplicate.py`：回归测试——历史上下文不能重复送入
 > - CLI：`companion-cli setup / chat / show` 直接用真实 LLM 跑
+
+### Q19: 怎么保证历史上下文不会被重复送入 ⭐⭐⭐
+
+> **曾经的真实 bug**：prompt_service.build() 同时做了两件事——① 把历史渲染进 system prompt 的 `## 对话历史` 文本段 ② 又把历史作为 role 消息追加到 messages 列表。结果每条历史被送给 LLM 两次，浪费一半 token，且 LLM 可能误解为"对话重复了"。
+>
+> **修复**：历史只以**原生 role 消息**形式出现在 messages 里，system prompt 不再渲染历史段。
+>
+> **为什么原生 role 消息更好**：
+> - 模型的 chat template 原生支持多轮，天然知道"谁说了什么"
+> - 对角色扮演 companion 尤其重要——LLM 能明确区分"用户说的"和"自己之前说的"
+> - 文本段是无 multi-turn 支持时的 workaround，我们支持就不该用
+>
+> **回归防护**：`tests/test_prompt_no_duplicate.py` 断言 ① system_prompt 不含任何历史内容 ② messages 里每条历史只出现一次 ③ system prompt 仍含其余 5 段。
+>
+> **教训**：prompt 组装要单一职责原则——**同一段数据只能有一个出处**。
 
 ---
 
@@ -468,7 +505,7 @@ Session 2 开始:
 | 14 种 note.type | 9 用户侧 + 5 人设侧 |
 | 3 种 block_type | persona_runtime / user_profile / relationship_state |
 | 3 个角色 | 'user' / 'assistant' / 'session_close'（含 sentinel）|
-| 6 段 prompt | 时间 / 人设 / 当前状态 / 对话历史 / 相关记忆 / 行为指引 |
+| 5 段 prompt | 时间 / 人设 / 当前状态 / 相关记忆 / 行为指引（历史单独走 role 消息）|
 | 50 | `history_max_messages` 默认 cap（chat LLM 历史条数）|
 | 20 | `recent_message_limit` 默认（其他用途）|
 | 10 | `retrieval.top_k` 默认 |
@@ -481,7 +518,8 @@ Session 2 开始:
 
 - [ ] 能 30 秒讲清楚"双 LLM + Sentinel"的核心架构
 - [ ] 能讲清楚 session_close sentinel 的三层语义（marker / extraction 边界 / 状态机）
-- [ ] 能讲清楚 Chat LLM 6 段 prompt 的每一段是什么
+- [ ] 能讲清楚 Chat LLM 5 段 system prompt 的每一段是什么（+ 历史走独立 role 消息）
+- [ ] 能讲清楚"历史只送一次"这个坑（system prompt 不渲染历史段）
 - [ ] 能讲清楚为什么用 id 边界而非时间戳
 - [ ] 能讲清楚 FTS5 trigram + LIKE 兜底
 - [ ] 能讲清楚时间戳本地化的原因

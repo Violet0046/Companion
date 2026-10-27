@@ -27,7 +27,8 @@ env/
 *.db
 *.db-wal
 *.db-shm
-*.db-journal
+memory/traces/
+traces/
 *.db-journal
 *.sqlite
 *.sqlite3
@@ -48,6 +49,8 @@ htmlcov/
 # ===== OS =====
 .DS_Store
 Thumbs.db
+
+.claude/
 
 # ===== Scratch 脚本 =====
 scratch_*.py
