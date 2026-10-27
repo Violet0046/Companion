@@ -186,6 +186,62 @@ companion-cli maintain strip-think
 
 已执行过：68 条消息，110,344 → 14,233 字符。数据库备份在 `memory/companion.db.bak-*`。
 
+## 4.7 历史污染清理（2026-10-27）
+
+### 为什么要清
+
+conversation_log 有**两个职责**，同一个字段同时服务于两个相反的目的：
+
+| 用途 | 适合保留 think | 事实 |
+|---|---|---|
+| 1. 存档（给人看） | 有意思，能看到她在想什么 | 保留也行 |
+| 2. **最近 50 条送进 prompt**（给模型看） | 纯污染，占历史 92% token | 必须剔掉 |
+
+同一个字段同时服务两个用途，就会出现"对存档友好、对模型有害"的内容。
+现在写入路径已经 strip 掉 think 块（存档会少一点，但模型受益更大），
+以下命令用于清理历史存量。
+
+### 命令
+
+```powershell
+# 清理 conversation_log：删 /quit 轮次 + 剔模仿旧格式的前缀
+companion-cli maintain clean-history [--dry-run]
+
+# 清理 note 表里由 /quit 派生的幻觉记忆
+companion-cli maintain clean-quit-notes [--dry-run]
+
+# 剔掉 assistant 消息里的 <think> 块
+companion-cli maintain strip-think
+
+# 做一份完整备份
+companion-cli maintain backup
+```
+
+全部支持 `--dry-run`（只报告会改什么，不实际改动）。
+`clean-history` / `clean-quit-notes` 在真正改动前会**自动先备份**。
+
+### 已清理的内容（2026-10-27 实际执行）
+
+| 项 | 数量 | 说明 |
+|---|---|---|
+| `/quit` 轮次 | 9 轮 / 18 行 | 假 user 消息 + 模型对它生成的告别回复 |
+| 模仿旧格式的前缀 | 21 行 | assistant 回复开头自己吐出了 `[2026-09-29 11:14:12] assistant:` |
+| think 块 | 68 条 | assistant 消息（上一轮已清） |
+| note 表 /quit 幻觉 | 4 条删 + 1 条修剪 | 例如"用户习惯在暧昧氛围升温时突然用 /quit 结束对话"（纯编的） |
+
+清理后：`/quit` 行 0、think 块 0、格式前缀 0；
+`session_close` 哨兵 10 个完好保留；user / assistant 仍然严格配对（64 / 64）。
+
+### ⚠ 关于备份的一个坑
+
+数据库是 **WAL 模式**，最近写入的数据还躺在 `companion.db-wal` 里，没 checkpoint 到主库文件。
+
+```powershell
+Copy-Item memory/companion.db memory/backup.db     # ⚠ 会漏数据（实测漏了 4 行）
+```
+
+一定用 `companion-cli maintain backup`（内部用 `VACUUM INTO`，会把 WAL 内容一起写进新文件）。
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

@@ -23,7 +23,12 @@ from companion_ever.config import AppConfig, LLMConfig
 from companion_ever.app import build_app
 from companion_ever.domain.enums import NoteType
 from companion_ever.domain.persona_templates import PERSONA_TEMPLATES, template_to_json
-from companion_ever.cli.maintain_cmd import cmd_strip_think
+from companion_ever.cli.maintain_cmd import (
+    cmd_backup,
+    cmd_clean_history,
+    cmd_clean_quit_notes,
+    cmd_strip_think,
+)
 from companion_ever.cli.trace_cmd import (
     cmd_trace_list,
     cmd_trace_prune,
@@ -317,6 +322,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="剥掉历史 assistant 消息里的 <think> 块（推理模型的思考过程）",
     )
 
+    m_clean = maint_sub.add_parser(
+        "clean-history",
+        help="清理 conversation_log 的历史污染（/quit 轮次 + 模仿旧格式的前缀）",
+    )
+    m_clean.add_argument(
+        "--dry-run", action="store_true",
+        help="只报告会改什么，不实际改动",
+    )
+
+    m_qnotes = maint_sub.add_parser(
+        "clean-quit-notes",
+        help="清理 note 表里由 /quit 派生的幻觉记忆",
+    )
+    m_qnotes.add_argument(
+        "--dry-run", action="store_true",
+        help="只报告会改什么，不实际改动",
+    )
+
+    m_bak = maint_sub.add_parser(
+        "backup",
+        help="做一份完整的数据库备份（含 WAL 内容）",
+    )
+
     # trace（诊断：看模型究竟看到了什么）
     p_trace = sub.add_parser("trace", help="trace 诊断（看每轮链路 + 模型实际收到的内容）")
     trace_sub = p_trace.add_subparsers(dest="trace_cmd", required=True)
@@ -353,6 +381,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "maintain":
         if args.maint_cmd == "strip-think":
             return cmd_strip_think(args)
+        elif args.maint_cmd == "clean-history":
+            return cmd_clean_history(args)
+        elif args.maint_cmd == "clean-quit-notes":
+            return cmd_clean_quit_notes(args)
+        elif args.maint_cmd == "backup":
+            return cmd_backup(args)
         else:
             print("[FAIL] 未知 maintain 子命令")
             return 1
