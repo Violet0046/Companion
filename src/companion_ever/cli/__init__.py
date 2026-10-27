@@ -23,6 +23,7 @@ from companion_ever.config import AppConfig, LLMConfig
 from companion_ever.app import build_app
 from companion_ever.domain.enums import NoteType
 from companion_ever.domain.persona_templates import PERSONA_TEMPLATES, template_to_json
+from companion_ever.cli.maintain_cmd import cmd_strip_think
 from companion_ever.cli.trace_cmd import (
     cmd_trace_list,
     cmd_trace_prune,
@@ -307,6 +308,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("--user", required=True)
     p_show.add_argument("--persona", help="指定 persona 看详情")
 
+    # maintain（数据维护）
+    p_maint = sub.add_parser("maintain", help="数据维护（清理历史数据）")
+    maint_sub = p_maint.add_subparsers(dest="maint_cmd", required=True)
+
+    m_strip = maint_sub.add_parser(
+        "strip-think",
+        help="剥掉历史 assistant 消息里的 <think> 块（推理模型的思考过程）",
+    )
+
     # trace（诊断：看模型究竟看到了什么）
     p_trace = sub.add_parser("trace", help="trace 诊断（看每轮链路 + 模型实际收到的内容）")
     trace_sub = p_trace.add_subparsers(dest="trace_cmd", required=True)
@@ -340,6 +350,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_chat(args)
     elif args.cmd == "show":
         return cmd_show(args)
+    elif args.cmd == "maintain":
+        if args.maint_cmd == "strip-think":
+            return cmd_strip_think(args)
+        else:
+            print("[FAIL] 未知 maintain 子命令")
+            return 1
     elif args.cmd == "trace":
         if args.trace_cmd == "list":
             return cmd_trace_list(args)

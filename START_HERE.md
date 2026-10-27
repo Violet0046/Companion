@@ -166,6 +166,26 @@ trace 里 `invariants.check` 这一步会自动检查，违规会在 `trace show
 见下面第 4 节 —— 这三个 bug 都是 trace 上线后立刻暴露的，
 **日志系统抓不到，只有"看实际发了什么"才能发现**。
 
+## 4.6 已修复的严重 bug（2026-10-27）
+
+trace 系统上线后立刻暴露了三个"看不见"的 bug，已全部修完并加上回归测试（`tests/test_bugfixes.py`）：
+
+| # | 问题 | 修法 | 实测影响 |
+|---|---|---|---|
+| 1 | `get_messages_between` 无边界时 `ORDER BY id ASC` → prompt 装的是**最早**的 50 条，模型完全看不到刚聊了什么 | 改为 `ORDER BY id DESC` 取最近 N 条再反转 | 上下文里的对话从"一个月前"变成"刚刚" |
+| 2 | `/quit` 会**先跑一次完整 LLM 调用**，还把 "/quit" 和模型对它的回答写进日志 | 路由挪到 chat 节点**之前**，`/quit` 直接进 close | 每次退出省一次完整推理调用（约 8.3K token） |
+| 3 | 检索的 FTS5 和 LIKE 两条路径都要求**整句原样出现** → 自然语言输入必然 0 命中 | 拆成 2/3 字关键词后 **OR** 组合（`utils/text.py`），精度由"命中关键词数"打分 | `fts_hits` 从 0 变成有效命中 |
+| 4（顺带） | assistant 消息存了原始 `<think>` 块（占历史 92%） | 写入时 strip；存量用 `maintain strip-think` 清 | prompt 从 **60,921 → 7,828 字符**（-87%），token_in 8,306 → 5,040（-39%） |
+
+### 数据维护命令
+
+```powershell
+# 剥掉历史 assistant 消息里的 <think> 块（推理模型的思考过程）
+companion-cli maintain strip-think
+```
+
+已执行过：68 条消息，110,344 → 14,233 字符。数据库备份在 `memory/companion.db.bak-*`。
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

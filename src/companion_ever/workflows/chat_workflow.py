@@ -2,8 +2,9 @@
 
 LangGraph 设计：
 - StateGraph(ChatState) — 状态机定义
+- **先路由**：`/quit` 直接进 close 节点，**不经过 chat 节点**（不调 LLM）
 - chat 节点：拼 prompt + 调 LLM + log conversation_log
-- should_close 路由函数：判断用户输入 /quit → 走 close 节点，否则 END
+- should_close 路由函数：判断用户输入 /quit → close，否则 → chat
 - close 节点：写 marker + 抽取（SessionCloseService）
 
 调用方：
@@ -20,6 +21,7 @@ from langgraph.graph import END, START, StateGraph
 from companion_ever.application.chat.conversation_service import ConversationService
 from companion_ever.application.chat.prompt_service import PromptService
 from companion_ever.application.chat.session_close_service import SessionCloseService
+from companion_ever.application.llm_json import strip_thinking
 from companion_ever.infrastructure.ai.llm_client import LLMClient
 from companion_ever.infrastructure.trace import trace_scope
 
@@ -64,9 +66,12 @@ def _make_chat_node(prompt_service: PromptService, conversation_service: Convers
                 user_id=user_id, persona_id=persona_id,
                 turn_index=next_turn_index, role="user", content=user_input,
             )
+            # assistant 内容剥掉 <think> 块：推理模型的思考过程对后续对话
+            # 没有价值，却会占掉历史 token 的 90%+（还会污染模型上下文）。
             conversation_service.log_turn(
                 user_id=user_id, persona_id=persona_id,
-                turn_index=next_turn_index, role="assistant", content=response,
+                turn_index=next_turn_index, role="assistant",
+                content=strip_thinking(response),
             )
             tr.step(
                 "db.log_turn",
@@ -87,7 +92,7 @@ def _should_close(state: ChatState) -> str:
     """路由函数：用户输入 /quit 走 close 节点，否则 END。"""
     if state.get("user_input") == "/quit":
         return "close"
-    return END
+    return "chat"
 
 
 def _make_close_node(session_close_service: SessionCloseService):
@@ -114,26 +119,24 @@ def build_chat_graph(
     """构建 LangGraph StateGraph 并 compile。
 
     拓扑：
-        START → chat → (should_close 路由) → close → END
-                                       ↓
-                                       END（普通对话结束）
+        START → (should_close 路由) → chat → END
+                              ↓
+                              close → END（/quit，不调 LLM）
     """
     workflow = StateGraph(ChatState)
 
     workflow.add_node("chat", _make_chat_node(prompt_service, conversation_service, llm_client))
     workflow.add_node("close", _make_close_node(session_close_service))
 
-    workflow.add_edge(START, "chat")
-    workflow.add_edge("close", END)
-
+    # 先路由：/quit 直接进 close 节点，不经过 chat（因此不会调 LLM）
     workflow.add_conditional_edges(
-        "chat",
+        START,
         _should_close,
-        {
-            "close": "close",
-            END: END,
-        },
+        {"close": "close", "chat": "chat"},
     )
+
+    workflow.add_edge("chat", END)
+    workflow.add_edge("close", END)
 
     return workflow.compile()
 

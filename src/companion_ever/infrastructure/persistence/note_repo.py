@@ -18,6 +18,7 @@ import uuid
 from typing import Optional
 
 from companion_ever.domain.entities import Note
+from companion_ever.utils.text import extract_keywords
 from companion_ever.domain.enums import NoteType
 from .mappers import row_to_note
 
@@ -106,71 +107,90 @@ class NoteRepo:
         persona_id: str,
         limit: int = 20,
     ) -> list[Note]:
-        """FTS5 全文检索（trigram）+ LIKE 兜底（短中文查询）。
+        """关键词检索（FTS5 trigram + LIKE 兜底）。
 
-        策略：
-        1. 先尝试 FTS5（query 用双引号包裹成字面量）
-        2. FTS5 失败 / 命中不足时，用 LIKE 兜底
-        3. 合并去重
+        **曾经的 bug**：把整个 query 当成一个字面量去匹配
+        （FTS5 的 MATCH 和 LIKE 都是），于是用户输入"我最近面试怎么样了"
+        这种自然语言时，两条路径都要求整句原样出现 → 必然 0 命中。
+        结果是模型看到的"相关记忆"和当前这句话其实毫无关系。
+
+        **现在的做法**：
+        1. 把 query 拆成 2 字 / 3 字关键词（见 utils/text.py）
+        2. FTS5 用 3 字关键词 OR 组合（索引快，字面子串精确）
+        3. LIKE 用 2 字 + 3 字关键词 OR 组合（中文的主力：面试 / 秋招 / 研三）
+        4. 两条来源轮转合并，保证都有机会进入结果
+        5. 精度交给上层"命中关键词数"打分（见 RetrievalService._score）
 
         Args:
-            query: 搜索关键词（短中文也能匹配）
+            query: 用户的原始输入（可以是整句话）
             user_id, persona_id: 限定范围
             limit: 最多返回多少条
 
         Returns:
-            按 FTS5 rank + LIKE 顺序的笔记列表
+            候选笔记列表（顺序为两路轮转，精确度由上层重新排序）
         """
         if not query or not query.strip():
             return []
 
-        results: list[Note] = []
+        short_kw, long_kw = extract_keywords(query)
+        fts_notes: list[Note] = []
+        like_notes: list[Note] = []
+
+        # 1. FTS5 检索（3 字关键词 OR）
+        if long_kw:
+            fts_query = " OR ".join(_escape_fts5_query(k) for k in long_kw)
+            try:
+                rows = self.conn.execute(
+                    "SELECT n.*, f.rank AS fts_rank "
+                    "FROM note_fts f "
+                    "JOIN note n ON n.rowid = f.rowid "
+                    "WHERE note_fts MATCH ? "
+                    "  AND n.user_id = ? AND n.persona_id = ? "
+                    "  AND n.is_archived = 0 "
+                    "ORDER BY f.rank LIMIT ?",
+                    (fts_query, user_id, persona_id, max(limit * 2, limit)),
+                ).fetchall()
+                fts_notes = [row_to_note(r) for r in rows]
+            except sqlite3.OperationalError:
+                # FTS5 query syntax 异常 → 只走 LIKE
+                fts_notes = []
+
+        # 2. LIKE 兜底（2 字 + 3 字关键词 OR，再加整句精确匹配）
+        patterns: list[str] = list(short_kw) + list(long_kw)
+        exact = query.strip()
+        if exact:
+            patterns.append(exact)
+        if patterns:
+            where = " OR ".join(["content LIKE ?"] * len(patterns))
+            rows = self.conn.execute(
+                f"SELECT * FROM note "
+                f"WHERE user_id = ? AND persona_id = ? "
+                f"  AND is_archived = 0 "
+                f"  AND ({where}) "
+                f"ORDER BY updated_at DESC LIMIT ?",
+                (
+                    user_id,
+                    persona_id,
+                    *[f"%{pat}%" for pat in patterns],
+                    max(limit * 3, limit),
+                ),
+            ).fetchall()
+            like_notes = [row_to_note(r) for r in rows]
+
+        # 3. 轮转合并（保证 FTS 和 LIKE 两条来源都有机会进入结果）
+        merged: list[Note] = []
         seen_ids: set[str] = set()
+        for i in range(max(len(fts_notes), len(like_notes))):
+            for bucket in (fts_notes, like_notes):
+                if i < len(bucket):
+                    note = bucket[i]
+                    if note.id not in seen_ids:
+                        seen_ids.add(note.id)
+                        merged.append(note)
+                        if len(merged) >= limit:
+                            return merged
 
-        # 1. FTS5 检索（字面查询）
-        fts_query = _escape_fts5_query(query)
-        try:
-            rows = self.conn.execute(
-                "SELECT n.*, f.rank AS fts_rank "
-                "FROM note_fts f "
-                "JOIN note n ON n.rowid = f.rowid "
-                "WHERE note_fts MATCH ? "
-                "  AND n.user_id = ? AND n.persona_id = ? "
-                "  AND n.is_archived = 0 "
-                "ORDER BY f.rank LIMIT ?",
-                (fts_query, user_id, persona_id, limit),
-            ).fetchall()
-            for r in rows:
-                note = row_to_note(r)
-                note_id_str = note.id
-                if note_id_str not in seen_ids:
-                    seen_ids.add(note_id_str)
-                    results.append(note)
-        except sqlite3.OperationalError:
-            # FTS5 query syntax 异常 → 直接走 LIKE 兜底
-            pass
-
-        # 2. LIKE 兜底（FTS5 命中不足时）
-        if len(results) < limit:
-            like_pattern = f"%{query}%"
-            rows = self.conn.execute(
-                "SELECT * FROM note "
-                "WHERE user_id = ? AND persona_id = ? "
-                "  AND is_archived = 0 "
-                "  AND content LIKE ? "
-                "ORDER BY updated_at DESC LIMIT ?",
-                (user_id, persona_id, like_pattern, limit),
-            ).fetchall()
-            for r in rows:
-                note = row_to_note(r)
-                note_id_str = note.id
-                if note_id_str not in seen_ids:
-                    seen_ids.add(note_id_str)
-                    results.append(note)
-
-        return results[:limit]
-
-    # === 写入 ===
+        return merged
 
     def create(
         self,

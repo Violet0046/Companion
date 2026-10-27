@@ -1,0 +1,142 @@
+"""utils/text.py — 文本处理工具（横切）。
+
+关键词抽取
+----------
+中文没有空格分词，而 SQLite FTS5 的 trigram tokenizer 只能做**字面子串匹配**
+（3 字以上才有效）。两者叠加导致：
+
+    用户输入 "我最近面试怎么样了"
+      → FTS5 要求整句原样出现 → 0 命中
+      → LIKE  要求整句原样出现 → 0 命中
+
+结果就是"模型看到的相关记忆"其实和当前这句话毫无关系。
+
+解决思路（**不引入分词器依赖**）：
+1. 去掉标点
+2. 生成所有 2 字 / 3 字滑窗
+3. 停用字过滤
+   - 2 字：两个字都不能是停用字（"面试" ✓ / "怎么" ✗）
+   - 3 字：最多允许 1 个停用字
+4. 检索时多个关键词用 **OR** 组合 → 召回变宽
+5. 打分阶段用"命中关键词数"排序 → 精度回来
+
+中文的有效检索单位往往就是 2 字（面试 / 秋招 / 研三 / 承诺），
+所以 2 字词走 LIKE、3 字词走 FTS5，是这个场景下性价比最高的组合。
+"""
+from __future__ import annotations
+
+from typing import Iterable
+
+
+# 标点（中英文）
+_PUNCT = set(
+    "，。！？、；：""''（）()【】[]{}《》〈〉…—－-～~"
+    "`@#$%^&*_+=|<>.,!?;:'\"\\/"
+)
+
+# 零宽 / 不可见字符（含 UTF-8 BOM）——管道输入时经常混进来
+_INVISIBLE = set("﻿​‌‍⁠ ")
+
+# 停用字：常见虚词/代词/语气词。2 字关键词要求每个字都不是停用字。
+_STOP_CHARS = set(
+    "我你他她它们的了是不在有和就都也很太还要会能可以能跟把被给让从到为与及"
+    "并且或者但而虽若如使做说道说讲问答叫想看听吃喝睡玩买给用时候时间现在今天"
+    "明天昨天以前以后之前之后这个那个什么怎样么呢吧啊呀哦嗯唉嘿嘞呗嘛啦哦"
+    "请麻烦谢谢对不起不好意思应该觉得认为知道感觉因为所以如果虽然然后而且"
+    "已经正在刚刚一直比较非常真的确实其实一下一样一些个些"
+)
+
+
+def normalize(text: str) -> str:
+    """去掉标点与空白，只保留实义字符。"""
+    return "".join(
+        ch for ch in text
+        if ch not in _PUNCT and ch not in _INVISIBLE and not ch.isspace()
+    )
+
+
+def _is_stop(ch: str) -> bool:
+    return ch in _STOP_CHARS
+
+
+def extract_keywords(
+    query: str,
+    max_short: int = 8,
+    max_long: int = 8,
+) -> tuple[list[str], list[str]]:
+    """从自然语言查询里抽取检索关键词。
+
+    Args:
+        query: 用户原始输入（可以是整句话）
+        max_short: 最多几个 2 字词
+        max_long: 最多几个 3 字词
+
+    Returns:
+        (short_keywords, long_keywords)
+        - short：2 字词，走 LIKE 兜底（中文主力）
+        - long ：3 字词，走 FTS5 字面匹配（精度高）
+    """
+    text = normalize(query)
+    if len(text) < 2:
+        return [], []
+
+    short: list[str] = []
+    long: list[str] = []
+    seen: set[str] = set()
+
+    # 3 字词：最多允许 1 个停用字
+    for i in range(len(text) - 2):
+        g = text[i : i + 3]
+        if g in seen:
+            continue
+        if sum(1 for ch in g if _is_stop(ch)) > 1:
+            continue
+        seen.add(g)
+        long.append(g)
+        if len(long) >= max_long:
+            break
+
+    # 2 字词：每个字都不能是停用字
+    for i in range(len(text) - 1):
+        g = text[i : i + 2]
+        if g in seen:
+            continue
+        if any(_is_stop(ch) for ch in g):
+            continue
+        seen.add(g)
+        short.append(g)
+        if len(short) >= max_short:
+            break
+
+    return short, long
+
+
+def all_keywords(query: str, **kw) -> list[str]:
+    """短词 + 长词合并（打分阶段用）。"""
+    short, long = extract_keywords(query, **kw)
+    # 长词优先（更具体）
+    return long + short
+
+
+def keyword_hits(content: str, keywords: Iterable[str]) -> int:
+    """content 命中了多少个不同关键词。"""
+    if not content:
+        return 0
+    return sum(1 for kw in keywords if kw and kw in content)
+
+
+def keyword_hit_ratio(content: str, keywords: Iterable[str]) -> float:
+    """命中率 = 命中关键词数 / 关键词总数（0~1）。"""
+    kws = list(keywords)
+    if not kws or not content:
+        return 0.0
+    return keyword_hits(content, kws) / len(kws)
+
+
+__all__ = [
+    "normalize",
+    "extract_keywords",
+    "all_keywords",
+    "keyword_hits",
+    "keyword_hit_ratio",
+]

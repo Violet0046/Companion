@@ -96,13 +96,12 @@ class ChatService:
             return response_text
 
     def _next_turn_index(self, user_id: str, persona_id: str) -> int:
-        """算下一个 turn_index（现有最大 + 1）。"""
-        messages = self.conversation_service.get_recent_messages(
-            user_id, persona_id, limit=10000
-        )
-        if not messages:
-            return 1
-        return max(m.turn_index for m in messages) + 1
+        """算下一个 turn_index（现有最大 + 1）。
+
+        用 SQL 的 MAX(turn_index) 而不是"拉全部消息再取 max"——
+        对话几千条之后后者会明显拖慢每一轮。
+        """
+        return self.conversation_service.get_max_turn_index(user_id, persona_id) + 1
 
     def stream_chat(
         self,

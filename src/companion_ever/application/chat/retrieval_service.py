@@ -25,6 +25,7 @@ from companion_ever.config import RetrievalConfig
 from companion_ever.domain.entities import Note
 from companion_ever.domain.enums import NoteType
 from companion_ever.infrastructure.persistence.note_repo import NoteRepo
+from companion_ever.utils.text import all_keywords, keyword_hits
 from companion_ever.infrastructure.trace import current_trace
 
 
@@ -76,14 +77,16 @@ class RetrievalService:
             limit=100,
         )
 
-        # 2. FTS5 召回
+        # 2. 关键词召回（FTS5 + LIKE 兜底）
         fts_hits: list[Note] = []
+        keywords: list[str] = []
         if query and query.strip():
+            keywords = all_keywords(query)
             fts_hits = self.note_repo.search(
                 query=query,
                 user_id=user_id,
                 persona_id=persona_id,
-                limit=20,
+                limit=max(self.cfg.top_k * 3, 20),
             )
 
         # 3. 合并去重（保持顺序：先 always，再 fts）
@@ -97,7 +100,7 @@ class RetrievalService:
 
         # 4. 评分排序
         now = datetime.now(timezone.utc)
-        scored = [(self._score(n, query, now), n) for n in candidates]
+        scored = [(self._score(n, query, keywords, now), n) for n in candidates]
         scored.sort(key=lambda x: -x[0])  # 降序
 
         # 5. 取 top_k
@@ -136,6 +139,7 @@ class RetrievalService:
         self,
         note: Note,
         query: str,
+        keywords: list[str],
         now: datetime,
     ) -> float:
         """计算单条 note 的 score。
@@ -155,20 +159,26 @@ class RetrievalService:
         # 2. 时间新度
         score += self._recency_score(note.updated_at, now) * w["recency"]
 
-        # 3. FTS 相关度
-        if query:
+        # 3. 关键词相关度
+        #    曾经的 bug：这里用 query.split() 统计命中词——中文没有空格，
+        #    整句话会被当成 1 个"词"，命中率判断几乎永远不成立。
+        #    现在改成按抽取出来的 2/3 字关键词统计命中数。
+        if keywords:
             content = (
                 note.content
                 if isinstance(note.content, str)
                 else ""
             )
-            if query.strip() in content:
-                score += w["fts"]
-            else:
-                words = query.strip().split()
-                hits = sum(1 for word in words if word in content)
-                if words and hits / len(words) > 0.3:
-                    score += w["fts"] * 0.5
+            if content:
+                hits = keyword_hits(content, keywords)
+                if hits:
+                    # 命中越多越相关（封顶 1.0）
+                    ratio = min(hits / max(len(keywords), 1) * 2.0, 1.0)
+                    score += w["fts"] * ratio
+                # 整句原样包含是最强的相关信号
+                exact = query.strip()
+                if exact and exact in content:
+                    score += w["fts"]
 
         # 4. 类型加权
         type_str = (

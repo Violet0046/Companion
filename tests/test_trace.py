@@ -120,11 +120,13 @@ def main() -> int:
     inv = next(s for s in latest["steps"] if s["name"] == "invariants.check")
     violations = inv["detail"].get("violations") or []
     rules = {v["rule"] for v in violations}
-    assert "history_is_recent" in rules, (
-        "不变量没有抓到『历史取到了最早的 N 条』这个 bug —— "
+    # 这个 bug 已经在 get_messages_between 里修好了（改为取最近 N 条），
+    # 所以不变量现在**不应该**再报 history_is_recent。
+    assert "history_is_recent" not in rules, (
+        "不变量报 history_is_recent —— 说明历史又取到了最早的 N 条，"
         f"实际 violations: {violations}"
     )
-    print(f"[OK] 不变量抓到了真实 bug: {sorted(rules)}")
+    print(f"[OK] 不变量确认历史已是最近的（无违规: {sorted(rules) or '无'}）")
 
     # ---------- 8. /quit 的抽取链路也被追踪 ----------
     ctx.services.session_close.close_session("alice", "舒舒")

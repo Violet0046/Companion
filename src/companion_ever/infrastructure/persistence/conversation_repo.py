@@ -152,7 +152,7 @@ class ConversationRepo:
             limit: 最多返回多少条
 
         Returns:
-            按 id 升序的列表
+            按 id 升序的列表（**取最近 limit 条**，不是最早的）
         """
         sql = (
             "SELECT id, user_id, persona_id, turn_index, role, content, created_at "
@@ -175,11 +175,26 @@ class ConversationRepo:
             sql += " AND id <= ?"
             params.append(until_id)
 
-        sql += " ORDER BY id ASC LIMIT ?"
+        # 取**最近** limit 条（再反转成时间正序）。
+        # 曾经的 bug：用 ORDER BY id ASC LIMIT ?，没有边界时取到的是最早的 N 条——
+        # 导致 prompt 里装的是一个月前的对话，模型完全看不到刚才聊了什么。
+        sql += " ORDER BY id DESC LIMIT ?"
         params.append(limit)
 
         rows = self.conn.execute(sql, params).fetchall()
-        return [row_to_conversation_message(r) for r in rows]
+        return [row_to_conversation_message(r) for r in reversed(rows)]
+
+    def get_max_turn_index(self, *, user_id: str, persona_id: str) -> int:
+        """返回该 (user, persona) 下最大的 turn_index（没有则 0）。
+
+        比"拉 10000 条消息再取 max"快几个数量级 —— 每轮对话都要用。
+        """
+        row = self.conn.execute(
+            "SELECT MAX(turn_index) FROM conversation_log "
+            "WHERE user_id = ? AND persona_id = ?",
+            (user_id, persona_id),
+        ).fetchone()
+        return int(row[0] or 0)
 
     def get_recent_messages(
         self,

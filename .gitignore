@@ -28,6 +28,9 @@ env/
 *.db-wal
 *.db-shm
 memory/traces/
+*.db.bak*
+memory/*.bak*
+.commit_msg.txt
 traces/
 *.db-journal
 *.sqlite

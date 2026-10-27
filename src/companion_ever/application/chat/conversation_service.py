@@ -111,6 +111,13 @@ class ConversationService:
 
     # === 读取（5 个） ===
 
+    def get_max_turn_index(self, user_id: str, persona_id: str) -> int:
+        """当前最大的 turn_index（没有则 0）——用来算下一轮的 turn_index。"""
+        self.authorizer.require_persona(user_id, persona_id)
+        return self.conv_repo.get_max_turn_index(
+            user_id=user_id, persona_id=persona_id,
+        )
+
     def get_recent_messages(
         self,
         user_id: str,
