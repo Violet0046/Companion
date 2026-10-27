@@ -1,0 +1,15 @@
+# Companion Ever Memory — Python 依赖
+#
+# 安装：  pip install -r requirements.txt
+
+# LLM（OpenAI 兼容协议）
+openai>=1.0
+
+# 数据模型（已有）
+pydantic>=2.0
+
+# 工作流（LangGraph）
+langgraph>=0.2
+
+# 环境变量加载（从 .env 文件）
+python-dotenv>=1.0
