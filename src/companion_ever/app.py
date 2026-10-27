@@ -93,7 +93,7 @@ class AppContext:
 def build_app(cfg: AppConfig) -> AppContext:
     """根据 cfg 构造完整的 AppContext。"""
     # 1. Connection
-    conn = init_db(cfg.db_path)
+    conn = init_db(cfg.db_path, check_same_thread=cfg.check_same_thread)
 
     # 2. Repos（无依赖）
     repos = Repos(

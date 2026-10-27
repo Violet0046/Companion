@@ -117,6 +117,37 @@ def _coerce_note_types(value: Sequence[Any]) -> tuple[NoteType, ...]:
     return tuple(out)
 
 
+@dataclass(frozen=True)
+class WebConfig:
+    """Web / PWA 前端配置（手机端）。"""
+
+    host: str = "0.0.0.0"
+    port: int = 8000
+    pin: str = ""
+    user: str = ""
+    persona: str = ""
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "WebConfig":
+        """从环境变量构造。
+
+        环境变量：
+        - COMPANION_WEB_HOST   默认 0.0.0.0（允许局域网内手机访问）
+        - COMPANION_WEB_PORT   默认 8000
+        - COMPANION_WEB_PIN    默认空 = 不鉴权（仅建议本机/内网使用）
+        - COMPANION_WEB_USER   默认空 = 自动取库里第一个用户
+        - COMPANION_WEB_PERSONA 默认空 = 自动取该用户的第一个 persona
+        """
+        src = env if env is not None else os.environ
+        return cls(
+            host=src.get("COMPANION_WEB_HOST", "0.0.0.0"),
+            port=int(src.get("COMPANION_WEB_PORT", "8000")),
+            pin=src.get("COMPANION_WEB_PIN", ""),
+            user=src.get("COMPANION_WEB_USER", ""),
+            persona=src.get("COMPANION_WEB_PERSONA", ""),
+        )
+
+
 class AppConfig:
     """全局应用配置（不可变）。
 
@@ -128,7 +159,7 @@ class AppConfig:
 
     __slots__ = (
         "db_path", "tz_offset_hours", "recent_message_limit",
-        "history_max_messages", "llm", "retrieval",
+        "history_max_messages", "llm", "retrieval", "check_same_thread",
     )
 
     def __init__(
@@ -139,6 +170,7 @@ class AppConfig:
         history_max_messages: int = 50,
         llm: LLMConfig | dict | None = None,
         retrieval: RetrievalConfig | dict | None = None,
+        check_same_thread: bool = True,
     ):
         self.db_path = Path(db_path)
         self.tz_offset_hours = tz_offset_hours
@@ -147,6 +179,9 @@ class AppConfig:
         self.history_max_messages = history_max_messages
         self.llm = LLMConfig.from_any(llm)
         self.retrieval = RetrievalConfig.from_any(retrieval)
+        # Web 层（FastAPI）会跨线程用同一条连接，需置 False；
+        # CLI 单线程保持默认 True。
+        self.check_same_thread = check_same_thread
 
     @classmethod
     def from_env(
@@ -208,7 +243,8 @@ class AppConfig:
             and self.recent_message_limit == other.recent_message_limit
             and self.llm == other.llm
             and self.retrieval == other.retrieval
+            and self.check_same_thread == other.check_same_thread
         )
 
 
-__all__ = ["LLMConfig", "RetrievalConfig", "AppConfig"]
+__all__ = ["LLMConfig", "RetrievalConfig", "WebConfig", "AppConfig"]

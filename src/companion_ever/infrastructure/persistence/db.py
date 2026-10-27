@@ -4,8 +4,8 @@
 - schema.sql 放在 persistence/ 包内（importlib.resources 读取）
 - 连接默认开启 PRAGMA foreign_keys（CHECK 约束必须）
 - 用 WAL 模式（允许并发读）
-- check_same_thread=True（同步 SQLite，单进程安全）
-  → 未来需要异步时改为 False
+- check_same_thread 默认 True（同步 SQLite，单进程安全）
+  → Web 层（FastAPI 多线程）传 False；SQLite 本身是 serialized 模式，安全
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def _read_schema() -> str:
     )
 
 
-def connect(db_path: Path | str) -> sqlite3.Connection:
+def connect(db_path: Path | str, *, check_same_thread: bool = True) -> sqlite3.Connection:
     """建立 SQLite 连接。
 
     自动设置：
@@ -34,7 +34,7 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
     conn = sqlite3.connect(
         str(db_path),
         isolation_level=None,  # autocommit；Repo 自己控制事务
-        check_same_thread=True,
+        check_same_thread=check_same_thread,
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -50,7 +50,7 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_read_schema())
 
 
-def init_db(db_path: Path | str) -> sqlite3.Connection:
+def init_db(db_path: Path | str, *, check_same_thread: bool = True) -> sqlite3.Connection:
     """初始化数据库：连接 + 应用 schema。
 
     Returns:
@@ -59,7 +59,7 @@ def init_db(db_path: Path | str) -> sqlite3.Connection:
     Raises:
         FileNotFoundError: schema.sql 找不到（包安装错误）
     """
-    conn = connect(db_path)
+    conn = connect(db_path, check_same_thread=check_same_thread)
     apply_schema(conn)
     return conn
 
