@@ -1,4 +1,4 @@
-﻿"""infrastructure/ai/openai_client.py — OpenAI 兼容协议的 LLM 客户端。
+"""infrastructure/ai/openai_client.py — OpenAI 兼容协议的 LLM 客户端。
 
 支持：OpenAI / DeepSeek / Qwen / 智谱 / MiniMax 等
 
@@ -49,7 +49,6 @@ class OpenAICompatibleClient:
 
     def chat(self, messages: list[dict], **kwargs) -> str:
         """同步调用。"""
-        t0 = time.perf_counter()
         response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,

@@ -1,4 +1,4 @@
-﻿"""infrastructure/trace.py — 薄版 trace（可观测性）。
+"""infrastructure/trace.py — 薄版 trace（可观测性）。
 
 回答一个问题：**这一轮模型究竟看到了什么、为什么这么答、花了多少。**
 

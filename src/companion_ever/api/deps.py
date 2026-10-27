@@ -1,4 +1,4 @@
-﻿"""api/deps.py — FastAPI 依赖：取 AppContext、鉴权、解析 user/persona。"""
+"""api/deps.py — FastAPI 依赖：取 AppContext、鉴权、解析 user/persona。"""
 from __future__ import annotations
 
 from fastapi import HTTPException, Request, WebSocket

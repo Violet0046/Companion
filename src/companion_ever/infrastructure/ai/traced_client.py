@@ -1,4 +1,4 @@
-﻿"""infrastructure/ai/traced_client.py — 给任意 LLM 客户端套一层 trace 记录。
+"""infrastructure/ai/traced_client.py — 给任意 LLM 客户端套一层 trace 记录。
 
 为什么要包装而不是写在具体客户端里：
 - 埋点应该与"用哪个 LLM"无关（OpenAI / MiniMax / DeepSeek / mock 都一样）

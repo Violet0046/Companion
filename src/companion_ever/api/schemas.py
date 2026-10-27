@@ -1,4 +1,4 @@
-﻿"""api/schemas.py — HTTP 请求 / 响应模型。"""
+"""api/schemas.py — HTTP 请求 / 响应模型。"""
 from __future__ import annotations
 
 from typing import Any, Optional

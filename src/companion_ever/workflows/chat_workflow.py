@@ -1,4 +1,4 @@
-﻿"""workflows/chat_workflow.py — 单轮对话 + 关闭触发的 LangGraph StateGraph。
+"""workflows/chat_workflow.py — 单轮对话 + 关闭触发的 LangGraph StateGraph。
 
 LangGraph 设计：
 - StateGraph(ChatState) — 状态机定义

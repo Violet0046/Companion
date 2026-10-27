@@ -1,4 +1,4 @@
-﻿"""api — Web / PWA 层（FastAPI）。
+"""api — Web / PWA 层（FastAPI）。
 
 把已有的 application 层 service 暴露成 HTTP + WebSocket，
 让手机浏览器可以直接和 AI 伴侣对话。

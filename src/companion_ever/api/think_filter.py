@@ -1,4 +1,4 @@
-﻿"""api/think_filter.py — 增量 <think> 块过滤器。
+"""api/think_filter.py — 增量 <think> 块过滤器。
 
 MiniMax-M3 等推理模型会在回复里夹带 <think>...</think> 思考块。
 Web 前端要把思考过程藏起来，但又不能等整段生成完再显示（那就不叫流式了）。

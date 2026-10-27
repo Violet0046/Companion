@@ -1,4 +1,4 @@
-﻿# Companion Ever Memory
+# Companion Ever Memory
 
 > **刚回来？先看 [START_HERE.md](START_HERE.md)** —— 有当前进度盘点、启动命令、以及"下一步该做什么"。
 > 也可直接看 [PROJECT_KB.md](PROJECT_KB.md)（项目知识库 / 架构决策）。

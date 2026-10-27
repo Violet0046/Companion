@@ -1,4 +1,4 @@
-﻿"""cli/trace_cmd.py — trace 查看命令。
+"""cli/trace_cmd.py — trace 查看命令。
 
 子命令：
 - trace list    列出最近的 trace（看链路概览、耗时、token）

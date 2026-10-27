@@ -1,4 +1,4 @@
-﻿"""api/server.py — FastAPI 应用工厂 + 启动入口。
+"""api/server.py — FastAPI 应用工厂 + 启动入口。
 
 把 Companion Ever Memory 的 application 层包成 HTTP / WebSocket，
 让手机浏览器（加到主屏幕后就是 PWA）可以直接和 AI 伴侣对话。

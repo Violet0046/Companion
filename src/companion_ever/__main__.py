@@ -1,4 +1,4 @@
-﻿"""__main__.py — 让 `python -m companion_ever ...` 可用（等价于 `python -m companion_ever.cli`）。"""
+"""__main__.py — 让 `python -m companion_ever ...` 可用（等价于 `python -m companion_ever.cli`）。"""
 from __future__ import annotations
 
 import sys

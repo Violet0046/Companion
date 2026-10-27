@@ -1,4 +1,4 @@
-﻿"""api/routes/memory.py — 记忆相关的只读接口。
+"""api/routes/memory.py — 记忆相关的只读接口。
 
 前端"她记得什么"面板用：
 - GET /api/users                                    所有用户 + 角色

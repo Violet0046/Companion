@@ -1,4 +1,4 @@
-﻿"""application/invariants.py — 廉价不变量检查。
+"""application/invariants.py — 廉价不变量检查。
 
 **为什么要有这个模块**：日志是事后 forensics，断言是事前防火墙。
 

@@ -1,4 +1,4 @@
-﻿"""application/chat/chat_service.py — 对话主流程。
+"""application/chat/chat_service.py — 对话主流程。
 
 职责：
 - 拼装 system prompt + history（通过 prompt_service）

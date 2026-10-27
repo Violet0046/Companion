@@ -1,4 +1,4 @@
-﻿"""api/routes/chat.py — 对话相关的 HTTP + WebSocket。
+"""api/routes/chat.py — 对话相关的 HTTP + WebSocket。
 
 - WS  /ws/chat     流式对话（主通道，手机端用这个）
 - POST /api/chat    非流式对话（调试 / 兜底）
