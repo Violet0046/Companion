@@ -184,6 +184,21 @@ class ConversationRepo:
         rows = self.conn.execute(sql, params).fetchall()
         return [row_to_conversation_message(r) for r in reversed(rows)]
 
+    def delete_session_close(self, marker_id: int) -> bool:
+        """删除一个 session_close marker（抽取失败时回滚用）。
+
+        为什么需要：
+        抽取失败时 marker 已经写入了，而抽取的范围是
+        [上一个 marker, 本次 marker]。如果保留 marker，下次抽取只会
+        覆盖 [本次 marker, 下次 marker]，这段内容就永远不会被抽取了。
+        回滚掉 marker，下次抽取就会自动补上。
+        """
+        cur = self.conn.execute(
+            "DELETE FROM conversation_log WHERE id = ? AND role = 'session_close'",
+            (marker_id,),
+        )
+        return cur.rowcount > 0
+
     def get_max_turn_index(self, *, user_id: str, persona_id: str) -> int:
         """返回该 (user, persona) 下最大的 turn_index（没有则 0）。
 

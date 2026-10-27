@@ -242,6 +242,51 @@ Copy-Item memory/companion.db memory/backup.db     # ⚠ 会漏数据（实测�
 
 一定用 `companion-cli maintain backup`（内部用 `VACUUM INTO`，会把 WAL 内容一起写进新文件）。
 
+## 4.8 防污染的写入路径（2026-10-28）
+
+上面的清理只是治标，真正的问题在**写入路径**。
+
+### 模型会学你的 prompt 格式
+
+prompt 里历史消息的格式是 `[时间戳] 内容`，模型看了几百轮之后学会了它，
+开始在**自己的回复里也加上前缀**：
+
+```
+模型输出： [2026-10-28 00:01:28] 怎么突然问这个啊～当然想啦｜
+入库后：   怎么突然问这个啊～当然想啦｜          ← 前缀被剔掉
+```
+
+所以 assistant 回复入库前会过两道清理（`chat_service` / `chat_workflow` 的
+`_clean_assistant_reply`）：
+
+1. 剔 `<think>...</think>` 块（推理模型的思考过程）
+2. 剔模仿旧格式的 `[时间戳] assistant: ` 前缀
+
+实现在 `utils/text.py::strip_format_prefix`（写入路径和维护命令共用）。
+
+### 抽取失败时回滚 marker（防止记忆静默丢失）
+
+抽取的范围是 `[上一个 marker, 本次 marker]`。如果抽取失败（LLM 超时/网络问题）
+但 marker 已经写入了，下次抽取只会覆盖 `[本 marker, 下个 marker]`——
+**那段内容就永远不会被抽取了，记忆静默丢数据**。
+
+现在的处理：
+
+- LLM 调用失败→ 记录错误（不再把异常抛给用户）
+- 回滚 marker（删掉那行）→ 下次抽取的范囸4自动包含它
+- CLI 显示 `[记忆抽取失败（会话边界已回滚，下次会自动补抽）]`
+
+### 已实测的一次真实超时
+
+```
+状态: error
+错误: APITimeoutError: Request timed out.
+耗时: 181532 ms
+```
+
+耗时 180 秒 = `OPENAI_TIMEOUT` 60s × openai SDK 默认重试 2 次。
+**抽取这一步以后应该异步化**（用户不应该等它）。
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

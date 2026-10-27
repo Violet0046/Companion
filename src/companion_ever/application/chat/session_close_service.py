@@ -124,8 +124,19 @@ class SessionCloseService:
             )
             report = _report_from_state(state)
 
+            # 抽取整体失败（LLM 调用就失败）时回滚 marker。
+            # 否则下次抽取的范围是 [本 marker, 下个 marker]，
+            # 这段内容将永远不会被抽取——记忆静默丢数据。
+            # 回滚后下次抽取的范围会自动包含它。
+            final_marker_id = marker_id
+            if state.get("extraction_failed"):
+                self.conversation_service.delete_session_close(marker_id)
+                tr.step("extraction.rolled_back", marker_id=marker_id,
+                        reason="; ".join(report.errors)[:200])
+                final_marker_id = 0  # 0 = 已回滚，本次未成功
+
             return SessionCloseReport(
-                marker_id=marker_id,
+                marker_id=final_marker_id,
                 extraction=report,
             )
 

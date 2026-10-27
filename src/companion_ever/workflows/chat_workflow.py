@@ -22,8 +22,15 @@ from companion_ever.application.chat.conversation_service import ConversationSer
 from companion_ever.application.chat.prompt_service import PromptService
 from companion_ever.application.chat.session_close_service import SessionCloseService
 from companion_ever.application.llm_json import strip_thinking
+from companion_ever.utils.text import strip_format_prefix
 from companion_ever.infrastructure.ai.llm_client import LLMClient
 from companion_ever.infrastructure.trace import trace_scope
+
+
+def _clean_assistant_reply(text: str) -> str:
+    """清理 assistant 回复再入库（剔 think 块 + 剔模仿前缀）。"""
+    stripped, _ = strip_format_prefix(text)
+    return strip_thinking(stripped)
 
 
 class ChatState(TypedDict, total=False):
@@ -71,7 +78,7 @@ def _make_chat_node(prompt_service: PromptService, conversation_service: Convers
             conversation_service.log_turn(
                 user_id=user_id, persona_id=persona_id,
                 turn_index=next_turn_index, role="assistant",
-                content=strip_thinking(response),
+                content=_clean_assistant_reply(response),
             )
             tr.step(
                 "db.log_turn",

@@ -111,6 +111,10 @@ class ConversationService:
 
     # === 读取（5 个） ===
 
+    def delete_session_close(self, marker_id: int) -> bool:
+        """删除一个 session_close marker（抽取失败时回滚）。"""
+        return self.conv_repo.delete_session_close(marker_id)
+
     def get_max_turn_index(self, user_id: str, persona_id: str) -> int:
         """当前最大的 turn_index（没有则 0）——用来算下一轮的 turn_index。"""
         self.authorizer.require_persona(user_id, persona_id)

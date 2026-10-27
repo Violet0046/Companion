@@ -264,7 +264,11 @@ def _print_close_report(close_report: SessionCloseReport) -> None:
     ext = close_report.extraction
     print()
     print(f"=== Session Closed ===")
-    print(f"  marker_id: {close_report.marker_id}")
+    if close_report.marker_id == 0:
+        # 抽取整体失败，marker 已回滚
+        print("  [!] 记忆抽取失败（会话边界已回滚，下次会自动补抽）")
+    else:
+        print(f"  marker_id: {close_report.marker_id}")
     print(f"  conversations_processed: {ext.conversations_processed}")
     print(f"  facts_created: {ext.facts_created}")
     print(f"  blocks_updated: {ext.blocks_updated}")

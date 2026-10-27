@@ -25,6 +25,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 
@@ -45,6 +46,40 @@ _STOP_CHARS = set(
     "请麻烦谢谢对不起不好意思应该觉得认为知道感觉因为所以如果虽然然后而且"
     "已经正在刚刚一直比较非常真的确实其实一下一样一些个些"
 )
+
+
+# 模型模仿旧版 prompt 历史格式时吐出的前缀：
+#   [2026-09-29 11:14:12] assistant: \n\n...
+#   [2026-09-29 21:56:00]\n\n...
+#   [2026-10-27 20:48] \n\n...
+# 有时还会叠加多层。
+#
+# 为什么会这样：prompt 里历史消息的格式是 "[时间戳] 内容"，
+# 模型看了几百轮之后学会了这个格式，开始在自己的回复里也加上前缀。
+# 所以**写入时就要剥掉**，否则每次对话都会重新制造这种污染。
+_FORMAT_PREFIX_RE = re.compile(
+    r"^\[(\d{4}-\d{2}-\d{2})[ T](\d{1,2}:\d{2}(?::\d{2})?)\]"
+    r"\s*(?:(?:assistant|user)\s*:\s*)?"
+    r"[\s\u200b\u3000]*",
+    re.IGNORECASE,
+)
+
+
+def strip_format_prefix(content: str) -> tuple[str, int]:
+    """剥掉开头模仿的时间戳/role 前缀（可能叠加多层）。
+
+    Returns:
+        (新内容, 剥了几层)
+    """
+    layers = 0
+    text = content
+    while True:
+        m = _FORMAT_PREFIX_RE.match(text)
+        if not m:
+            break
+        text = text[m.end():]
+        layers += 1
+    return text, layers
 
 
 def normalize(text: str) -> str:
@@ -135,6 +170,7 @@ def keyword_hit_ratio(content: str, keywords: Iterable[str]) -> float:
 
 __all__ = [
     "normalize",
+    "strip_format_prefix",
     "extract_keywords",
     "all_keywords",
     "keyword_hits",

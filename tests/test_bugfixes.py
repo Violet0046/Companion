@@ -149,6 +149,47 @@ def main() -> int:
     assert len(hits2) > 0, "短关键词查询零命中"
     print(f"[OK] Bug3: 短关键词查询召回到 {len(hits2)} 条")
 
+    # ---------- Bug 4: 抽取失败必须回滚 marker（否则记忆静默丢数据）----------
+    class FailingLLM(CountingLLM):
+        def chat(self, messages, **kwargs):
+            self.calls += 1
+            raise TimeoutError("simulated LLM timeout")
+
+    failing = FailingLLM()
+    tmpdir2 = tmpdir + "_2"
+    os.makedirs(tmpdir2, exist_ok=True)
+    ctx2 = _build(tmpdir2, failing)
+    ctx2.repos.user.create("bob")
+    ctx2.services.persona.create_persona(
+        "bob", "苏苏",
+        json.dumps({"name": "苏苏", "personality": ["温柔"]}, ensure_ascii=False),
+    )
+    ctx2.services.conversation.log_turn(
+        user_id="bob", persona_id="苏苏", turn_index=1,
+        role="user", content="你好，我是来让你记住我的",
+    )
+
+    markers_before = ctx2.conn.execute(
+        "select count(*) from conversation_log where role='session_close'"
+    ).fetchone()[0]
+
+    report = ctx2.services.session_close.close_session("bob", "苏苏")
+    assert report.extraction.errors, "抽取失败应记录错误，而不是静默失败"
+    assert "TimeoutError" in report.extraction.errors[0], (
+        f"错误信息不对: {report.extraction.errors[0]}"
+    )
+
+    markers_after = ctx2.conn.execute(
+        "select count(*) from conversation_log where role='session_close'"
+    ).fetchone()[0]
+    assert markers_after == markers_before, (
+        f"抽取失败后 marker 没回滚（{markers_before} -> {markers_after}），"
+        "下次抽取将跳过这段内容，记忆会静默丢数据"
+    )
+    assert report.marker_id == 0, "回滚后 marker_id 应标记为 0（表示未成功）"
+    print("[OK] Bug4: 抽取失败记录错误 + 回滚 marker（不静默丢记忆）")
+
+    ctx2.conn.close()
     ctx.conn.close()
     print("[ALL] 三个严重 bug 的回归测试通过")
     return 0

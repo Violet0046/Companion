@@ -22,19 +22,9 @@ from __future__ import annotations
 import re
 
 from companion_ever.application.llm_json import THINK_PATTERN
+from companion_ever.utils.text import strip_format_prefix
 
 
-# 模型模仿旧版 prompt 历史格式时吐出的前缀：
-#   [2026-09-29 11:14:12] assistant: \n\n...
-#   [2026-09-29 21:56:00]\n\n...
-#   [2026-10-27 20:48] \n\n...
-# 有时候还会叠加两层（[ts] \n\n[ts] \n\n...）
-_FORMAT_PREFIX_RE = re.compile(
-    r"^\[(\d{4}-\d{2}-\d{2})[ T](\d{1,2}:\d{2}(?::\d{2})?)\]"
-    r"\s*(?:(?:assistant|user)\s*:\s*)?"
-    r"[\s\u200b\u3000]*",
-    re.IGNORECASE,
-)
 
 # note 里描述"用 /quit 结束对话"的从句
 _QUIT_CLAUSE_RE = re.compile(
@@ -72,21 +62,8 @@ def _make_backup(conn, db_path: str) -> str | None:
         return None
 
 
-def _strip_format_prefix(content: str) -> tuple[str, int]:
-    """剥掉开头模仿的时间戳/role 前缀（可能叠加多层）。
-
-    Returns:
-        (新内容, 剥了几层)
-    """
-    layers = 0
-    text = content
-    while True:
-        m = _FORMAT_PREFIX_RE.match(text)
-        if not m:
-            break
-        text = text[m.end():]
-        layers += 1
-    return text, layers
+# 格式前缀的匹配实现放在 utils/text.py（写入路径也要用）
+_strip_format_prefix = strip_format_prefix
 
 
 def _fmt_preview(content: str, n: int = 46) -> str:

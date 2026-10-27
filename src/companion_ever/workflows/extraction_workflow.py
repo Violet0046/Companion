@@ -33,6 +33,7 @@ class ExtractionState(TypedDict, total=False):
     facts_created: int
     blocks_updated: int
     errors: list[str]
+    extraction_failed: bool  # LLM 调用就失败了（不是单条 fact 失败）
 
 
 def _make_load_node(conversation_svc: ConversationService):
@@ -83,7 +84,21 @@ def _make_extract_node(llm_client: LLMClient):
                           + _format_messages(messages),
             },
         ]
-        response_text = llm_client.chat(formatted)
+        # LLM 调用失败（超时 / 网络问题）不应该把异常抛给用户。
+        # 这里记录错误并返回空结果，由上层决定怎么回滚。
+        try:
+            response_text = llm_client.chat(formatted)
+        except Exception as e:  # noqa: BLE001
+            return {
+                **state,
+                "llm_result": {"facts": [], "blocks": [], "reasoning": ""},
+                "errors": [
+                    *list(state.get("errors") or []),
+                    f"LLM 调用失败: {type(e).__name__}: {e}",
+                ],
+                "extraction_failed": True,
+            }
+
         data = parse_json_response(response_text) or {}
         return {
             **state,
