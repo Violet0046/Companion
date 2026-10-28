@@ -44,23 +44,17 @@ from companion_ever.prompts import CHAT_FOOTER
 from companion_ever.utils.time import describe_gap, format_now, parse_sqlite_ts
 
 
+# 统一的时间转换实现在 utils/timeutil.py（API 层也用同一份，避免两边不一致）
+from companion_ever.utils.timeutil import utc_ts_to_local as _utc_ts_to_local_impl
+
+
 def _utc_ts_to_local(ts_str: str | None, tz_offset_hours: int) -> str:
-    """把 SQLite UTC 时间字符串（"YYYY-MM-DD HH:MM:SS"）转成用户本地时区。
+    """把 SQLite UTC 时间字符串转成用户本地时区。
 
     SQLite 的 CURRENT_TIMESTAMP 返回 UTC 时间。
     这里转成本地时区以便 LLM 看到的"对话时间"与用户感知一致。
     """
-    if not ts_str:
-        return ""
-    try:
-        ts_clean = ts_str.split(".")[0]
-        dt_utc = datetime.strptime(ts_clean, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc,
-        )
-        local_dt = dt_utc.astimezone(timezone(timedelta(hours=tz_offset_hours)))
-        return local_dt.strftime("%Y-%m-%d %H:%M:%S")
-    except (ValueError, AttributeError):
-        return ts_str
+    return _utc_ts_to_local_impl(ts_str, tz_offset_hours)
 
 
 class PromptService:

@@ -66,19 +66,18 @@ async def post_close_session(
 
     user_id, persona_id = resolve_target(ctx, cfg, payload.user_id, payload.persona_id)
     try:
-        report = await run_in_threadpool(
-            ctx.services.session_close.close_session, user_id, persona_id,
+        # **后台执行**：抽取是一次完整 LLM 调用（几十秒），
+        # 同步等会让用户干等着、没法继续聊天。
+        # 前端轮询 last_record_at 来知道记好了没有。
+        started = ctx.services.session_close.close_session_background(
+            user_id, persona_id,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
-    ext = report.extraction
     return CloseSessionOut(
-        marker_id=report.marker_id,
-        facts_created=ext.facts_created,
-        blocks_updated=ext.blocks_updated,
-        conversations_processed=ext.conversations_processed,
-        errors=list(ext.errors),
+        started=started,
+        errors=[] if started else ["已经在记录中了"],
     )
 
 

@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 from companion_ever.domain.entities import ConversationMessage
+from companion_ever.utils.timeutil import tz_modifier
 from .mappers import row_to_conversation_message
 
 
@@ -311,6 +312,7 @@ class ConversationRepo:
         after_id: Optional[int] = None,
         date: Optional[str] = None,
         limit: int = 50,
+        tz_offset_hours: int = 0,
     ) -> list[ConversationMessage]:
         """按游标取一页消息（始终返回时间正序）。
 
@@ -345,7 +347,9 @@ class ConversationRepo:
             order = "DESC"
 
         if date:
-            sql += " AND created_at LIKE ?"
+            # date 是**本地日期**，DB 里存的是 UTC，要先转换再比
+            sql += " AND datetime(created_at, ?) LIKE ?"
+            params.append(tz_modifier(tz_offset_hours))
             params.append(f"{date}%")
 
         sql += f" ORDER BY id {order} LIMIT ?"
@@ -356,7 +360,7 @@ class ConversationRepo:
         return list(reversed(msgs)) if order == "DESC" else msgs
 
     def list_dates(
-        self, *, user_id: str, persona_id: str,
+        self, *, user_id: str, persona_id: str, tz_offset_hours: int = 0,
     ) -> list[dict]:
         """列出有对话的日期（降序）+ 每天的消息数 + 当天首/末消息 id。
 
@@ -364,13 +368,15 @@ class ConversationRepo:
         前端点某一天之后，要能定位到**那天第一条**消息，
         而不是像以前那样把视图限制在那一天里。
         """
+        # 按**本地日期**分组：DB 存的是 UTC，
+        # 直接 substr 会把凌晨 0-8 点的消息算到前一天去
         rows = self.conn.execute(
-            "SELECT substr(created_at, 1, 10) AS d, COUNT(*) AS n, "
+            "SELECT substr(datetime(created_at, ?), 1, 10) AS d, COUNT(*) AS n, "
             "       MIN(id) AS first_id, MAX(id) AS last_id "
             "FROM conversation_log "
             "WHERE user_id = ? AND persona_id = ? AND role IN ('user', 'assistant') "
             "GROUP BY d ORDER BY d DESC",
-            (user_id, persona_id),
+            (tz_modifier(tz_offset_hours), user_id, persona_id),
         ).fetchall()
         return [
             {

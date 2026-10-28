@@ -222,19 +222,33 @@ async function refreshConv(user, persona) {
 
 /** 取一个角色的会话摘要：最后一条消息 + 汇总 + 未读数 */
 async function fetchConv(p) {
-  const item = { user: p.user, persona: p.persona, last: null, unread: 0, summary: null };
-  try {
-    const [msgs, sum] = await Promise.all([
-      api(`/api/persona/${enc(p.user)}/${enc(p.persona)}/history?limit=20&include_thinking=0`),
-      api(`/api/persona/${enc(p.user)}/${enc(p.persona)}`),
-    ]);
-    item.summary = sum;
-    S.summaries[pkey(p.user, p.persona)] = sum;
-    item.last = msgs.length ? msgs[msgs.length - 1] : null;
+  const item = {
+    user: p.user, persona: p.persona, last: null, unread: 0, summary: null, error: null,
+  };
+  // 两个请求**各自独立**失败 —— 以前用 Promise.all，一个挂了另一个也白费，
+  // 结果错误被吞掉，界面上显示成"还没有聊过"（其实是有记录的）。
+  const [msgs, sum] = await Promise.allSettled([
+    api(`/api/persona/${enc(p.user)}/${enc(p.persona)}/history?limit=20&include_thinking=0`),
+    api(`/api/persona/${enc(p.user)}/${enc(p.persona)}`),
+  ]);
+  if (msgs.status === 'fulfilled') {
+    const list = msgs.value;
+    item.last = list.length ? list[list.length - 1] : null;
     const mark = readMark(p.user, p.persona);
-    // 没有标记 = 从没打开过这个会话 = 不算未读
-    item.unread = mark == null ? 0 : msgs.filter((m) => m.id > mark).length;
-  } catch (e) { /* ignore */ }
+    // 只数**她的回复**：一问一答，没有分段发消息，未读就是「她回了几条」
+    item.unread = mark == null
+      ? 0
+      : list.filter((m) => m.role === 'assistant' && m.id > mark).length;
+  } else {
+    item.error = (msgs.reason && msgs.reason.message) || '加载失败';
+    console.error('会话加载失败', p, msgs.reason);
+  }
+  if (sum.status === 'fulfilled') {
+    item.summary = sum.value;
+    S.summaries[pkey(p.user, p.persona)] = sum.value;
+  } else {
+    console.error('角色汇总加载失败', p, sum.reason);
+  }
   return item;
 }
 
@@ -243,6 +257,17 @@ async function loadConvs() {
   S.convs = await Promise.all(ps.map(fetchConv));
   renderConvs();
   renderMe();
+  // 有加载失败的（比如服务器刚重启时请求打不通）→ 自动重试
+  if (S.convs.some((c) => c.error)) {
+    S.convRetry = (S.convRetry || 0) + 1;
+    if (S.convRetry <= 5) {
+      setTimeout(() => loadConvs(), 2000);
+    } else {
+      S.convRetry = 0;
+    }
+  } else {
+    S.convRetry = 0;
+  }
 }
 
 function renderConvs() {
@@ -260,7 +285,9 @@ function renderConvs() {
   }
   box.innerHTML = items.map((c) => {
     const last = c.last;
-    const preview = last ? (last.role === 'user' ? '我：' : '') + last.content : '还没有聊过';
+    const preview = c.error
+      ? '加载失败，正在重试…'
+      : (last ? (last.role === 'user' ? '我：' : '') + last.content : '还没有聊过');
     const badge = c.unread
       ? `<span class="badge">${c.unread > 99 ? '99+' : c.unread}</span>`
       : '<span style="height:18px"></span>';
@@ -276,6 +303,14 @@ function renderConvs() {
   box.querySelectorAll('.cell').forEach((el) => {
     el.onclick = () => openChat(el.dataset.user, el.dataset.persona);
   });
+
+  // 底部 Tab 的角标 = 所有角色未读回复的总数
+  const total = S.convs.reduce((a, c) => a + (c.unread || 0), 0);
+  const tb = $('tab-badge-msg');
+  if (tb) {
+    tb.textContent = total > 99 ? '99+' : String(total);
+    tb.classList.toggle('hidden', total <= 0);
+  }
 }
 
 /* ---------- 通讯录（Tab 2） ---------- */
@@ -503,7 +538,7 @@ function renderProfile(user, persona, info) {
     </div>
     <div id="rel-card" class="rel-card hidden"></div>
     <div class="group">
-      <div class="row"><span>上次记录</span><span class="row-val">${esc(fmtAgo(lastRec))}</span></div>
+      <div class="row"><span>上次记录</span><span class="row-val" id="last-record-val">${esc(fmtAgo(lastRec))}</span></div>
       <div class="row"><span>手动记一次</span>
         <span class="row-val"><span class="btn-mini" id="btn-record-now">记一次</span></span></div>
     </div>
@@ -521,20 +556,56 @@ function renderProfile(user, persona, info) {
   q('btn-record-now').onclick = (e) => recordNow(user, persona, e.target);
 }
 
-/** 手动触发一次记录 */
+/**
+ * 手动触发一次记录。
+ *
+ * **不等**：抽取是一次完整 LLM 调用（几十秒），
+ * 所以后端丢到后台跑，这里立刻返回，用户可以继续聊天。
+ * 然后轮询 last_record_at，等它变了再更新界面。
+ */
 async function recordNow(user, persona, btn) {
+  const before = (S.summaries[pkey(user, persona)] || {}).last_record_at || null;
   if (btn) { btn.textContent = '记录中…'; btn.style.pointerEvents = 'none'; }
   try {
-    await api('/api/session/close', {
+    const res = await api('/api/session/close', {
       method: 'POST',
       body: JSON.stringify({ user_id: user, persona_id: persona }),
     });
-    toast('记好了', 2000);
-    await openProfile(user, persona);
+    if (res && res.started === false) {
+      toast('已经在记录中了', 2500);
+      if (btn) { btn.textContent = '记一次'; btn.style.pointerEvents = ''; }
+      return;
+    }
+    toast('开始记录，你可以继续聊', 2200);
+    pollRecordDone(user, persona, before);
   } catch (e) {
     toast('记录失败：' + (e.message || ''), 4000);
     if (btn) { btn.textContent = '记一次'; btn.style.pointerEvents = ''; }
   }
+}
+
+/** 轮询直到这次记录完成（last_record_at 变了） */
+async function pollRecordDone(user, persona, before, tries = 60) {
+  for (let i = 0; i < tries; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    let info = null;
+    try {
+      info = await api(`/api/persona/${enc(user)}/${enc(persona)}`);
+    } catch (e) { continue; }
+    if (info && info.last_record_at && info.last_record_at !== before) {
+      S.summaries[pkey(user, persona)] = info;
+      const val = $('last-record-val');
+      if (val) val.textContent = fmtAgo(info.last_record_at);
+      const btn = $('btn-record-now');
+      if (btn) { btn.textContent = '记一次'; btn.style.pointerEvents = ''; }
+      toast('记好了', 2000);
+      loadConvs();
+      return;
+    }
+  }
+  const btn = $('btn-record-now');
+  if (btn) { btn.textContent = '记一次'; btn.style.pointerEvents = ''; }
+  toast('记录还没完成，过一会儿再看', 3000);
 }
 
 /* ---------- 她的记忆 ---------- */
@@ -1171,6 +1242,8 @@ function handleWs(m) {
   switch (m.type) {
     case 'ready':
       setStatus('在线', 'online');
+      // 连上了说明服务器活着了 → 刷新聊天列表（服务器重启后自动恢复）
+      loadConvs();
       break;
     case 'start': {
       const box = $('chat');

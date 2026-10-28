@@ -172,18 +172,28 @@ class ConversationService:
         after_id: Optional[int] = None,
         date: Optional[str] = None,
         limit: int = 50,
+        tz_offset_hours: int = 0,
     ) -> list[ConversationMessage]:
         """按游标取一页消息（时间正序）。"""
         self.authorizer.require_persona(user_id, persona_id)
         return self.conv_repo.get_page(
             user_id=user_id, persona_id=persona_id,
             before_id=before_id, after_id=after_id, date=date, limit=limit,
+            tz_offset_hours=tz_offset_hours,
         )
 
-    def list_dates(self, user_id: str, persona_id: str) -> list[dict]:
-        """有对话的日期列表（降序）+ 每天消息数。"""
+    def list_dates(
+        self, user_id: str, persona_id: str, tz_offset_hours: int = 0,
+    ) -> list[dict]:
+        """有对话的日期列表（降序）+ 每天消息数。
+
+        tz_offset_hours 用来按**本地日期**分组（DB 存的是 UTC）。
+        """
         self.authorizer.require_persona(user_id, persona_id)
-        return self.conv_repo.list_dates(user_id=user_id, persona_id=persona_id)
+        return self.conv_repo.list_dates(
+            user_id=user_id, persona_id=persona_id,
+            tz_offset_hours=tz_offset_hours,
+        )
 
     def search_messages(
         self,

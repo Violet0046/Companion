@@ -28,6 +28,7 @@ from companion_ever.api.schemas import (
     UserOut,
 )
 from companion_ever.domain.enums import NoteType
+from companion_ever.utils.timeutil import utc_ts_to_local
 
 router = APIRouter()
 
@@ -39,10 +40,17 @@ def _ctx_and_cfg(request: Request, x_pin: str) -> tuple[AppContext, Any]:
     return ctx, cfg
 
 
-def _s(value: Any) -> Optional[str]:
-    """时间戳统一转字符串（DB 里本来就是 SQLite 的 UTC 字符串）。"""
+def _s(value: Any, tz: int = 0) -> Optional[str]:
+    """时间戳转字符串，并**转成用户本地时区**。
+
+    DB 里存的是 SQLite 的 UTC 时间（``CURRENT_TIMESTAMP`` 返回 UTC）。
+    出库一律转本地时区 —— 否则前端会把 UTC 当本地显示，
+    东八区就会看到"8 小时前"这种错位。
+    """
     if value is None:
         return None
+    if tz:
+        return utc_ts_to_local(str(value), tz) or str(value)
     return str(value)
 
 
@@ -65,6 +73,7 @@ def persona_summary(
 ) -> PersonaSummary:
     """角色总览：人设宪法 + 3 个 block + 计数。"""
     ctx, _ = _ctx_and_cfg(request, x_pin)
+    tz = ctx.cfg.tz_offset_hours
     if not ctx.repos.user.owns_persona(user_id, persona_id):
         raise HTTPException(status_code=404, detail=f"用户 '{user_id}' 没有 persona '{persona_id}'")
 
@@ -107,9 +116,9 @@ def persona_summary(
         note_count=len(notes),
         message_count=ctx.services.conversation.count(user_id, persona_id),
         session_count=len(markers),
-        last_conversation_at=_s(last_at),
+        last_conversation_at=_s(last_at, tz),
         # markers 是时间升序，最后一个就是最近一次记录
-        last_record_at=_s(markers[-1].created_at) if markers else None,
+        last_record_at=_s(markers[-1].created_at, tz) if markers else None,
     )
 
 
@@ -131,6 +140,7 @@ def list_notes(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"未知的 note 类型: {type}") from e
 
+    tz = ctx.cfg.tz_offset_hours
     notes = ctx.services.note.find_notes(
         user_id=user_id,
         persona_id=persona_id,
@@ -144,8 +154,8 @@ def list_notes(
             content=n.content if isinstance(n.content, str) else json.dumps(n.content, ensure_ascii=False),
             importance=n.importance,
             source_quote=n.source_quote,
-            created_at=_s(n.created_at),
-            updated_at=_s(n.updated_at),
+            created_at=_s(n.created_at, tz),
+            updated_at=_s(n.updated_at, tz),
         )
         for n in notes
     ]
@@ -198,6 +208,7 @@ def list_history(
     此到此，**prompt 里从不会出现 think 内容**（它另存在 thinking_log）。
     """
     ctx, _ = _ctx_and_cfg(request, x_pin)
+    tz = ctx.cfg.tz_offset_hours
 
     want_thinking = ctx.services.settings.get_show_thinking(user_id, persona_id)
     if include_thinking is not None:
@@ -206,6 +217,7 @@ def list_history(
     messages = ctx.services.conversation.get_page(
         user_id=user_id, persona_id=persona_id,
         before_id=before_id, after_id=after_id, date=date, limit=limit,
+        tz_offset_hours=tz,
     )
 
     thinking_map: dict[int, str] = {}
@@ -220,7 +232,7 @@ def list_history(
             id=m.id,
             role=m.role,
             content=m.content,
-            created_at=_s(m.created_at),
+            created_at=_s(m.created_at, tz),
             thinking=thinking_map.get(m.id),
         )
         for m in messages
@@ -238,12 +250,15 @@ def list_dates(
 ) -> list[DateEntry]:
     """有对话的日期（降序）+ 每天的消息数。"""
     ctx, _ = _ctx_and_cfg(request, x_pin)
+    tz = ctx.cfg.tz_offset_hours
     return [
         DateEntry(
             date=d["date"], count=d["count"],
             first_id=d.get("first_id"), last_id=d.get("last_id"),
         )
-        for d in ctx.services.conversation.list_dates(user_id, persona_id)
+        for d in ctx.services.conversation.list_dates(
+            user_id, persona_id, tz_offset_hours=tz,
+        )
     ]
 
 
@@ -262,6 +277,7 @@ def search_history(
     关键词抽取与记忆检索同一套逻辑（utils/text.py）。
     """
     ctx, _ = _ctx_and_cfg(request, x_pin)
+    tz = ctx.cfg.tz_offset_hours
     q = (q or "").strip()
     if not q:
         return []
@@ -272,7 +288,7 @@ def search_history(
         for m in ctx.services.conversation.search_messages(user_id, persona_id, q, limit=limit):
             hits.append(SearchHit(
                 kind="message", id=str(m.id), content=m.content,
-                created_at=m.created_at, role=m.role,
+                created_at=_s(m.created_at, tz), role=m.role,
             ))
 
     if scope in ("all", "memories"):

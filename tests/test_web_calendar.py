@@ -41,7 +41,8 @@ def main() -> int:
 
     # --- 3. 定位到那天第一条，而不是限制范围 ---
     assert "async function jumpToDate(date, firstId)" in js, "jumpToDate 签名不对"
-    assert "before_id=${firstId}" in js, "没有取那天之前的一页"
+    # before_id 是排他的（id < X），所以要 +1 才能把目标消息包进来
+    assert "before_id=${firstId + 1}" in js, "没有正确取那天之前的一页（含目标消息）"
     assert "after_id=${after}" in js, "没有取那天之后的部分"
     assert "history?date=${date}" not in js, \
         "不该再用 date= 把视图限制在某一天里"

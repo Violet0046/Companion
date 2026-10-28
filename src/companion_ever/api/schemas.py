@@ -22,12 +22,18 @@ class CloseSessionIn(BaseModel):
 
 
 class CloseSessionOut(BaseModel):
-    """结束 session 的结果——告诉前端"她记住了什么"。"""
+    """结束 session 的结果——告诉前端"她记住了什么"。
 
-    marker_id: int
-    facts_created: int
-    blocks_updated: int
-    conversations_processed: int
+    started=True 表示**已经丢到后台执行**，请求立刻就返回了
+    （抽取是一次完整 LLM 调用，要几十秒，不能让用户在那儿干等）。
+    前端靠轮询 last_record_at 来知道"记好了没有"。
+    """
+
+    started: bool = True
+    marker_id: int = 0
+    facts_created: int = 0
+    blocks_updated: int = 0
+    conversations_processed: int = 0
     errors: list[str] = Field(default_factory=list)
 
 

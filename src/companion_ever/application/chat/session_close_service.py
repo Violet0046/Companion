@@ -79,6 +79,8 @@ class SessionCloseService:
         self.authorizer = authorizer
         self.conversation_service = conversation_service
         self.extraction_graph = extraction_graph
+        # 正在进行的记录任务（防止重复触发）
+        self._closing: set[tuple[str, str]] = set()
 
     # ============ 自动管理 session 边界 ============
 
@@ -126,12 +128,24 @@ class SessionCloseService:
         self.close_session_background(user_id, persona_id)
         return True
 
-    def close_session_background(self, user_id: str, persona_id: str) -> None:
+    def is_closing(self, user_id: str, persona_id: str) -> bool:
+        """这个角色当前有没有正在进行的记录任务。"""
+        return (user_id, persona_id) in self._closing
+
+    def close_session_background(self, user_id: str, persona_id: str) -> bool:
         """在后台线程里关闭 session（不阻塞调用方）。
 
         用于自动边界管理：抽取是一次完整 LLM 调用（几十秒），
         不能让用户等它。
+
+        Returns:
+            True = 已启动；False = 已经有任务在跑了（不重复启动）
         """
+        key = (user_id, persona_id)
+        if key in self._closing:
+            return False
+        self.authorizer.require_persona(user_id, persona_id)
+        self._closing.add(key)
         thread = threading.Thread(
             target=self._close_worker,
             args=(user_id, persona_id),
@@ -139,6 +153,7 @@ class SessionCloseService:
             name="session-close",
         )
         thread.start()
+        return True
 
     def _close_worker(self, user_id: str, persona_id: str) -> None:
         """后台线程的实现（异常不影响主流程）。"""
@@ -149,6 +164,8 @@ class SessionCloseService:
                 "自动关闭 session 失败: user=%s persona=%s",
                 user_id, persona_id,
             )
+        finally:
+            self._closing.discard((user_id, persona_id))
 
     def close_session(
         self,
