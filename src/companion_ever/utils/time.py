@@ -30,6 +30,37 @@ def format_now(tz_offset_hours: int = 8, now: datetime | None = None) -> str:
     return local.strftime(f"%Y-%m-%d {wd} %H:%M (UTC{tz_offset_hours:+d})")
 
 
+def parse_sqlite_ts(ts: str | None) -> datetime | None:
+    """解析 SQLite 的 UTC 时间字符串（"2026-10-28 00:08:47"）。
+
+    返回带 UTC tzinfo 的 datetime；解析失败返回 None。
+    """
+    if not ts:
+        return None
+    try:
+        return datetime.strptime(ts.split(".")[0], "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+    except (ValueError, AttributeError):
+        return None
+
+
+def describe_gap(seconds: int) -> str:
+    """把时间间隔说成中文。"""
+    seconds = max(int(seconds), 0)
+    if seconds < 60:
+        return f"{seconds} 秒"
+    if seconds < 3600:
+        return f"{seconds // 60} 分钟"
+    if seconds < 86400:
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
+        return f"{h} 小时" + (f" {m} 分钟" if m else "")
+    d = seconds // 86400
+    h = (seconds % 86400) // 3600
+    return f"{d} 天" + (f" {h} 小时" if h else "")
+
+
 def ensure_aware(dt: datetime | None) -> datetime | None:
     """把 naive datetime 加上 UTC tzinfo（如果是 aware 不变）。"""
     if dt is None:
@@ -116,6 +147,8 @@ def relative_time_zh(then: datetime, now: datetime | None = None) -> str:
 
 
 __all__ = [
+    "parse_sqlite_ts",
+    "describe_gap",
     "format_now",
     "ensure_aware",
     "relative_time_zh",

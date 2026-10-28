@@ -44,7 +44,7 @@
 | 上下文控制 | 历史被 cap 在 `history_max_messages=50`（可配），取**最近**的 50 条（不是最早的）|
 | 抽取粒度 | 单 session 内平均 N 个 facts + 1-3 个 block 更新 |
 | 跨 session 记忆 | 旧 session 经抽取后，新 session 通过 retrieval 召回 |
-| prompt 体积 | Chat LLM 的 system prompt 5 段（时间 / 人设 / 当前状态 / 相关记忆 / 行为指引）+ 独立的历史 role 消息 |
+| prompt 体积 | Chat LLM 的 system prompt 5 段（时间 / 人设 / 当前状态 / 相关记忆 / 行为指引）+ 独立的历史 role 消息（**user 带时间戳，assistant 不带**）|
 
 ---
 

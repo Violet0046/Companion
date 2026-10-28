@@ -41,7 +41,7 @@ from companion_ever.application.persona.block_service import BlockService
 from companion_ever.domain.enums import NoteType
 from companion_ever.infrastructure.trace import current_trace
 from companion_ever.prompts import CHAT_FOOTER
-from companion_ever.utils.time import format_now
+from companion_ever.utils.time import describe_gap, format_now, parse_sqlite_ts
 
 
 def _utc_ts_to_local(ts_str: str | None, tz_offset_hours: int) -> str:
@@ -299,13 +299,22 @@ class PromptService:
     def _render_message(self, msg) -> str:
         """渲染单条对话消息（仅时间戳 + 内容，不重复 role tag）。
 
-        格式：[2026-09-28 17:30:42] 你好
+        格式：[2026-09-28 17:30:42] 你好（仅 user 消息带时间戳，assistant 不带）
 
         注意：
         1. 不再加 `user:` / `assistant:` 前缀——
            role 已经在 messages 列表的 role 字段中，避免 LLM 模仿格式
         2. 时间戳从 SQLite UTC 转成本地时区，与用户感知一致
         """
+        # assistant 消息不带时间戳。
+        # 原因（实测结论）：
+        # 1. 它紧跟在 user 消息后面，时间戳冗余
+        # 2. 所有消息都带 [时间戳] 前缀时，模型会学会在自己的回复里
+        #    也加上同样的前缀（实测 2/2 出现），
+        #    而且它往往会照抄上一条的时间戳 -> 回答里的时间是错的
+        # 3. 只留 user 消息带时间戳时，模型不再会模仿（实测 0/2）
+        if msg.role == "assistant":
+            return msg.content
         ts = _utc_ts_to_local(msg.created_at, self.tz_offset_hours)
         return f"[{ts}] {msg.content}"
 
@@ -350,24 +359,75 @@ class PromptService:
         return "\n\n".join(sections)
 
     def _render_time_section(self, last_conv_at: str | None) -> str:
-        """当前时间信息。
+        """当前时间信息（包含"这一轮是什么性质"的指引）。
 
-        注意：
-        1. "现在" 用本地时区显示（format_now 已经处理）
-        2. "上次对话" 的时间戳也从 SQLite UTC 转成本地时区
-        3. 明确区分"现在"和"上次对话"，避免 LLM 混淆
+        为什么重写这个段（一行行的历史）：
+        原来的写法是
+
+            - 现在（这是用户发本条消息的时间）：2026-10-28 周三 10:54
+            - 用户上次对话的起始时间（注意：这不是当前消息时间）：2026-10-28 00:08:47
+
+        问题：
+        1. 那个"起始时间"写得很易让模型当成"现在"，实际上模型就回答过
+           "现在还是凌晨"（而实际是上午 10:54）
+        2. 时间戳写在那里模型并不会真的去思考它。
+
+        现在的写法：
+        - 给准确的"现在"
+        - 用人话说的间隔（不给绝对时间戳，避免被当成"现在"）
+        - **直接告诉模型这一轮该怎么开口**（连续还是新开一次）
         """
         now_str = format_now(self.tz_offset_hours)
         lines = [
             "## 当前时间信息",
-            f"- **现在（这是用户发本条消息的时间）**：{now_str}",
+            f"- **现在**：{now_str}",
         ]
-        if last_conv_at:
-            # 从 SQLite UTC 转本地时区显示
-            display = _utc_ts_to_local(last_conv_at, self.tz_offset_hours)
+
+        last_dt = parse_sqlite_ts(last_conv_at)
+        if last_dt is None:
             lines.append(
-                f"- 用户上次对话的起始时间（注意：这不是当前消息时间，是历史）：{display}"
+                "- **这一轮**：这是用户的第一次说话，"
+                "主动开口、建立一点感情基础。"
             )
+            return "\n".join(lines)
+
+        now_utc = datetime.now(timezone.utc)
+        gap_seconds = int((now_utc - last_dt).total_seconds())
+        gap_text = describe_gap(gap_seconds)
+
+        # 用人话的上一次说话时间（本地时区）
+        local_last = last_dt.astimezone(
+            timezone(timedelta(hours=self.tz_offset_hours))
+        )
+        lines.append(
+            f"- **用户上一次说话**："
+            f"{local_last.strftime('%m月%d日 %H:%M')}，距今 {gap_text}"
+        )
+
+        # 这一轮的性质（给模型的开口指引）
+        if gap_seconds < 10 * 60:
+            hint = (
+                "用户刚说完还没多久，话题是**连续**的——"
+                "直接接着往下谈，不要重新打招呼、不要随意改口背景。"
+            )
+        elif gap_seconds < 3 * 3600:
+            hint = (
+                f"用户距上次说话过了 {gap_text}，属于**同一次随意聊的延续**——"
+                "可以自然地接上上一句话，不必重新介绍。"
+            )
+        elif gap_seconds < 16 * 3600:
+            hint = (
+                f"用户今天之前来过，距上次说话过了 {gap_text}——"
+                "还是同一天的事，可以紧凑一下但不必重新报到身份。"
+            )
+        else:
+            hint = (
+                f"用户隔了 {gap_text} 才再来，这是**一次新的对话**——"
+                "之前的话题已经过去了，**不要假装刚才还在聊**；"
+                "可以自然地关心一下他这段时间过得怎么样。"
+            )
+        lines.append(f"- **这一轮**：{hint}")
+
         return "\n".join(lines)
 
     def _render_persona_basics(self, persona_basics: dict | None) -> str:

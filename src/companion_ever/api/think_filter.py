@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from companion_ever.utils.text import THINK_TAG_NAMES
+from companion_ever.utils.text import THINK_TAG_NAMES, strip_format_prefix
 
 # 支持 think / thinking / reasoning 三种标签（换模型时无需改代码）
 _TAG_ALT = "|".join(THINK_TAG_NAMES)
@@ -68,6 +68,9 @@ class ThinkFilter:
         self._raw = ""
         self._pending = ""
         self._sent = 0
+        # 模型学了历史消息的 "[2026-10-28 03:00:56] " 前缀，会在自己回复里也加上。
+        # 那是模仿的，不是正文 —— 在流式输出里就把它剔掉。
+        self._mimic_stripped = False
 
     def feed(self, chunk: str) -> str:
         """喂入一个新 chunk，返回应该发给前端的增量文本。"""
@@ -78,6 +81,15 @@ class ThinkFilter:
 
         self._raw += safe
         visible = visible_prefix(self._raw)
+
+        # 剔掉回复开头的模仿前缀（只剔一次）
+        if not self._mimic_stripped:
+            stripped, layers = strip_format_prefix(visible)
+            if layers:
+                visible = stripped
+                self._mimic_stripped = True
+                self._sent = 0  # 重置已发送位置
+
         if len(visible) <= self._sent:
             return ""
         delta = visible[self._sent :]
@@ -91,6 +103,12 @@ class ThinkFilter:
         """
         self._pending = ""
         visible = visible_prefix(self._raw)
+        if not self._mimic_stripped:
+            stripped, layers = strip_format_prefix(visible)
+            if layers:
+                visible = stripped
+                self._mimic_stripped = True
+                self._sent = 0
         if len(visible) <= self._sent:
             return ""
         delta = visible[self._sent :]

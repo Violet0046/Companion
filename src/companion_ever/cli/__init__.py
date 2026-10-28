@@ -23,6 +23,7 @@ from companion_ever.config import AppConfig, LLMConfig
 from companion_ever.app import build_app
 from companion_ever.domain.enums import NoteType
 from companion_ever.domain.persona_templates import PERSONA_TEMPLATES, template_to_json
+from companion_ever.utils.text import strip_format_prefix
 from companion_ever.cli.maintain_cmd import (
     cmd_backup,
     cmd_clean_history,
@@ -194,7 +195,9 @@ def cmd_chat(args) -> int:
 
             # 输出 response（不再加 [persona] 前缀，避免和 LLM 的 <think> 混淆）
             if "response" in result and user_input != "/quit":
-                response = result["response"].strip()
+                # 剔掉模型自己加的 "[2026-10-28 03:00:56] " 前缀（它学习的历史格式）
+                response, _ = strip_format_prefix(result["response"])
+                response = response.strip()
                 if response:
                     print(f"\n{response}\n")
                 next_turn = result.get("next_turn_index", next_turn + 1)
