@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+  <title>她</title>
+  <meta name="theme-color" content="#14100f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="她">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+  <div id="gate" class="gate hidden">
+    <div class="gate-card">
+      <div class="gate-avatar" id="gate-avatar">·</div>
+      <h2>需要访问 PIN</h2>
+      <p class="gate-hint">输入 PIN 以继续</p>
+      <input id="pin-input" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" aria-label="访问 PIN">
+      <button id="pin-submit" class="btn-primary">进入</button>
+      <p id="gate-error" class="gate-error"></p>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="avatar" id="avatar">·</div>
+        <div class="topbar-meta">
+          <div class="topbar-name" id="persona-name">载入中…</div>
+          <div class="topbar-sub" id="persona-sub">连接中…</div>
+        </div>
+      </div>
+      <button id="btn-drawer" class="icon-btn" aria-label="记忆面板">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <path fill="currentColor" d="M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z"/>
+        </svg>
+      </button>
+    </header>
+
+    <main id="chat" class="chat" aria-live="polite"></main>
+
+    <footer class="composer">
+      <div class="composer-row">
+        <textarea id="input" rows="1" placeholder="说点什么…" autocomplete="off"
+                  enterkeyhint="send" aria-label="消息输入"></textarea>
+        <button id="btn-send" class="send-btn" aria-label="发送">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10.2 15 12 3.4 13.8z"/>
+          </svg>
+        </button>
+      </div>
+      <button id="btn-close-session" class="session-btn">结束这次对话 · 让她记住</button>
+    </footer>
+
+    <div id="scrim" class="scrim hidden"></div>
+    <aside id="drawer" class="drawer" aria-hidden="true">
+      <div class="drawer-head">
+        <h3>她记得的</h3>
+        <button id="btn-drawer-close" class="icon-btn" aria-label="关闭">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path fill="currentColor" d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="drawer-scroll">
+        <div id="rel-card" class="rel-card"></div>
+
+        <div class="drawer-section">
+          <div class="drawer-label">记忆条目 <span id="note-count" class="muted"></span></div>
+          <div id="note-filters" class="chip-row"></div>
+          <div id="note-list" class="note-list"></div>
+        </div>
+
+        <div class="drawer-section">
+          <div class="drawer-label">设置</div>
+          <label class="switch-row">
+            <span>显示她的思考过程</span>
+            <input type="checkbox" id="toggle-thinking" checked>
+            <i class="switch"></i>
+          </label>
+          <div class="stat-line" id="stat-line"></div>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

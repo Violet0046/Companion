@@ -30,3 +30,7 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# PWA 前端静态文件（web/）跟着包一起装
+[tool.setuptools.package-data]
+companion_ever = ["web/*", "web/**/*"]

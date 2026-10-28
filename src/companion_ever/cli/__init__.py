@@ -361,6 +361,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="做一份完整的数据库备份（含 WAL 内容）",
     )
 
+    # serve（Web / PWA）
+    p_serve = sub.add_parser(
+        "serve",
+        help="启动 Web 服务（手机同 WiFi 就能聊）",
+    )
+    p_serve.add_argument("--host", default=None, help="监听地址，默认 0.0.0.0")
+    p_serve.add_argument("--port", type=int, default=None, help="端口，默认 8000")
+
     # trace（诊断：看模型究竟看到了什么）
     p_trace = sub.add_parser("trace", help="trace 诊断（看每轮链路 + 模型实际收到的内容）")
     trace_sub = p_trace.add_subparsers(dest="trace_cmd", required=True)
@@ -408,6 +416,15 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("[FAIL] 未知 maintain 子命令")
             return 1
+    elif args.cmd == "serve":
+        try:
+            from companion_ever.api.server import run_server
+        except ImportError as e:
+            print("[FAIL] 缺少依赖：", e)
+            print("       安装：pip install fastapi uvicorn")
+            return 1
+        run_server(host=args.host, port=args.port, db_path=args.db)
+        return 0
     elif args.cmd == "trace":
         if args.trace_cmd == "list":
             return cmd_trace_list(args)

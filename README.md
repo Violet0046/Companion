@@ -114,6 +114,18 @@ PYTHONPATH=src python -m companion_ever.cli show \
 
 详见 [TESTING.md](TESTING.md)。
 
+## 手机上聊（PWA）
+
+```bash
+# 启动 Web 服务（终端会打印可用的地址）
+companion-cli serve
+
+# 手机连同一个 WiFi，浏览器打开 http://<计算机 IP>:8000
+# 浏览器菜单选「添加到主屏幕」即可当 App 使用
+```
+
+要完整 PWA 能力（离线缓存 / 推送）需要 HTTPS，建议用 Tailscale Serve。
+
 ## 诊断：trace（看模型究竟看到了什么）
 
 ```bash

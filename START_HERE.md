@@ -545,6 +545,58 @@ session_close_service.close_session_background(user_id, persona_id)
 conversation_service.list_active_sessions()
 ```
 
+## 4.14 PWA 前端（2026-10-28）
+
+### 怎么跑
+
+```powershell
+# 在计算机上
+.\.venv\Scripts\companion-cli.exe serve
+
+# 手机连同一个 WiFi，浏览器打开
+#   http://<计算机局域网 IP>:8000
+```
+
+终端会打印可用的地址（含局域网 IP）。
+默认监听 `0.0.0.0:8000`，手机能连。
+
+### 界面
+
+| 视图 | 内容 |
+|---|---|
+| **对话** | 流式逐字、思考过程可展开、自动重连 |
+| **她记得的**（右上抽屉） | 关系阶段 + 进度条 + 里程碑 + 记忆条目（可按类型筛选） |
+| **设置** | 显示她的思考过程开关（实时生效，不重载页面） |
+
+### 文件位置
+
+```
+src/companion_ever/web/
+  index.html            结构
+  app.js                逻辑（WebSocket / 拉取 / 渲染）
+  styles.css            样式
+  manifest.webmanifest  PWA 清单
+  sw.js                 Service Worker（离线壳 + 推送）
+  icon-192.png / icon-512.png
+```
+
+放在 Python 包内所以 `pip install` 会一起装上（pyproject 的 `package-data`已配置）。
+零构建步骤，改完刷新即生效。
+
+### 定制点
+
+- **HTTPS 才能完整 PWA**：Service Worker 需要安全上下文，
+  `http://192.168.x.x:8000` 下不会注册 → 没有离线缓存、没有推送、Chrome 也不给「安装」按钮。
+  解决：**Tailscale Serve**（免费，自动证书）或 Cloudflare Tunnel。
+- **iOS 推送**需先「添加到主屏幕」（iOS 16.4+）。
+- PIN 默认关闭（`COMPANION_WEB_PIN` 设了就需要输入）。
+
+### 修复了的一个隐开 bug
+
+`ChatService.stream_chat()` 的 assistant 写入路径漏了改，还在调用已删除的 `_clean_assistant_reply` ——
+**API 路径只能流式输出、但写库时崩**（用户发送的消息没库存）。
+现在两条路径已统一。
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

@@ -166,15 +166,28 @@ class ChatService:
                 persona_id=persona_id,
                 turn_index=next_turn,
                 role="user",
-                content=user_input,
+                content=strip_invisible(user_input),
             )
-            self.conversation_service.log_turn(
+            body, think = split_assistant_reply(
+                response_text,
+                getattr(self.llm_client, "last_reasoning", None),
+            )
+            msg_id = self.conversation_service.log_turn(
                 user_id=user_id,
                 persona_id=persona_id,
                 turn_index=next_turn,
                 role="assistant",
-                content=_clean_assistant_reply(response_text),
+                content=body,
             )
+            if think:
+                # 思考过程另存到 thinking_log（给用户看，不进 prompt）
+                self.conversation_service.log_thinking(
+                    message_id=msg_id,
+                    user_id=user_id,
+                    persona_id=persona_id,
+                    turn_index=next_turn,
+                    content=think,
+                )
             tr.step(
                 "db.log_turn",
                 ms=(_time.perf_counter() - _t0) * 1000,
