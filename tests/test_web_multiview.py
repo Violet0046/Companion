@@ -55,7 +55,19 @@ def main() -> int:
     assert "结束会话" not in js, "「结束会话」这个说法要去掉"
     print("[OK] 角色资料页用「上次记录 / 手动记一次」代替结束会话")
 
-    # --- 5. 记忆是角色资料页的子页面（标题带角色名） ---
+    # --- 5. 通讯录是干净的联系人列表，不显示最后一条消息 ---
+    import re as _re
+    tag_fn = _re.search(r"function personaTag\(p\) \{(.*?)\n\}", js, _re.S)
+    assert tag_fn, "缺少 personaTag"
+    body = tag_fn.group(1)
+    assert "c.last" not in body and "S.convs" not in body, (
+        "通讯录不该拿最后一条消息当副标题（那是「消息」页的事）"
+    )
+    # 消息页才显示最后一条
+    assert "last.content" in js, "消息页应该显示最后一条消息"
+    print("[OK] 通讯录 / 消息页 的副标题逻辑分开了")
+
+    # --- 6. 记忆是角色资料页的子页面（标题带角色名） ---
     assert "memory-title" in html, "记忆页没有标题"
     assert "的记忆" in js, "记忆页标题应该带角色名"
     assert "openMemory" in js, "缺少进入记忆页的入口"

@@ -315,13 +315,21 @@ function renderConvs() {
 
 /* ---------- 通讯录（Tab 2） ---------- */
 
+/**
+ * 通讯录里显示的角色简介。
+ *
+ * 注意：**不显示最后一条消息** —— 那是「消息」页的事。
+ * 通讯录要的就是一份干净的角色清单（微信的通讯录也是这个路子），
+ * 这里显示角色自己的设定（身份 / 性格 / 关系）。
+ */
 function personaTag(p) {
   const sum = S.summaries[pkey(p.user, p.persona)];
   const b = (sum && sum.persona_basics) || {};
-  const t = b.tag || b.description || b.bio || b.summary;
-  if (typeof t === 'string' && t.trim()) return t.trim();
-  const c = S.convs.find((x) => x.user === p.user && x.persona === p.persona);
-  return c && c.last ? c.last.content : '还没有聊过';
+  if (b.identity) return String(b.identity);
+  if (Array.isArray(b.personality) && b.personality.length) return b.personality.join('、');
+  if (b.relationship) return String(b.relationship);
+  if (typeof b.tag === 'string' && b.tag.trim()) return b.tag.trim();
+  return 'AI 伴侣';
 }
 
 function renderContacts() {
