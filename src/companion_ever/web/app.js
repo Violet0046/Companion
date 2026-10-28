@@ -112,28 +112,32 @@ function syncViewport() {
   const vv = window.visualViewport;
 
   if (!vv) {
+    // 不支持 visualViewport：退回到布局视口
     root.style.setProperty('--app-h', window.innerHeight + 'px');
     root.style.setProperty('--vv-top', '0px');
     updateDebug();
     return;
   }
 
-  // 键盘占了多少：innerHeight - 可见高度 - 可见区顶部偏移
+  // 可见视口的底边（client 坐标）
+  const vvBottom = Math.round(vv.offsetTop + vv.height);
+  // 键盘占了多少
   const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
   const kbOpen = kb > 120;
 
   const prev = S.appH || 0;
   let h, top;
   if (kbOpen) {
-    // 键盘弹起：app 缩到键盘上方，底边跟随可见视口
-    h = Math.round(vv.height);
+    // 有键盘：app 缩到键盘上方。
+    // 底边紧贴可见视口底边，顶边跟随 offsetTop。
+    // 这样无论 iOS 是「缩小视口」还是「滚动视口」，app 都不会偏。
+    h = Math.max(1, Math.round(vvBottom - vv.offsetTop));
     top = Math.round(vv.offsetTop);
   } else {
-    // 没有键盘：app 铺满整个 web 视图。
-    // 注意：Alook 等浏览器的 visualViewport.height 可能比布局视口小，
-    // 直接用它会留下空白，所以取两者的大值。
+    // 没键盘：app 铺满整个 web 视图。
+    // 取 max 是防某些浏览器的 vv.height 比布局视口小、直接用它会留白。
     h = Math.round(Math.max(vv.height, window.innerHeight));
-    top = 0;
+    top = Math.max(0, vvBottom - h);
   }
 
   root.style.setProperty('--app-h', h + 'px');
@@ -162,7 +166,17 @@ function updateDebug() {
     d.remove();
     return h;
   })();
+  const vvBottom = vv ? Math.round(vv.offsetTop + vv.height) : null;
+  const appBottom = rect ? Math.round(rect.bottom) : null;
+  const gap = (vvBottom != null && appBottom != null) ? vvBottom - appBottom : null;
+  const kb = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : null;
   const lines = [
+    '--- KEY ---',
+    'kb           ' + (kb != null ? Math.round(kb) : '-') + (kb > 120 ? '  (键盘开)' : '  (键盘关)'),
+    'vv bottom    ' + vvBottom,
+    'app bottom   ' + appBottom,
+    'GAP          ' + gap + (gap === 0 ? '   OK' : '   <<<< 不对齐!'),
+    '--- raw ---',
     'innerHeight  ' + window.innerHeight,
     'innerWidth   ' + window.innerWidth,
     'vv.height    ' + (vv ? Math.round(vv.height) : '-'),
@@ -170,7 +184,6 @@ function updateDebug() {
     'scrollY      ' + window.scrollY,
     'app height   ' + (rect ? Math.round(rect.height) : '-'),
     'app top      ' + (rect ? Math.round(rect.top) : '-'),
-    'app bottom   ' + (rect ? Math.round(rect.bottom) : '-'),
     'screen       ' + window.screen.width + 'x' + window.screen.height,
     '100dvh       ' + dvhTest,
   ];
@@ -716,6 +729,16 @@ $('input').addEventListener('input', (e) => {
 });
 $('input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+});
+
+/* iOS 焦点输入框时会滚动文档把输入框“露出来”。
+   我们的 app 是 position:fixed，文档一滚它就被顶出屏幕。
+   常量屏幕时把滚动量拉回来。 */
+$('input').addEventListener('focus', () => {
+  [0, 60, 180].forEach((d) => setTimeout(() => {
+    if (window.scrollY !== 0) window.scrollTo(0, 0);
+    syncViewport();
+  }, d));
 });
 
 $('search-input').addEventListener('input', (e) => {
