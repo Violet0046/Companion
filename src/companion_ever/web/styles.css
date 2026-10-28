@@ -543,3 +543,134 @@ body {
 .msg .body ul, .msg .body ol { margin: 4px 0; padding-left: 20px; }
 .msg .body li { margin: 2px 0; }
 .msg .body a { color: var(--accent); }
+
+/* ============================================================
+   多视图结构（消息 / 通讯录 / 我 / 会话 / 角色资料 / 她的记忆）
+   设计稿见 design/mockup/，class 名与设计稿一一对应
+   ============================================================ */
+
+.views { flex: 1 1 auto; position: relative; overflow: hidden; }
+.view  { position: absolute; inset: 0; display: none; flex-direction: column; }
+.view.active { display: flex; }
+.scroll { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+/* ---------- 导航栏 ---------- */
+.nav {
+  flex: 0 0 auto;
+  height: calc(var(--topbar-h) + var(--safe-t));
+  padding: var(--safe-t) calc(12px + var(--safe-r)) 0 calc(12px + var(--safe-l));
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg); border-bottom: 1px solid var(--line); z-index: 20;
+}
+.nav-title { font-size: 17px; font-weight: 700; white-space: nowrap; }
+.nav-btn {
+  width: 34px; height: 34px; border-radius: 50%; border: none;
+  background: var(--surface-2); color: var(--text);
+  display: grid; place-items: center; font-size: 19px; line-height: 1;
+  cursor: pointer; flex: 0 0 auto;
+}
+.spacer { margin-left: auto; }
+/* 会话页顶栏：左返回 + 中间名字 + 右搜索/头像，用 flex-start 而不是 space-between */
+.topbar-nav { justify-content: flex-start; }
+
+/* ---------- 搜索条 ---------- */
+.searchbar {
+  flex: 0 0 auto; margin: 8px 14px 6px; height: 34px;
+  background: var(--surface); border-radius: 10px;
+  display: flex; align-items: center; gap: 7px; padding: 0 10px;
+  color: var(--text-muted);
+}
+.searchbar svg { width: 15px; height: 15px; opacity: .8; flex: 0 0 auto; }
+.searchbar input {
+  flex: 1 1 auto; min-width: 0; background: none; border: none; outline: none;
+  color: var(--text); font: inherit; font-size: 14px;
+}
+.searchbar input::placeholder { color: var(--text-muted); }
+
+/* ---------- 列表行（微信式） ---------- */
+.list { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.cell { display: flex; align-items: center; gap: 12px; padding: 11px 14px; position: relative; }
+.cell + .cell::before {
+  content: ''; position: absolute; left: 72px; right: 0; top: 0;
+  height: 1px; background: var(--line);
+}
+.ava {
+  width: 46px; height: 46px; flex: 0 0 auto; border-radius: 12px;
+  background: linear-gradient(140deg, var(--accent), #b0604c);
+  color: #fff; font-weight: 700; font-size: 19px;
+  display: grid; place-items: center; user-select: none;
+  border: none; cursor: pointer; font-family: inherit;
+}
+.ava-s1 { background: linear-gradient(140deg, #86b8a6, #4d7b6d); }
+.ava-s2 { background: linear-gradient(140deg, #93a3da, #5a6aa2); }
+.ava-s3 { background: linear-gradient(140deg, #d8a473, #9c6840); }
+.ava-sm { width: 32px; height: 32px; border-radius: 9px; font-size: 14px; }
+.ava-lg { width: 56px; height: 56px; border-radius: 14px; font-size: 23px; }
+.ava-xl { width: 72px; height: 72px; border-radius: 20px; font-size: 30px; }
+.cell-body { flex: 1 1 auto; min-width: 0; }
+.cell-title { font-size: 16px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.cell-sub { font-size: 13px; color: var(--text-muted); overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.cell-meta { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.cell-time { font-size: 11.5px; color: var(--text-muted); }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+         background: #e5484d; color: #fff; font-size: 11px; font-weight: 600;
+         display: grid; place-items: center; }
+.pin { font-size: 10px; color: var(--accent); border: 1px solid var(--accent);
+       border-radius: 4px; padding: 0 4px; line-height: 15px; font-weight: 500; }
+.group-label { font-size: 12px; color: var(--text-muted); padding: 14px 18px 7px; }
+
+/* ---------- 分组设置行 ---------- */
+.group { background: var(--bg-soft); margin-top: 10px; }
+.row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 16px; position: relative; font-size: 15.5px;
+}
+.row + .row::before { content: ''; position: absolute; left: 16px; right: 0; top: 0;
+                       height: 1px; background: var(--line); }
+.row-val { color: var(--text-muted); font-size: 14px; display: flex; align-items: center; gap: 6px; }
+.chev { color: var(--text-muted); font-size: 16px; line-height: 1; }
+.switch-inline { padding: 0; background: none; border-radius: 0; }
+.btn-mini { background: var(--accent); color: #fff; border-radius: 999px;
+            padding: 4px 13px; font-size: 12.5px; font-weight: 600; }
+
+/* ---------- 底部 Tab ---------- */
+.tabbar {
+  flex: 0 0 auto;
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  background: var(--bg-soft); border-top: 1px solid var(--line);
+  padding-bottom: var(--safe-b);
+}
+.tab {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; color: var(--text-muted); font-size: 10.5px;
+  background: none; border: none; font-family: inherit; cursor: pointer;
+  padding: 7px 0 6px;
+}
+.tab svg { width: 24px; height: 24px; }
+.tab.active { color: var(--accent); }
+
+/* ---------- 统计条 ---------- */
+.stats { display: flex; margin: 10px 14px 12px; background: var(--bg-soft);
+         border-radius: 14px; padding: 14px 0; }
+.stats > div { flex: 1; text-align: center; position: relative; }
+.stats > div + div::before { content: ''; position: absolute; left: 0; top: 4px;
+                              bottom: 4px; width: 1px; background: var(--line); }
+.stat-num { font-size: 22px; font-weight: 700; color: var(--accent); }
+.stat-label { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+
+/* ---------- 我 ---------- */
+.me-card { display: flex; align-items: center; gap: 14px; padding: 20px 16px; background: var(--bg-soft); }
+.me-name { font-size: 18px; font-weight: 600; }
+.me-sub { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
+.hint { font-size: 11.5px; color: var(--text-muted); text-align: center;
+        padding: 14px 20px 20px; line-height: 1.6; }
+
+/* ---------- 角色资料 ---------- */
+.profile-hero { display: flex; flex-direction: column; align-items: center; gap: 8px;
+                padding: 18px 0 22px; }
+.profile-name { font-size: 20px; font-weight: 700; }
+.profile-sub { font-size: 13px; color: var(--text-muted); }
+.chips { padding: 0 14px 8px; margin-bottom: 0; }
+.note-bar { height: 3px; background: var(--surface-2); border-radius: 2px; margin-top: 9px; }
+.note-bar > i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }

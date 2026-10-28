@@ -12,8 +12,6 @@ const S = {
   connected: false,
   sending: false,
   reconnectTimer: null,
-  notes: [],
-  noteFilter: 'all',
   showThinking: true,
   info: null,
   streamEl: null,
@@ -31,6 +29,23 @@ const S = {
   kbOpen: false,
   /* 新消息角标：用户往上翻时，新到的消息数 */
   newCount: 0,
+  /* 当前视图：messages / contacts / me / chat / profile / memory */
+  view: 'messages',
+  /* 所有用户及其角色（/api/users） */
+  users: [],
+  /* 聊天列表数据 */
+  convs: [],
+  /* 各角色的汇总信息（note_count 等） */
+  summaries: {},
+  /* 正在看资料 / 记忆的角色 */
+  profilePersona: null,
+  memoryPersona: null,
+  memoryNotes: [],
+  memoryFilter: 'all',
+  convQuery: '',
+  contactQuery: '',
+  /* 服务端的自动记录间隔（分钟） */
+  idleMinutes: 120,
   /* 本轮流式输出里收到的思考过程 */
   streamThinking: '',
   debug: new URLSearchParams(location.search).has('debug'),
@@ -99,6 +114,401 @@ async function api(path, opts = {}) {
 }
 
 const base = () => `/api/persona/${encodeURIComponent(S.user)}/${encodeURIComponent(S.persona)}`;
+
+/* ============================================================
+   页面层：消息 / 通讯录 / 我 / 会话 / 角色资料 / 她的记忆
+   设计稿见 design/mockup/
+   ============================================================ */
+
+const TAB_VIEWS = ['messages', 'contacts', 'me'];
+const enc = (s) => encodeURIComponent(s);
+const escAttr = (s) => esc(s).replace(/"/g, '&quot;');
+const pkey = (user, persona) => `${user}/${persona}`;
+
+/** 切换视图。子页面（会话/资料/记忆）不显示底部 tab */
+function showView(name) {
+  S.view = name;
+  document.querySelectorAll('.view').forEach((v) => {
+    v.classList.toggle('active', v.id === 'view-' + name);
+  });
+  $('tabbar').classList.toggle('hidden', !TAB_VIEWS.includes(name));
+  document.querySelectorAll('.tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.view === name);
+  });
+  if (name === 'chat') anchorBottom();
+}
+
+/* ---------- 角色清单 ---------- */
+
+async function loadUsers() {
+  try {
+    S.users = await api('/api/users');
+  } catch (e) {
+    S.users = [];
+  }
+}
+
+function allPersonas() {
+  const out = [];
+  (S.users || []).forEach((u) => {
+    (u.personas || []).forEach((p) => out.push({ user: u.id, persona: p }));
+  });
+  return out;
+}
+
+/** 已读标记：记住每个角色读到哪条，用来算未读数 */
+function readMark(user, persona) {
+  const v = localStorage.getItem('ce_read_' + pkey(user, persona));
+  return v == null ? null : Number(v);
+}
+function setReadMark(user, persona, id) {
+  if (id) localStorage.setItem('ce_read_' + pkey(user, persona), String(id));
+}
+
+/** 按名字散列出一个稳定的头像配色 */
+function avaClass(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return ['ava-s1', 'ava-s2', 'ava-s3'][h % 3];
+}
+
+/** 列表上的时间：今天显示时刻，昨天显示"昨天 21:30"，一周内显示星期 */
+function fmtConvTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const now = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  if (d.toDateString() === now.toDateString()) return `${p(d.getHours())}:${p(d.getMinutes())}`;
+  const y = new Date(now); y.setDate(y.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return `昨天 ${p(d.getHours())}:${p(d.getMinutes())}`;
+  if (now - d < 7 * 86400000) return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()];
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+/** "多久之前" */
+function fmtAgo(iso) {
+  if (!iso) return '还没有记录过';
+  const d = new Date(String(iso).replace(' ', 'T'));
+  if (isNaN(d)) return '还没有记录过';
+  const s = (Date.now() - d.getTime()) / 1000;
+  if (s < 60) return '刚刚';
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  if (s < 86400 * 30) return `${Math.floor(s / 86400)} 天前`;
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+function intervalText() {
+  return S.idleMinutes >= 60
+    ? `每 ${Math.round(S.idleMinutes / 60)} 小时`
+    : `每 ${S.idleMinutes} 分钟`;
+}
+
+/** 只刷新一个角色的会话摘要（收到新消息时用） */
+async function refreshConv(user, persona) {
+  const idx = S.convs.findIndex((x) => x.user === user && x.persona === persona);
+  if (idx < 0) return;
+  S.convs[idx] = await fetchConv(S.convs[idx]);
+  renderConvs();
+}
+
+/* ---------- 消息（Tab 1） ---------- */
+
+/** 取一个角色的会话摘要：最后一条消息 + 汇总 + 未读数 */
+async function fetchConv(p) {
+  const item = { user: p.user, persona: p.persona, last: null, unread: 0, summary: null };
+  try {
+    const [msgs, sum] = await Promise.all([
+      api(`/api/persona/${enc(p.user)}/${enc(p.persona)}/history?limit=20&include_thinking=0`),
+      api(`/api/persona/${enc(p.user)}/${enc(p.persona)}`),
+    ]);
+    item.summary = sum;
+    S.summaries[pkey(p.user, p.persona)] = sum;
+    item.last = msgs.length ? msgs[msgs.length - 1] : null;
+    const mark = readMark(p.user, p.persona);
+    // 没有标记 = 从没打开过这个会话 = 不算未读
+    item.unread = mark == null ? 0 : msgs.filter((m) => m.id > mark).length;
+  } catch (e) { /* ignore */ }
+  return item;
+}
+
+async function loadConvs() {
+  const ps = allPersonas();
+  S.convs = await Promise.all(ps.map(fetchConv));
+  renderConvs();
+  renderMe();
+}
+
+function renderConvs() {
+  const box = $('conv-list');
+  if (!box) return;
+  const q = (S.convQuery || '').trim().toLowerCase();
+  const items = S.convs.filter((c) => {
+    if (!q) return true;
+    const last = c.last ? (c.last.content || '') : '';
+    return c.persona.toLowerCase().includes(q) || last.toLowerCase().includes(q);
+  });
+  if (!items.length) {
+    box.innerHTML = `<div class="empty">${q ? '没有匹配的会话' : '还没有角色'}</div>`;
+    return;
+  }
+  box.innerHTML = items.map((c) => {
+    const last = c.last;
+    const preview = last ? (last.role === 'user' ? '我：' : '') + last.content : '还没有聊过';
+    const badge = c.unread
+      ? `<span class="badge">${c.unread > 99 ? '99+' : c.unread}</span>`
+      : '<span style="height:18px"></span>';
+    return `<div class="cell" data-user="${escAttr(c.user)}" data-persona="${escAttr(c.persona)}">
+      <div class="ava ${avaClass(c.persona)}">${esc(c.persona.slice(0, 1))}</div>
+      <div class="cell-body">
+        <div class="cell-title">${esc(c.persona)}</div>
+        <div class="cell-sub">${esc(preview)}</div>
+      </div>
+      <div class="cell-meta"><span class="cell-time">${fmtConvTime(last && last.created_at)}</span>${badge}</div>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('.cell').forEach((el) => {
+    el.onclick = () => openChat(el.dataset.user, el.dataset.persona);
+  });
+}
+
+/* ---------- 通讯录（Tab 2） ---------- */
+
+function personaTag(p) {
+  const sum = S.summaries[pkey(p.user, p.persona)];
+  const b = (sum && sum.persona_basics) || {};
+  const t = b.tag || b.description || b.bio || b.summary;
+  if (typeof t === 'string' && t.trim()) return t.trim();
+  const c = S.convs.find((x) => x.user === p.user && x.persona === p.persona);
+  return c && c.last ? c.last.content : '还没有聊过';
+}
+
+function renderContacts() {
+  const box = $('contact-list');
+  if (!box) return;
+  const q = (S.contactQuery || '').trim().toLowerCase();
+  const ps = allPersonas().filter((p) => !q || p.persona.toLowerCase().includes(q));
+  let html = '';
+  if (ps.length) {
+    html += '<div class="group-label">角色</div>';
+    html += ps.map((p) => `<div class="cell" data-user="${escAttr(p.user)}" data-persona="${escAttr(p.persona)}">
+      <div class="ava ${avaClass(p.persona)}">${esc(p.persona.slice(0, 1))}</div>
+      <div class="cell-body"><div class="cell-title">${esc(p.persona)}</div>
+      <div class="cell-sub">${esc(personaTag(p))}</div></div>
+    </div>`).join('');
+  }
+  html += '<div class="group-label">功能</div>';
+  html += `<div class="cell" id="cell-new-persona"><div class="ava" style="background:var(--surface-2);color:var(--text-muted)">+</div>
+    <div class="cell-body"><div class="cell-title">新建角色</div><div class="cell-sub">创建一个新的 AI 伴侣</div></div></div>`;
+  html += `<div class="cell" id="cell-group-chat"><div class="ava" style="background:var(--surface-2);color:var(--text-muted)">群</div>
+    <div class="cell-body"><div class="cell-title">群聊</div><div class="cell-sub">多个角色在同一个房间里聊天</div></div></div>`;
+  box.innerHTML = html;
+  box.querySelectorAll('.cell[data-persona]').forEach((el) => {
+    el.onclick = () => openProfile(el.dataset.user, el.dataset.persona);
+  });
+  const nb = $('cell-new-persona');
+  if (nb) nb.onclick = () => toast('新建角色：还没做（需要后端加一个接口）', 3000);
+  const gb = $('cell-group-chat');
+  if (gb) gb.onclick = () => toast('群聊：还没做', 2500);
+}
+
+/* ---------- 我（Tab 3） ---------- */
+
+function renderMe() {
+  if (!$('me-name')) return;
+  let notes = 0, msgs = 0, sessions = 0;
+  S.convs.forEach((c) => {
+    if (!c.summary) return;
+    notes += c.summary.note_count || 0;
+    msgs += c.summary.message_count || 0;
+    sessions += c.summary.session_count || 0;
+  });
+  $('me-avatar').textContent = (S.user || '·').slice(0, 1);
+  $('me-name').textContent = S.user || '我';
+  $('me-sub').textContent = `${S.convs.length} 个角色 · 共 ${notes} 条记忆 · ${msgs} 条消息`;
+  $('me-server').textContent = location.host;
+  $('me-interval').textContent = intervalText();
+  $('me-version').textContent = 'v0.3.0';
+  $('me-hint').textContent = `共 ${sessions} 次记录。切换角色请到「通讯录」。`;
+}
+
+/* ---------- 切换角色 / 打开会话 ---------- */
+
+async function switchTarget(user, persona) {
+  const changed = (user !== S.user) || (persona !== S.persona);
+  S.user = user; S.persona = persona;
+  localStorage.setItem('ce_user', user);
+  localStorage.setItem('ce_persona', persona);
+  $('persona-name').textContent = persona;
+  $('btn-avatar').textContent = persona.slice(0, 1);
+  if (changed) {
+    connect();               // WS 的 URL 里带 user/persona，换角色必须重连
+    await loadPersona();
+    await loadHistory(true);
+  }
+}
+
+async function openChat(user, persona) {
+  await switchTarget(user, persona);
+  const c = S.convs.find((x) => x.user === user && x.persona === persona);
+  if (c) {
+    if (c.last) setReadMark(user, persona, c.last.id);
+    c.unread = 0;
+  }
+  renderConvs();
+  showView('chat');
+}
+
+/* ---------- 角色资料 ---------- */
+
+function relStage(info) {
+  const blocks = (info && info.blocks) || [];
+  const rel = blocks.find((b) => b.block_type === 'relationship_state');
+  const stageMap = { stranger: '初识', familiar: '熟悉', close: '亲近', deep_bond: '深交' };
+  if (!rel) return '—';
+  const f = rel.fields || {};
+  return stageMap[f.stage] || f.stage || '—';
+}
+
+async function openProfile(user, persona) {
+  S.profilePersona = { user, persona };
+  showView('profile');
+  const body = $('profile-body');
+  body.innerHTML = '<div class="empty">载入中…</div>';
+  let info = null;
+  try {
+    info = await api(`/api/persona/${enc(user)}/${enc(persona)}`);
+    S.summaries[pkey(user, persona)] = info;
+  } catch (e) { /* ignore */ }
+  renderProfile(user, persona, info);
+}
+
+function renderProfile(user, persona, info) {
+  const body = $('profile-body');
+  if (!body) return;
+  const basics = (info && info.persona_basics) || {};
+  const name = basics.name || persona;
+  const tag = basics.tag || basics.description || '';
+  const lastRec = info && info.last_record_at;
+  body.innerHTML = `
+    <div class="profile-hero">
+      <div class="ava ava-xl ${avaClass(persona)}">${esc(name.slice(0, 1))}</div>
+      <div class="profile-name">${esc(name)}</div>
+      ${tag ? `<div class="profile-sub">${esc(tag)}</div>` : ''}
+    </div>
+    <div class="stats">
+      <div><div class="stat-num">${(info && info.message_count) || 0}</div><div class="stat-label">条消息</div></div>
+      <div><div class="stat-num">${(info && info.note_count) || 0}</div><div class="stat-label">条记忆</div></div>
+      <div><div class="stat-num">${(info && info.session_count) || 0}</div><div class="stat-label">次记录</div></div>
+    </div>
+    <div class="group">
+      <div class="row" id="row-chat"><span>继续聊天</span><span class="row-val">现在就开始 <span class="chev">›</span></span></div>
+      <div class="row" id="row-memory"><span>她的记忆</span><span class="row-val">${(info && info.note_count) || 0} 条 <span class="chev">›</span></span></div>
+      <div class="row" id="row-dates"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>
+      <div class="row" id="row-relation"><span>关系状态</span><span class="row-val">${esc(relStage(info))} <span class="chev">›</span></span></div>
+    </div>
+    <div id="rel-card" class="rel-card hidden"></div>
+    <div id="date-list" class="date-list hidden"></div>
+    <div class="group">
+      <div class="row"><span>上次记录</span><span class="row-val">${esc(fmtAgo(lastRec))}</span></div>
+      <div class="row"><span>手动记一次</span>
+        <span class="row-val"><span class="btn-mini" id="btn-record-now">记一次</span></span></div>
+    </div>
+    <div class="hint">对话${esc(intervalText())}自动记录一次，记录后她会记住聊过的事。<br/>想现在记也可以手动触发。</div>
+  `;
+  const q = (id) => body.querySelector('#' + id);
+  q('row-chat').onclick = () => openChat(user, persona);
+  q('row-memory').onclick = () => openMemory(user, persona);
+  q('row-dates').onclick = () => toggleDates(user, persona);
+  q('row-relation').onclick = () => {
+    const card = q('rel-card');
+    card.classList.toggle('hidden');
+    if (!card.classList.contains('hidden')) { S.info = info; renderRelation(); }
+  };
+  q('btn-record-now').onclick = (e) => recordNow(user, persona, e.target);
+}
+
+/** 角色资料页里展开"按日期回溯" */
+async function toggleDates(user, persona) {
+  const box = $('date-list');
+  if (!box) return;
+  if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  box.innerHTML = '<div class="empty">载入中…</div>';
+  try {
+    const dates = await api(`/api/persona/${enc(user)}/${enc(persona)}/dates`);
+    if (!dates.length) { box.innerHTML = '<div class="empty">还没有历史对话</div>'; return; }
+    box.innerHTML = dates.map((d) => `
+      <div class="date-row" data-date="${escAttr(d.date)}">
+        <span>${esc(dayLabel(d.date))}</span><span class="n">${d.count} 条 ›</span>
+      </div>`).join('');
+    box.querySelectorAll('.date-row').forEach((r) => {
+      r.onclick = async () => {
+        await switchTarget(user, persona);
+        await jumpToDate(r.dataset.date);
+      };
+    });
+  } catch (e) {
+    box.innerHTML = '<div class="empty">载入失败</div>';
+  }
+}
+
+/** 手动触发一次记录 */
+async function recordNow(user, persona, btn) {
+  if (btn) { btn.textContent = '记录中…'; btn.style.pointerEvents = 'none'; }
+  try {
+    await api('/api/session/close', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: user, persona_id: persona }),
+    });
+    toast('记好了', 2000);
+    await openProfile(user, persona);
+  } catch (e) {
+    toast('记录失败：' + (e.message || ''), 4000);
+    if (btn) { btn.textContent = '记一次'; btn.style.pointerEvents = ''; }
+  }
+}
+
+/* ---------- 她的记忆 ---------- */
+
+async function openMemory(user, persona) {
+  S.memoryPersona = { user, persona };
+  showView('memory');
+  $('memory-title').textContent = persona + '的记忆';
+  const box = $('memory-list');
+  box.innerHTML = '<div class="empty">载入中…</div>';
+  try {
+    S.memoryNotes = await api(`/api/persona/${enc(user)}/${enc(persona)}/notes?limit=200`);
+  } catch (e) {
+    S.memoryNotes = [];
+  }
+  renderMemory();
+}
+
+function renderMemory() {
+  const notes = S.memoryNotes || [];
+  const chips = $('memory-filters');
+  const box = $('memory-list');
+  if (!chips || !box) return;
+  const counts = {};
+  notes.forEach((n) => { counts[n.type] = (counts[n.type] || 0) + 1; });
+  const types = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  chips.innerHTML = '<button class="chip' + (S.memoryFilter === 'all' ? ' active' : '') + '" data-t="all">全部</button>'
+    + types.slice(0, 8).map((t) => `<button class="chip${S.memoryFilter === t ? ' active' : ''}" data-t="${escAttr(t)}">${esc(t)} ${counts[t]}</button>`).join('');
+  chips.querySelectorAll('.chip').forEach((c) => {
+    c.onclick = () => { S.memoryFilter = c.dataset.t; renderMemory(); };
+  });
+  const filtered = S.memoryFilter === 'all' ? notes : notes.filter((n) => n.type === S.memoryFilter);
+  if (!filtered.length) { box.innerHTML = '<div class="empty">还没有这类记忆</div>'; return; }
+  box.innerHTML = filtered.map((n) => `
+    <div class="note" data-type="${escAttr(n.type)}">
+      <div class="note-head"><span class="note-type">${esc(n.type)}</span>
+      <span class="note-imp">重要度 ${(n.importance || 0).toFixed(2)}</span></div>
+      ${esc(n.content)}
+      <div class="note-bar"><i style="width:${Math.round((n.importance || 0) * 100)}%"></i></div>
+    </div>`).join('');
+}
 
 /* ---------- 视口：用 visualViewport 精确跟随「实际可见区域」 ---------- */
 
@@ -228,10 +638,11 @@ async function boot() {
   await resolveTarget();
   // 先读设置（show_thinking）再拉历史 —— 并行的话不知道该不该带 think
   await loadSettings();
+  await loadUsers();
   await Promise.all([loadPersona(), loadHistory(true)]);
+  showView('messages');
   connect();
-  loadNotes();
-  loadDates();
+  loadConvs();          // 聊天列表比较慢，放后台拉
 }
 
 function showGate(networkError) {
@@ -252,7 +663,7 @@ async function resolveTarget() {
   localStorage.setItem('ce_user', u);
   localStorage.setItem('ce_persona', p);
   const initial = (p || '·').slice(0, 1);
-  $('avatar').textContent = initial;
+  $('btn-avatar').textContent = initial;
   $('gate-avatar').textContent = initial;
   $('persona-name').textContent = p || '未设置角色';
 }
@@ -264,7 +675,7 @@ async function loadPersona() {
     S.info = await api(base());
     const basics = S.info.persona_basics || {};
     if (basics.name) $('persona-name').textContent = basics.name;
-    renderRelation(); renderStats();
+    $('btn-avatar').textContent = (basics.name || S.persona || '·').slice(0, 1);
   } catch (e) { /* ignore */ }
 }
 
@@ -328,20 +739,6 @@ async function loadOlder() {
     S.loadingOlder = false;
     $('load-more-hint').classList.add('hidden');
   }
-}
-
-async function loadNotes() {
-  try {
-    S.notes = await api(`${base()}/notes?limit=200`);
-    renderNotes();
-  } catch (e) { /* ignore */ }
-}
-
-async function loadDates() {
-  try {
-    S.dates = await api(`${base()}/dates`);
-    renderDates();
-  } catch (e) { /* ignore */ }
 }
 
 /* ---------- 渲染 ---------- */
@@ -521,10 +918,12 @@ function anchorBottom() {
   });
 }
 
-function renderRelation() {
+function renderRelation(info) {
   const card = $('rel-card');
-  if (!S.info) { card.innerHTML = ''; return; }
-  const blocks = S.info.blocks || [];
+  if (!card) return;
+  const src = info || S.info;
+  if (!src) { card.innerHTML = ''; return; }
+  const blocks = src.blocks || [];
   const rel = blocks.find((b) => b.block_type === 'relationship_state');
   const prof = blocks.find((b) => b.block_type === 'user_profile');
   let html = '';
@@ -552,52 +951,6 @@ function renderRelation() {
   card.innerHTML = html || '<div class="empty">还没有关系数据</div>';
 }
 
-function renderStats() {
-  if (!S.info) return;
-  $('stat-line').innerHTML = `记忆 ${S.info.note_count} 条 · 消息 ${S.info.message_count} 条 · 共同走过 ${S.info.session_count} 段对话`;
-}
-
-function renderDates() {
-  const el = $('date-list');
-  if (!S.dates.length) { el.innerHTML = '<div class="empty">还没有历史对话</div>'; return; }
-  el.innerHTML = S.dates.map((d) => `
-    <div class="date-row" data-date="${esc(d.date)}">
-      <span>${esc(dayLabel(d.date))}</span>
-      <span class="n">${d.count} 条 ›</span>
-    </div>`).join('');
-  el.querySelectorAll('.date-row').forEach((r) => {
-    r.onclick = () => jumpToDate(r.dataset.date);
-  });
-}
-
-function renderNotes() {
-  const list = $('note-list');
-  const chips = $('note-filters');
-  const counts = {};
-  S.notes.forEach((n) => { counts[n.type] = (counts[n.type] || 0) + 1; });
-  $('note-count').textContent = `（${S.notes.length}）`;
-
-  const types = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
-  let chipHtml = `<button class="chip${S.noteFilter === 'all' ? ' active' : ''}" data-t="all">全部</button>`;
-  types.slice(0, 6).forEach((t) => {
-    chipHtml += `<button class="chip${S.noteFilter === t ? ' active' : ''}" data-t="${esc(t)}">${esc(t)} ${counts[t]}</button>`;
-  });
-  chips.innerHTML = chipHtml;
-  chips.querySelectorAll('.chip').forEach((c) => {
-    c.onclick = () => { S.noteFilter = c.dataset.t; renderNotes(); };
-  });
-
-  const filtered = S.noteFilter === 'all' ? S.notes : S.notes.filter((n) => n.type === S.noteFilter);
-  if (!filtered.length) { list.innerHTML = '<div class="empty">还没有这类记忆</div>'; return; }
-  list.innerHTML = filtered.map((n) => `
-    <div class="note" data-type="${esc(n.type)}">
-      <div class="note-head">
-        <span class="note-type">${esc(n.type)}</span>
-        <span class="note-imp">${(n.importance || 0).toFixed(2)}</span>
-      </div>${esc(n.content)}
-    </div>`).join('');
-}
-
 /* ---------- 历史跳转 ---------- */
 
 function updateHistoryBar() {
@@ -618,7 +971,7 @@ async function jumpToDate(date) {
     renderChat();
     anchorBottom();
     updateJumpButton();
-    closeDrawer();
+    showView('chat');
     toast(S.viewLabel);
   } catch (e) { toast('加载失败'); }
 }
@@ -804,6 +1157,7 @@ function handleWs(m) {
       S.sending = false;
       $('btn-send').disabled = false;
       updateJumpButton();
+      refreshConv(S.user, S.persona);
       break;
     }
     case 'error': {
@@ -818,7 +1172,7 @@ function handleWs(m) {
       if (m.facts_created) bits.push(`记住了 ${m.facts_created} 件事`);
       if (m.blocks_updated) bits.push(`更新了 ${m.blocks_updated} 项状态`);
       toast(bits.length ? bits.join('，') : '这次聊天已结束', 3200);
-      loadPersona(); loadNotes(); loadDates();
+      loadPersona(); loadConvs();
       if (S.viewMode === 'live') loadHistory(true);
       break;
     }
@@ -855,38 +1209,9 @@ function send() {
   }, 320);
 }
 
-async function closeSession() {
-  if (!S.connected) { toast('还没连上'); return; }
-  const btn = $('btn-close-session');
-  btn.disabled = true;
-  btn.textContent = '正在整理…';
-  try {
-    await api('/api/session/close', {
-      method: 'POST',
-      body: JSON.stringify({ user_id: S.user, persona_id: S.persona }),
-    });
-    toast('这次聊天已结束', 2000);
-    closeDrawer();
-  } catch (e) {
-    toast('结束失败：' + (e.message || ''), 4000);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '结束这次对话 · 让她记住';
-  }
-}
-
-/* ---------- 抽屉 ---------- */
-
-function openDrawer() { $('drawer').classList.add('open'); $('drawer').setAttribute('aria-hidden', 'false'); $('scrim').classList.remove('hidden'); }
-function closeDrawer() { $('drawer').classList.remove('open'); $('drawer').setAttribute('aria-hidden', 'true'); $('scrim').classList.add('hidden'); }
-
 /* ---------- 事件绑定 ---------- */
 
 $('btn-send').onclick = send;
-$('btn-close-session').onclick = closeSession;
-$('btn-drawer').onclick = openDrawer;
-$('btn-drawer-close').onclick = closeDrawer;
-$('scrim').onclick = closeDrawer;
 $('btn-search').onclick = openSearch;
 $('btn-search-close').onclick = closeSearch;
 $('btn-back-live').onclick = backToLive;
@@ -896,6 +1221,30 @@ $('btn-jump-latest').onclick = () => {
   anchorBottom();
   updateJumpButton();
 };
+
+/* ---------- 新页面导航 ---------- */
+
+$('btn-back-list').onclick = () => showView('messages');
+$('btn-avatar').onclick = () => openProfile(S.user, S.persona);
+$('btn-profile-back').onclick = () => showView('chat');
+$('btn-memory-back').onclick = () => showView('profile');
+$('btn-new-conv').onclick = () => toast('新建会话：还没做', 2500);
+
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.onclick = () => {
+    showView(tab.dataset.view);
+    if (tab.dataset.view === 'contacts') renderContacts();
+  };
+});
+
+$('conv-search').addEventListener('input', (e) => {
+  S.convQuery = e.target.value;
+  renderConvs();
+});
+$('contact-search').addEventListener('input', (e) => {
+  S.contactQuery = e.target.value;
+  renderContacts();
+});
 
 $('input').addEventListener('input', (e) => {
   const el = e.target;
@@ -993,6 +1342,7 @@ document.addEventListener('visibilitychange', () => {
     if (!S.connected) connect();
     // 回到前台：在底部就保持贴底，在翻历史就保持原来的位置
     else if (S.viewMode === 'live') loadHistory(true, { keepScroll: !wasAtBottom });
+    loadConvs();
   }
 });
 

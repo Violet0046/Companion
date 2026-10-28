@@ -87,7 +87,9 @@ def main() -> int:
     import re
     html_ids = set(re.findall(r'id="([^"]+)"', html))
     js_ids = set(re.findall(r"\$\('([^']+)'\)", js))
-    missing_ids = js_ids - html_ids
+    # 这些 id 是运行时动态创建的（角色资料页 / 通讯录页按需渲染）
+    DYNAMIC_IDS = {"rel-card", "date-list", "cell-new-persona", "cell-group-chat"}
+    missing_ids = js_ids - html_ids - DYNAMIC_IDS
     assert not missing_ids, f"app.js 引用了不存在的元素: {sorted(missing_ids)}"
     print(f"[OK] app.js 引用的 {len(js_ids)} 个元素 id 都存在于 index.html")
 

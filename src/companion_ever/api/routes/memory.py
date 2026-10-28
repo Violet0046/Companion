@@ -108,6 +108,8 @@ def persona_summary(
         message_count=ctx.services.conversation.count(user_id, persona_id),
         session_count=len(markers),
         last_conversation_at=_s(last_at),
+        # markers 是时间升序，最后一个就是最近一次记录
+        last_record_at=_s(markers[-1].created_at) if markers else None,
     )
 
 

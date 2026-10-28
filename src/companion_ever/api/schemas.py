@@ -107,6 +107,9 @@ class PersonaSummary(BaseModel):
     message_count: int = 0
     session_count: int = 0
     last_conversation_at: Optional[str] = None
+    # 最近一次「记录」（session_close marker）的时间。
+    # 前端用它显示"上次记录：3 天前"，并提供手动记一次的入口。
+    last_record_at: Optional[str] = None
 
 
 class UserOut(BaseModel):

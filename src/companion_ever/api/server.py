@@ -107,10 +107,12 @@ def create_app(
 
     @app.get("/api/health", include_in_schema=False)
     def health() -> JSONResponse:
-        """健康检查——顺便告诉前端 PIN 是否生效。"""
+        """健康检查——顺便告诉前端 PIN 是否生效、自动记录间隔多长。"""
+        idle = int(getattr(app.state.ctx.cfg, "idle_session_minutes", 120) or 0)
         return JSONResponse({
             "ok": True,
             "auth_required": bool(web_cfg.pin),
+            "idle_minutes": idle,
         })
 
     # manifest 要用 application/manifest+json，否则 PWA 安装不了

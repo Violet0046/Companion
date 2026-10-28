@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png">
-  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -29,94 +29,144 @@
   </div>
 
   <div id="app" class="app hidden">
+    <div class="views">
 
-    <header class="topbar">
-      <div class="topbar-left">
-        <div class="avatar" id="avatar">·</div>
-        <div class="topbar-meta">
-          <div class="topbar-name" id="persona-name">载入中…</div>
-          <div class="topbar-sub" id="persona-sub">连接中…</div>
+      <!-- ===== 消息（Tab 1） ===== -->
+      <section id="view-messages" class="view">
+        <div class="nav">
+          <div class="nav-title">消息</div>
+          <div class="spacer"></div>
+          <button id="btn-new-conv" class="nav-btn" aria-label="新建对话">+</button>
         </div>
-      </div>
-      <button id="btn-search" class="icon-btn" aria-label="搜索聊天记录">
-        <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
-          <path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/>
-        </svg>
-      </button>
-      <button id="btn-drawer" class="icon-btn" aria-label="记忆面板">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-          <path fill="currentColor" d="M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z"/>
-        </svg>
-      </button>
-    </header>
+        <div class="searchbar">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+          <input id="conv-search" type="search" placeholder="搜索会话" autocomplete="off" aria-label="搜索会话">
+        </div>
+        <div class="list" id="conv-list"></div>
+      </section>
 
-    <div id="history-bar" class="history-bar hidden">
-      <span id="history-label">正在查看历史聊天</span>
-      <button id="btn-back-live">回到最新</button>
+      <!-- ===== 通讯录（Tab 2） ===== -->
+      <section id="view-contacts" class="view">
+        <div class="nav"><div class="nav-title">通讯录</div></div>
+        <div class="searchbar">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+          <input id="contact-search" type="search" placeholder="搜索角色" autocomplete="off" aria-label="搜索角色">
+        </div>
+        <div class="list" id="contact-list"></div>
+      </section>
+
+      <!-- ===== 我（Tab 3） ===== -->
+      <section id="view-me" class="view">
+        <div class="nav"><div class="nav-title">我</div></div>
+        <div class="scroll">
+          <div class="me-card">
+            <div class="ava ava-xl ava-s3" id="me-avatar">·</div>
+            <div>
+              <div class="me-name" id="me-name">…</div>
+              <div class="me-sub" id="me-sub"></div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="row">
+              <span>显示思考过程</span>
+              <label class="switch-row switch-inline"><input type="checkbox" id="toggle-thinking" checked><i class="switch"></i></label>
+            </div>
+            <div class="row"><span>自动记录间隔</span><span class="row-val" id="me-interval">每 2 小时</span></div>
+            <div class="row"><span>服务器地址</span><span class="row-val" id="me-server">…</span></div>
+            <div class="row"><span>关于</span><span class="row-val" id="me-version">v0.3.0</span></div>
+          </div>
+          <div class="hint" id="me-hint"></div>
+        </div>
+      </section>
+
+      <!-- ===== 会话 ===== -->
+      <section id="view-chat" class="view">
+        <header class="topbar">
+          <button id="btn-back-list" class="icon-btn" aria-label="返回消息列表">
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M15.4 4.6 14 3.2 5.2 12 14 20.8l1.4-1.4L8 12z"/></svg>
+          </button>
+          <div class="topbar-meta">
+            <div class="topbar-name" id="persona-name">载入中…</div>
+            <div class="topbar-sub" id="persona-sub">连接中…</div>
+          </div>
+          <div class="spacer"></div>
+          <button id="btn-search" class="icon-btn" aria-label="搜索聊天记录">
+            <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
+              <path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/>
+            </svg>
+          </button>
+          <button id="btn-avatar" class="ava ava-sm" aria-label="角色资料">·</button>
+        </header>
+
+        <div id="history-bar" class="history-bar hidden">
+          <span id="history-label">正在查看历史聊天</span>
+          <button id="btn-back-live">回到最新</button>
+        </div>
+        <main id="chat" class="chat" aria-live="polite"></main>
+        <div id="load-more-hint" class="load-more-hint hidden">向上滑动加载更旧的聊天</div>
+
+        <footer class="composer">
+          <button id="btn-jump-latest" class="jump-latest hidden" aria-label="回到最新消息">
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path fill="currentColor" d="M12 16.5 5.5 10l1.4-1.4L12 13.7l5.1-5.1L18.5 10z"/>
+            </svg>
+            <span id="jump-latest-label">回到最新</span>
+          </button>
+          <div class="composer-row">
+            <textarea id="input" rows="1" placeholder="说点什么…" autocomplete="off"
+                      enterkeyhint="send" aria-label="消息输入"></textarea>
+            <button id="btn-send" class="send-btn" aria-label="发送">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10.2 15 12 3.4 13.8z"/>
+              </svg>
+            </button>
+          </div>
+        </footer>
+      </section>
+
+      <!-- ===== 角色资料 ===== -->
+      <section id="view-profile" class="view">
+        <div class="nav">
+          <button id="btn-profile-back" class="icon-btn" aria-label="返回">
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M15.4 4.6 14 3.2 5.2 12 14 20.8l1.4-1.4L8 12z"/></svg>
+          </button>
+          <div class="nav-title">资料</div>
+        </div>
+        <div class="scroll" id="profile-body"></div>
+      </section>
+
+      <!-- ===== 她的记忆 ===== -->
+      <section id="view-memory" class="view">
+        <div class="nav">
+          <button id="btn-memory-back" class="icon-btn" aria-label="返回">
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M15.4 4.6 14 3.2 5.2 12 14 20.8l1.4-1.4L8 12z"/></svg>
+          </button>
+          <div class="nav-title" id="memory-title">记忆</div>
+        </div>
+        <div class="scroll">
+          <div class="stats" id="memory-stats"></div>
+          <div class="chip-row chips" id="memory-filters"></div>
+          <div class="note-list" id="memory-list"></div>
+        </div>
+      </section>
+
     </div>
-    <main id="chat" class="chat" aria-live="polite"></main>
-    <div id="load-more-hint" class="load-more-hint hidden">向上滑动加载更旧的聊天</div>
 
-    <footer class="composer">
-      <button id="btn-jump-latest" class="jump-latest hidden" aria-label="回到最新消息">
-        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-          <path fill="currentColor" d="M12 16.5 5.5 10l1.4-1.4L12 13.7l5.1-5.1L18.5 10z"/>
-        </svg>
-        <span id="jump-latest-label">回到最新</span>
+    <!-- ===== 底部 Tab ===== -->
+    <nav class="tabbar" id="tabbar">
+      <button class="tab active" data-view="messages">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3.2c-5 0-9 3.4-9 7.6 0 2.4 1.3 4.5 3.4 5.9l-.9 3.6 3.9-2.1c.8.2 1.7.3 2.6.3 5 0 9-3.4 9-7.7s-4-7.6-9-7.6z"/></svg>
+        <span>消息</span>
       </button>
-      <div class="composer-row">
-        <textarea id="input" rows="1" placeholder="说点什么…" autocomplete="off"
-                  enterkeyhint="send" aria-label="消息输入"></textarea>
-        <button id="btn-send" class="send-btn" aria-label="发送">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10.2 15 12 3.4 13.8z"/>
-          </svg>
-        </button>
-      </div>
-    </footer>
-
-    <div id="scrim" class="scrim hidden"></div>
-    <aside id="drawer" class="drawer" aria-hidden="true">
-      <div class="drawer-head">
-        <h3>她记得的</h3>
-        <button id="btn-drawer-close" class="icon-btn" aria-label="关闭">
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-            <path fill="currentColor" d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/>
-          </svg>
-        </button>
-      </div>
-
-      <div class="drawer-scroll">
-        <div id="rel-card" class="rel-card"></div>
-
-        <button id="btn-close-session" class="session-btn drawer-session">
-          结束这次对话 · 让她记住
-        </button>
-
-        <div class="drawer-section">
-          <div class="drawer-label">设置</div>
-          <label class="switch-row">
-            <span>显示她的思考过程</span>
-            <input type="checkbox" id="toggle-thinking" checked>
-            <i class="switch"></i>
-          </label>
-          <div class="stat-line" id="stat-line"></div>
-        </div>
-
-        <div class="drawer-section">
-          <div class="drawer-label">按日期回溯</div>
-          <div id="date-list" class="date-list"></div>
-        </div>
-
-        <div class="drawer-section">
-          <div class="drawer-label">记忆条目 <span id="note-count" class="muted"></span></div>
-          <div id="note-filters" class="chip-row"></div>
-          <div id="note-list" class="note-list"></div>
-        </div>
-
-      </div>
-    </aside>
-
+      <button class="tab" data-view="contacts">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 3.6h6.2c1 0 1.8.8 1.8 1.8v13c0-.9-.7-1.6-1.6-1.6H4V3.6zm16 0h-6.2c-1 0-1.8.8-1.8 1.8v13c0-.9.7-1.6 1.6-1.6H20V3.6z"/></svg>
+        <span>通讯录</span>
+      </button>
+      <button class="tab" data-view="me">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 12.2c-4.6 0-8 2.4-8 5.4 0 .5.4.9.9.9h14.2c.5 0 .9-.4.9-.9 0-3-3.4-5.4-8-5.4zM12 11c2.3 0 4.2-1.7 4.2-3.8S14.3 3.4 12 3.4 7.8 5.1 7.8 7.2 9.7 11 12 11z"/></svg>
+        <span>我</span>
+      </button>
+    </nav>
   </div>
 
   <!-- ===== 搜索面板 ===== -->
