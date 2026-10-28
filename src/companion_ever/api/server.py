@@ -143,33 +143,58 @@ def create_app(
     return app
 
 
-def local_ip_addresses() -> list[str]:
-    """列出本机可用于局域网访问的 IPv4 地址。
+def local_ip_addresses() -> list[dict]:
+    """列出本机所有可用的 IPv4 地址（含适配器名称）。
 
     手机要访问电脑上的服务，就用这里的地址。
+
+    现在会有多个适配器（WiFi / 有线 / 移动点热点 / 虚拟网卡），
+    它们的 IP 都可能是手机能达到的，所以全部列出来让用户自行选。
+
+    Returns:
+        [{"iface": "适配器名", "ip": "10.51.151.105"}, ...]
     """
-    ips: set[str] = set()
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    # 1) 通过读适配器列表拿所有 IPv4
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        import subprocess
+        raw = subprocess.run(
+            ["ipconfig"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        ).stdout
+        current_iface = ""
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.endswith(":") and ("adapter" in stripped.lower() or "适配器" in stripped):
+                current_iface = stripped.rstrip(":")
+                continue
+            if "IPv4" in stripped and "Address" in stripped:
+                parts = stripped.split(":", 1)
+                if len(parts) == 2:
+                    ip = parts[1].strip()
+                    if ip and not ip.startswith("127.") and ip not in seen:
+                        seen.add(ip)
+                        out.append({"iface": current_iface, "ip": ip})
+    except Exception:
+        pass
+
+    # 2) 补一个"默认出口所在网卡"的地址（ipconfig 解析失败时兑底）
+    if not out:
         try:
-            # 连一个不会真发包的地址，用来问系统"我从哪个网卡出去"
-            s.connect(("10.255.255.255", 1))
-            ips.add(s.getsockname()[0])
-        finally:
-            s.close()
-    except OSError:
-        pass
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.connect(("10.255.255.255", 1))
+                ip = sock.getsockname()[0]
+                if ip and not ip.startswith("127."):
+                    out.append({"iface": "default", "ip": ip})
+            finally:
+                sock.close()
+        except OSError:
+            pass
 
-    try:
-        hostname = socket.gethostname()
-        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-            ip = info[4][0]
-            if not ip.startswith("127."):
-                ips.add(ip)
-    except OSError:
-        pass
-
-    return sorted(ips)
+    return out
 
 
 def run_server(
@@ -204,8 +229,13 @@ def run_server(
     print("  Companion Ever Memory — Web 服务已启动")
     print("=" * 52)
     print(f"  本机访问:   http://127.0.0.1:{web_cfg.port}")
-    for ip in local_ip_addresses():
-        print(f"  手机访问:   http://{ip}:{web_cfg.port}")
+    addrs = local_ip_addresses()
+    if addrs:
+        print("  手机访问（选一个手机能达到的）：")
+        for a in addrs:
+            print(f"      http://{a['ip']}:{web_cfg.port}    <- {a['iface']}")
+    else:
+        print("  手机访问:   （未找到可用的局域网地址）")
     if web_cfg.pin:
         print(f"  访问 PIN:   {web_cfg.pin}")
     else:
