@@ -28,6 +28,8 @@ const S = {
   searchScope: 'all',
   searchTimer: null,
   appH: 0,
+  kbOpen: false,
+  debug: new URLSearchParams(location.search).has('debug'),
 };
 
 const PAGE = 50;
@@ -106,21 +108,90 @@ const base = () => `/api/persona/${encodeURIComponent(S.user)}/${encodeURICompon
  * 键盘弹起 → app 缩短 → 输入栏自动升到键盘上方，聊天区占满余下的空间。
  */
 function syncViewport() {
+  const root = document.documentElement;
   const vv = window.visualViewport;
-  if (!vv) return;
+
+  if (!vv) {
+    root.style.setProperty('--app-h', window.innerHeight + 'px');
+    root.style.setProperty('--vv-top', '0px');
+    updateDebug();
+    return;
+  }
+
+  // 键盘占了多少：innerHeight - 可见高度 - 可见区顶部偏移
+  const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+  const kbOpen = kb > 120;
+
   const prev = S.appH || 0;
-  const h = Math.round(vv.height);
-  document.documentElement.style.setProperty('--app-h', h + 'px');
+  let h, top;
+  if (kbOpen) {
+    // 键盘弹起：app 缩到键盘上方，底边跟随可见视口
+    h = Math.round(vv.height);
+    top = Math.round(vv.offsetTop);
+  } else {
+    // 没有键盘：app 铺满整个 web 视图。
+    // 注意：Alook 等浏览器的 visualViewport.height 可能比布局视口小，
+    // 直接用它会留下空白，所以取两者的大值。
+    h = Math.round(Math.max(vv.height, window.innerHeight));
+    top = 0;
+  }
+
+  root.style.setProperty('--app-h', h + 'px');
+  root.style.setProperty('--vv-top', top + 'px');
   S.appH = h;
-  // 键盘弹起导臶可见区域变小 → 滚到底部（新消息不能被遮住）
+  S.kbOpen = kbOpen;
+
+  // 键盘弹起导致可见区域变小 → 滚到底部（新消息不能被遮住）
   if (prev && h < prev) scrollBottom();
+
+  updateDebug();
+}
+
+/* ---------- debug 面板（访问页面加 ?debug=1） ---------- */
+
+function updateDebug() {
+  if (!S.debug) return;
+  const vv = window.visualViewport;
+  const app = document.querySelector('.app');
+  const rect = app ? app.getBoundingClientRect() : null;
+  const dvhTest = (function () {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:absolute;height:100dvh;visibility:hidden';
+    document.body.appendChild(d);
+    const h = Math.round(d.getBoundingClientRect().height);
+    d.remove();
+    return h;
+  })();
+  const lines = [
+    'innerHeight  ' + window.innerHeight,
+    'innerWidth   ' + window.innerWidth,
+    'vv.height    ' + (vv ? Math.round(vv.height) : '-'),
+    'vv.offsetTop ' + (vv ? Math.round(vv.offsetTop) : '-'),
+    'scrollY      ' + window.scrollY,
+    'app height   ' + (rect ? Math.round(rect.height) : '-'),
+    'app top      ' + (rect ? Math.round(rect.top) : '-'),
+    'app bottom   ' + (rect ? Math.round(rect.bottom) : '-'),
+    'screen       ' + window.screen.width + 'x' + window.screen.height,
+    '100dvh       ' + dvhTest,
+  ];
+  const el = $('debug-panel');
+  if (el) {
+    el.classList.remove('hidden');
+    el.textContent = lines.join('\n');
+  }
 }
 
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', syncViewport);
   window.visualViewport.addEventListener('scroll', syncViewport);
 }
-window.addEventListener('orientationchange', () => setTimeout(syncViewport, 200));
+window.addEventListener('resize', syncViewport);
+window.addEventListener('orientationchange', () => setTimeout(syncViewport, 250));
+window.addEventListener('load', () => setTimeout(syncViewport, 100));
+window.addEventListener('pageshow', () => setTimeout(syncViewport, 100));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') setTimeout(syncViewport, 120);
+});
 
 /* ---------- 启动 ---------- */
 
@@ -596,7 +667,10 @@ function send() {
   $('btn-send').disabled = true;
   scrollBottom();
   // 键盘弹起时视口会变小，待底部重新滚动，避免新消息被掩住
-  setTimeout(() => { if (wasAtBottom) scrollBottom(); }, 320);
+  setTimeout(() => {
+    syncViewport();
+    if (wasAtBottom) scrollBottom();
+  }, 320);
 }
 
 async function closeSession() {

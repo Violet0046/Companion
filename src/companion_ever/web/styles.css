@@ -49,10 +49,16 @@ body {
 
 .app {
   display: flex; flex-direction: column;
-  height: 100dvh;              /* 回退（不支持 visualViewport 时） */
-  height: var(--app-h, 100dvh); /* 实际可见区域的高度（JS 通过 visualViewport 设置） */
+  /* 固定定位 + 跟随 visualViewport 的上边边边：
+     - 固定定位把 app 拿出文档流 → 不会在底部留下空白
+     - top/height 跟随可见视口 → 键盘弹起时输入栏不会被顶出屏幕
+  */
+  position: fixed;
+  top: var(--vv-top, 0px);
+  left: 0; right: 0;
+  height: var(--app-h, 100dvh);
   max-width: 720px; margin: 0 auto;
-  position: relative; overflow: hidden;
+  overflow: hidden;
 }
 
 /* ---------- 顶栏 ---------- */
@@ -62,8 +68,8 @@ body {
   height: calc(var(--topbar-h) + var(--safe-t));
   padding: var(--safe-t) calc(12px + var(--safe-r)) 0 calc(12px + var(--safe-l));
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  background: color-mix(in srgb, var(--bg) 84%, transparent);
-  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  /* 不透明：浏览器自带的工具栏和半透明背景叠在一起，会出现一条“高斯模糊”的带状感，很难看 */
+  background: var(--bg);
   border-bottom: 1px solid var(--line);
   z-index: 20;
 }
@@ -175,8 +181,7 @@ body {
 .composer {
   flex: 0 0 auto;
   padding: 8px calc(12px + var(--safe-r)) calc(8px + var(--safe-b)) calc(12px + var(--safe-l));
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  background: var(--bg);
   border-top: 1px solid var(--line);
 }
 .composer-row { display: flex; align-items: flex-end; gap: 8px; }
@@ -476,3 +481,19 @@ body {
 }
 .date-row:active { background: var(--surface-2); }
 .date-row .n { font-size: 12px; color: var(--text-muted); }
+
+/* ---------- debug 面板（?debug=1） ---------- */
+#debug-panel {
+  position: fixed;
+  white-space: pre;
+  left: 6px;
+  bottom: calc(6px + var(--safe-b));
+  z-index: 999;
+  background: #000c;
+  color: #9fe;
+  font: 10px/1.45 ui-monospace, Menlo, Consolas, monospace;
+  padding: 6px 8px;
+  border-radius: 6px;
+  white-space: pre;
+  pointer-events: none;
+}
