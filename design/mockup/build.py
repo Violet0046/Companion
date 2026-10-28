@@ -20,10 +20,9 @@ SB = """<div class="statusbar"><span>9:41</span>
 TAB_ICONS = {
  "msg":  '<path d="M12 3.2c-5 0-9 3.4-9 7.6 0 2.4 1.3 4.5 3.4 5.9l-.9 3.6 3.9-2.1c.8.2 1.7.3 2.6.3 5 0 9-3.4 9-7.7s-4-7.6-9-7.6z"/>',
  "book": '<path d="M4 3.6h6.2c1 0 1.8.8 1.8 1.8v13c0-.9-.7-1.6-1.6-1.6H4V3.6zm16 0h-6.2c-1 0-1.8.8-1.8 1.8v13c0-.9.7-1.6 1.6-1.6H20V3.6z"/>',
- "brain":'<path d="M9.5 3.2A3.7 3.7 0 0 0 5.8 6.9 3.4 3.4 0 0 0 4 10.2c0 1 .4 1.9 1.1 2.5-.3.4-.4.9-.4 1.4 0 1.6 1.3 2.9 2.9 2.9.8 0 1.5-.3 2-.8V3.9c-.1-.4-.2-.5-.1-.7zm5 0c-.1.2 0 .3-.1.7v13.3c.5.5 1.2.8 2 .8 1.6 0 2.9-1.3 2.9-2.9 0-.5-.1-1-.4-1.4.7-.6 1.1-1.5 1.1-2.5a3.4 3.4 0 0 0-1.8-3.3A3.7 3.7 0 0 0 14.5 3.2z"/>',
  "me":  '<path d="M12 12.2c-4.6 0-8 2.4-8 5.4 0 .5.4.9.9.9h14.2c.5 0 .9-.4.9-.9 0-3-3.4-5.4-8-5.4zM12 11c2.3 0 4.2-1.7 4.2-3.8S14.3 3.4 12 3.4 7.8 5.1 7.8 7.2 9.7 11 12 11z"/>',
 }
-TAB_NAMES = [("msg", "消息"), ("book", "通讯录"), ("brain", "记忆"), ("me", "我")]
+TAB_NAMES = [("msg", "消息"), ("book", "通讯录"), ("me", "我")]
 
 def tabs(active):
     out = ['<nav class="tabbar">']
@@ -82,28 +81,28 @@ note_html = "".join(
     f'<div class="note-text">{txt}</div>'
     f'<div class="note-bar"><i style="width:{w}%"></i></div></div>'
     for t, imp, txt, w in NOTES)
-S3 = (f'<div class="nav"><div class="nav-title">她的记忆</div><div class="spacer"></div>'
-      f'<button class="nav-btn">⌕</button></div><div class="scroll">'
+S3 = ('<div class="nav"><span class="back">‹</span>'
+      '<div class="nav-center nav-title">柳如烟的记忆</div><div class="spacer"></div>'
+      '<button class="nav-btn">⌕</button></div><div class="scroll">'
       f'<div class="stats"><div><div class="stat-num">42</div><div class="stat-label">条记忆</div></div>'
       f'<div><div class="stat-num">30</div><div class="stat-label">天认识</div></div>'
       f'<div><div class="stat-num">12</div><div class="stat-label">段对话</div></div></div>'
       f'<div class="chips"><span class="chip active">全部</span><span class="chip">画像</span>'
       f'<span class="chip">里程碑</span><span class="chip">偏好</span><span class="chip">事件</span></div>'
-      f'{note_html}</div>' + tabs("brain"))
+      f'{note_html}</div>')
 
 # ---------- 4. 我 ----------
 S4 = ('<div class="nav"><div class="nav-title">我</div></div><div class="scroll">'
       '<div class="me-card"><div class="avatar a4">周</div><div>'
       '<div class="me-name">周艺科</div>'
-      '<div class="me-sub">和柳如烟已经在一起 30 天了</div></div></div>'
+      '<div class="me-sub">4 个角色 · 共 128 条记忆 · 37 段对话</div></div></div>'
       '<div class="group" style="margin-top:12px">'
-      '<div class="row"><span>显示她的思考过程</span><span class="switch on"><i></i></span></div>'
+      '<div class="row"><span>显示思考过程</span><span class="switch on"><i></i></span></div>'
+      '<div class="row"><span>自动记录间隔</span><span class="row-val">每 2 小时 <span class="chev">›</span></span></div>'
       '<div class="row"><span>服务器地址</span><span class="row-val">192.168.137.1:8000 <span class="chev">›</span></span></div>'
-      '<div class="row"><span>结束本次对话</span><span class="row-val">让她整理一下 <span class="chev">›</span></span></div>'
       '</div><div class="group">'
       '<div class="row"><span>关于</span><span class="row-val">v0.3.0 <span class="chev">›</span></span></div>'
       '</div></div>' + tabs("me"))
-
 # ---------- 5. 会话 ----------
 def bubble(side, text, time, think=None):
     cls = "me" if side == "me" else "them"
@@ -142,8 +141,12 @@ S6 = ('<div class="nav"><span class="back">‹</span><div class="nav-center nav-
       '<div class="row"><span>她的记忆</span><span class="row-val">42 条 <span class="chev">›</span></span></div>'
       '<div class="row"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>'
       '<div class="row"><span>关系状态</span><span class="row-val">恋人 <span class="chev">›</span></span></div>'
-      '</div><div class="btn danger">结束这次对话</div>'
-      '<div class="hint">结束之后她会整理这段时间聊过的事，存进记忆里。<br/>下次再聊，她还记得。</div>'
+      '</div><div class="group" style="margin-top:12px">'
+      '<div class="row"><span>上次记录</span><span class="row-val">3 天前</span></div>'
+      '<div class="row"><span>手动记一次</span>'
+      '<span class="row-val"><span class="btn-mini">记一次</span></span></div>'
+      '</div>'
+      '<div class="hint">对话每 2 小时自动记录一次，记录后她会记住聊过的事。<br/>想现在记也可以手动触发。</div>'
       '</div>')
 
 SCREENS = [("01-messages", "消息", S1), ("02-contacts", "通讯录", S2),
