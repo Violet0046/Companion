@@ -437,6 +437,71 @@ prompt 体积   7,815 → 7,012 字符
 tokens_in      5,040 → 4,497
 ```
 
+## 4.12 Block 重构：读-改-写 + persona_runtime 移出 prompt（2026-10-28）
+
+### 事故
+
+`user_profile` 每次抽取都被**整体重写**，旧的画像不断丢失：
+
+```
+00:08  preferences: 喜欢"宝宝""姐姐""爸爸"等称呼形成的互称梗   ← 学到了
+12:35  preferences: 喜欢"mua"、亲亲等亲密互动                        ← 互称梗没了
+```
+
+**根因**：抽取 LLM 的 prompt 里**没有现有的 profile**（只有本次会话），
+它只能从零重写；而应用层的 `merged = {**existing, **new}` 只在**字段级**生效，
+**list 内部是整体替换**。所以“merge”是假的。
+
+### 改法 1：读-改-写（主）
+
+抽取时把现有的 Block 内容传给 LLM，让它在旧的基础上改：
+
+```
+## 现有状态（上次抽取的结果）
+### 用户画像
+```json
+{...}
+```
+### 关系进展
+```json
+{...}
+```
+```
+
+`extraction_system.txt` 里同时加上规则：仍然成立的保留 / 新确认的追加 / 过时的移除。
+
+### 改法 2：应用层合并策略（兜底，不信任 LLM 的输出格式）
+
+| 策略 | 规则 |
+|---|---|
+| 里程碑（`key_moments`） | 新旧**取并集**（每次只写本次会话）——“第一次”不会因为时间过去而变假 |
+| 关系进度（`stage_progress`） | **只能递增**，不能倒退 |
+| 所有 list | 去重 + 限长（personality 8 / preferences 8 / hint 6 / key_moments 12） |
+
+### 改法 3：`persona_runtime` 移出对话 prompt
+
+`persona_runtime` 是**会话级**状态（上次在聊什么、违开多久），它只在 /quit 时刷新，
+必然滞后。注入 prompt 会让模型被过时的主题带跑（“不停问正式 offer”）。
+
+**现在**：
+
+- 对话 prompt 只注入 `user_profile` + `relationship_state`，段标题从 `## 当前状态` 改为 `## 你对用户的了解`
+- `persona_runtime` 仍存在数据库（**4e0d丢数据**），留给未来的「主动打招呼」用
+- 抽取时**不再把 persona_runtime 给 LLM 看**（里面的风格字段是自我强化的产物）
+- 抽取输出里的 `persona_runtime` 只保留 `current_topic`（风格字段被应用层过滤）
+
+### 自我强化回环也被切断
+
+```
+assistant 输出（爱撒娇、爱抱抱）
+    ↓ 抽取 LLM 观察整段对话（含 assistant 的话）
+总结成 "speech_style_reminder: 多使用撒娇、抱抴…"   ← 被应用层过滤掉
+    ↓
+下一轮 prompt 注入 → assistant 照做 → 下一次抽取再观察到更多 → 放大
+```
+
+现在三个环节都断了：不注入 prompt / 不给 LLM 看 / 应用层过滤。
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

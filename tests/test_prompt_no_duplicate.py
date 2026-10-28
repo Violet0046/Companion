@@ -78,7 +78,7 @@ def test_history_not_duplicated():
         # ③ system_prompt 仍包含其余 5 段
         assert "## 当前时间信息" in sp
         assert "## 人设基础" in sp
-        assert "## 当前状态" in sp
+        assert "## 你对用户的了解" in sp
         assert "## 行为指引" in sp
         assert "## 对话历史" not in sp, "system_prompt 不应再有 '## 对话历史' 段"
 

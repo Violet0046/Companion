@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -65,7 +66,41 @@ def _make_load_node(conversation_svc: ConversationService):
     return load_node
 
 
-def _make_extract_node(llm_client: LLMClient):
+# persona_runtime 里允许 LLM 更新的字段。
+# 其余的是自我强化的产物，不再让抽取维护。
+_ALLOWED_RUNTIME_FIELDS = {"current_topic"}
+
+
+def _render_existing_blocks(blocks: list) -> str:
+    """把现有的 Block 渲染成供 LLM 参考的文本。
+
+    没有现有内容时返回一个明确的空占位（不要留空白，否则 LLM 会当成
+    "没事发生过"）。
+    """
+    if not blocks:
+        return "\（还没有任何记录，这是首次抽取）"
+
+    # 只告诉 LLM 需要"维护累积"的那两个 block。
+    # persona_runtime 不给它看 —— 里面的 stable_mood_baseline / speech_style_reminder
+    # 是从助手自己的输出里总结出来的（自我强化闭环），
+    # 让 LLM 看到只会原样回归。
+    labels = {
+        "user_profile": "用户画像",
+        "relationship_state": "关系进展",
+    }
+    parts: list[str] = []
+    for b in blocks:
+        label = labels.get(b.block_type.value)
+        if label is None:
+            continue
+        fields = json.dumps(b.fields, ensure_ascii=False, indent=2)
+        parts.append(f"### {label}\n```json\n{fields}\n```")
+    if not parts:
+        return "\（还没有任何记录，这是首次抽取）"
+    return "\n\n".join(parts)
+
+
+def _make_extract_node(llm_client: LLMClient, block_service: BlockService):
     """extract 节点：调 LLM 拿 facts + block_updates。"""
     def extract_node(state: ExtractionState) -> ExtractionState:
         messages = state.get("messages") or []
@@ -76,12 +111,24 @@ def _make_extract_node(llm_client: LLMClient):
             }
 
         from companion_ever.application.llm_json import parse_json_response
+
+        # 【现有状态】——上次抽取的结果，必须跟 LLM 看到。
+        # 否则 LLM 只会写"这次会话观察到的"，把之前学到的画像全部冲掉。
+        existing_blocks = block_service.get_blocks(
+            user_id=state["user_id"], persona_id=state["persona_id"],
+        )
+        existing_text = _render_existing_blocks(existing_blocks)
+
         formatted = [
             {"role": "system", "content": EXTRACTION_SYSTEM},
             {
                 "role": "user",
-                "content": f"## 待处理的对话（{len(messages)} 条）\n\n"
-                          + _format_messages(messages),
+                "content": (
+                    f"## 现有状态（上次抽取的结果）\n\n"
+                    f"{existing_text}\n\n"
+                    f"## 待处理的对话（{len(messages)} 条）\n\n"
+                    + _format_messages(messages)
+                ),
             },
         ]
         # LLM 调用失败（超时 / 网络问题）不应该把异常抛给用户。
@@ -138,11 +185,26 @@ def _make_persist_node(note_svc: NoteService, block_svc: BlockService):
 
         for block_update in llm_result.get("blocks", []):
             try:
+                block_type = BlockType(block_update["block_type"])
+                fields = dict(block_update["fields"] or {})
+
+                # persona_runtime 只保留 current_topic。
+                # stable_mood_baseline / speech_style_reminder 是从助手自己的输出里
+                # 总结出来的——那是自我强化闭环，开发上正应该从人设入设面
+                # 派生，而不是从对话里学。
+                if block_type == BlockType.PERSONA_RUNTIME:
+                    fields = {
+                        k: v for k, v in fields.items()
+                        if k in _ALLOWED_RUNTIME_FIELDS
+                    }
+                    if not fields:
+                        continue
+
                 block_svc.update_block_fields(
                     user_id=user_id,
                     persona_id=persona_id,
-                    block_type=BlockType(block_update["block_type"]),
-                    fields=block_update["fields"],
+                    block_type=block_type,
+                    fields=fields,
                 )
                 blocks_updated += 1
             except Exception as e:
@@ -190,7 +252,7 @@ def build_extraction_graph(
     workflow = StateGraph(ExtractionState)
 
     workflow.add_node("load", _make_load_node(conversation_service))
-    workflow.add_node("extract", _make_extract_node(llm_client))
+    workflow.add_node("extract", _make_extract_node(llm_client, block_service))
     workflow.add_node("persist", _make_persist_node(note_service, block_service))
 
     workflow.add_edge(START, "load")

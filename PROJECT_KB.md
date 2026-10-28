@@ -169,7 +169,7 @@ note_fts(note_id, content, user_id, persona_id, is_archived) tokenize='trigram'
 |---|---|---|
 | `note` | `type` | 14 种：9 用户侧（profile_fact / event / preference / promise / milestone / inside_joke / callback / sensitive / observation）+ 5 人设侧 |
 | `note` | `importance` | [0, 1]，检索 / 排序权重 |
-| `memory_block` | `block_type` | 3 种：persona_runtime / user_profile / relationship_state |
+| `memory_block` | `block_type` | 3 种：persona_runtime / user_profile / relationship_state（**只有后两个注入 prompt**）|
 | `memory_block` | `fields_json` | JSON dict（merge 语义，不是替换）|
 | `conversation_log` | `role='session_close'` | sentinel，标识 session 边界 |
 

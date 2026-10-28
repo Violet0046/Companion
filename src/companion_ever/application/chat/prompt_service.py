@@ -438,18 +438,26 @@ class PromptService:
             persona_basics, ensure_ascii=False, indent=2
         ) + "\n```"
 
-    def _render_blocks(self, blocks: list) -> str:
-        """3 个 Block 的内容（每个一段）。"""
-        if not blocks:
-            return "## 当前状态\n（暂无）"
+    # 不注入对话 prompt 的 Block。
+    # persona_runtime 是会话级的状态（上次在聊什么、违开多久），
+    # 它只在 /quit 时刷新，必然滞后。注入会让模型被过时的主题带跑。
+    # 它的用途是「主动打招呼」（推送时去知道上次聊了什么）。
+    _PROMPT_BLOCK_TYPES = ("user_profile", "relationship_state")
 
-        sections = ["## 当前状态"]
+    def _render_blocks(self, blocks: list) -> str:
+        """注入 prompt 的 Block（只有长期累积型的那两个）。"""
+        usable = [
+            b for b in blocks if b.block_type.value in self._PROMPT_BLOCK_TYPES
+        ]
+        if not usable:
+            return "## 你对用户的了解\n（暂无）"
+
+        sections = ["## 你对用户的了解"]
         block_labels = {
-            "persona_runtime": "助手运行时状态",
             "user_profile": "用户画像",
             "relationship_state": "关系进展",
         }
-        for b in blocks:
+        for b in usable:
             label = block_labels.get(b.block_type.value, b.block_type.value)
             sections.append(
                 f"### {label}\n```json\n"
