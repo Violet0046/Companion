@@ -146,7 +146,13 @@ function syncViewport() {
   S.kbOpen = kbOpen;
 
   // 键盘弹起导致可见区域变小 → 滚到底部（新消息不能被遮住）
-  if (prev && h < prev) scrollBottom();
+  // 高度变了（键盘弹出/收起、app 高度重算）：若原本贴着底部就重新贴底；
+  // 键盘弹起导致高度变小时强制贴底，避免最后一条被键盘挡住
+  if (prev && prev !== h) {
+    const box = $('chat');
+    const atBottom = !box || (box.scrollHeight - box.scrollTop - box.clientHeight < 80);
+    if (atBottom || h < prev) anchorBottom();
+  }
 
   updateDebug();
 }
@@ -273,7 +279,7 @@ async function loadHistory(reset) {
     S.viewLabel = '';
     updateHistoryBar();
     renderChat();
-    scrollBottom(true);
+    anchorBottom();
   } catch (e) { /* ignore */ }
 }
 
@@ -373,7 +379,32 @@ function renderMsg(role, content, thinking, createdAt, id) {
 
 function scrollBottom(instant) {
   const box = $('chat');
-  box.scrollTo({ top: box.scrollHeight, behavior: instant ? 'auto' : 'smooth' });
+  if (!box) return;
+  if (instant) {
+    // 直接赋值 scrollTop：一步到底，不受 CSS scroll-behavior 影响
+    box.scrollTop = box.scrollHeight;
+  } else {
+    box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+  }
+}
+
+/**
+ * 锚定到底部（渲染完 / 高度变化后用）
+ *
+ * 为什么不能只调一次 scrollBottom：
+ * - 渲染后布局可能还没稳定（字体、异步图片、app 高度重算），
+ *   内容再撑高一点，滚动位置就又不贴底了；
+ * - 所以在两帧之后再补两次，保证最终落点一定是底部。
+ */
+function anchorBottom() {
+  scrollBottom(true);
+  requestAnimationFrame(() => {
+    scrollBottom(true);
+    requestAnimationFrame(() => {
+      scrollBottom(true);
+      wasAtBottom = true;
+    });
+  });
 }
 
 function renderRelation() {
@@ -471,7 +502,7 @@ async function jumpToDate(date) {
     S.hasMore = false;
     updateHistoryBar();
     renderChat();
-    scrollBottom(true);
+    anchorBottom();
     closeDrawer();
     toast(S.viewLabel);
   } catch (e) { toast('加载失败'); }
@@ -490,7 +521,7 @@ async function jumpToMessage(id) {
     // 滚到目标消息
     setTimeout(() => {
       const el = $('chat').querySelector(`.msg[data-id="${id}"]`);
-      if (el) el.scrollIntoView({ block: 'center' });
+      if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }, 60);
     toast('已跳转到那条消息');
   } catch (e) { toast('跳转失败'); }

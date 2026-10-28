@@ -103,7 +103,11 @@ body {
   flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch;
   padding: 16px calc(14px + var(--safe-r)) 8px calc(14px + var(--safe-l));
   display: flex; flex-direction: column; gap: 12px;
-  scroll-behavior: smooth;
+  /* 注意：这里不要加 scroll-behavior: smooth
+     CSS 里一旦声明 smooth，JS 的 scrollTo({behavior:'auto'}) 也会走平滑动画
+     （规范里 auto = 由元素的 scroll-behavior 决定，不是"立即"）。
+     页面刚打开时"跳到底部"会变成一段很长的动画，还会被 iOS 中途打断，
+     结果停在中间而不是底部。需要动画的地方在 JS 里显式写 behavior:'smooth'。 */
 }
 
 .msg {
