@@ -14,6 +14,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, WebSocket,
 from starlette.concurrency import run_in_threadpool
 
 from companion_ever.app import AppContext
+from companion_ever.application.chat.assistant_reply import split_assistant_reply
 from companion_ever.application.llm_json import strip_thinking
 from companion_ever.api.deps import check_pin, resolve_target
 from companion_ever.api.schemas import ChatIn, CloseSessionIn, CloseSessionOut
@@ -101,6 +102,7 @@ async def ws_chat(
         {"type": "ready", "user_id": ..., "persona_id": ...}
         {"type": "start", "content": "在干嘛"}
         {"type": "delta", "content": "在等你呀"}
+        {"type": "thinking", "content": "本轮的思考过程"}
         {"type": "done"}
         {"type": "error", "message": "..."}
         {"type": "session_closed", "facts_created": 3, ...}
@@ -158,6 +160,20 @@ async def ws_chat(
         return
 
 
+def _extract_thinking(ctx: AppContext, raw: str) -> str | None:
+    """从原始回复里取出思考过程。
+
+    复用入库时用的同一个拆分函数，保证「前端看到的」和「数据库存的」是同一份。
+    """
+    try:
+        client = getattr(ctx.services.chat, "llm_client", None)
+        reasoning = getattr(client, "last_reasoning", None)
+        _body, think = split_assistant_reply(raw, reasoning)
+        return think
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _stream_reply(
     websocket: WebSocket,
     ctx: AppContext,
@@ -175,13 +191,19 @@ async def _stream_reply(
     def producer() -> None:
         try:
             filt = ThinkFilter()
+            raw_parts: list[str] = []
             for chunk in ctx.services.chat.stream_chat(user_id, persona_id, content):
+                raw_parts.append(chunk)
                 delta = filt.feed(chunk)
                 if delta:
                     loop.call_soon_threadsafe(queue.put_nowait, ("delta", delta))
             tail = filt.flush()
             if tail:
                 loop.call_soon_threadsafe(queue.put_nowait, ("delta", tail))
+            # 思考过程单独推一条事件：前端自己决定要不要显示（不显示 != 不保存）
+            think = _extract_thinking(ctx, "".join(raw_parts))
+            if think:
+                loop.call_soon_threadsafe(queue.put_nowait, ("thinking", think))
             loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
         except Exception as exc:  # noqa: BLE001
             loop.call_soon_threadsafe(queue.put_nowait, ("error", str(exc)))
@@ -194,6 +216,8 @@ async def _stream_reply(
         kind, payload = await queue.get()
         if kind == "delta":
             await websocket.send_json({"type": "delta", "content": payload})
+        elif kind == "thinking":
+            await websocket.send_json({"type": "thinking", "content": payload})
         elif kind == "done":
             await websocket.send_json({"type": "done"})
             return

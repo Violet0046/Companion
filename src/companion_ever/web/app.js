@@ -29,6 +29,10 @@ const S = {
   searchTimer: null,
   appH: 0,
   kbOpen: false,
+  /* 新消息角标：用户往上翻时，新到的消息数 */
+  newCount: 0,
+  /* 本轮流式输出里收到的思考过程 */
+  streamThinking: '',
   debug: new URLSearchParams(location.search).has('debug'),
 };
 
@@ -222,7 +226,9 @@ async function boot() {
   $('gate').classList.add('hidden');
   $('app').classList.remove('hidden');
   await resolveTarget();
-  await Promise.all([loadPersona(), loadSettings(), loadHistory(true)]);
+  // 先读设置（show_thinking）再拉历史 —— 并行的话不知道该不该带 think
+  await loadSettings();
+  await Promise.all([loadPersona(), loadHistory(true)]);
   connect();
   loadNotes();
   loadDates();
@@ -270,16 +276,31 @@ async function loadSettings() {
   } catch (e) { /* ignore */ }
 }
 
-async function loadHistory(reset) {
+async function loadHistory(reset, opts) {
+  opts = opts || {};
+  const box = $('chat');
+  const prevH = box.scrollHeight;
+  const prevTop = box.scrollTop;
   try {
-    const msgs = await api(`${base()}/history?limit=${PAGE}`);
+    // 显式告诉服务端要不要带 think，别依赖服务端自己的设置（两边可能不一致）
+    const wantThinking = opts.withThinking !== undefined ? opts.withThinking : S.showThinking;
+    const q = new URLSearchParams({ limit: String(PAGE) });
+    q.set('include_thinking', wantThinking ? '1' : '0');
+    const msgs = await api(`${base()}/history?${q}`);
     S.messages = msgs;
     S.hasMore = msgs.length >= PAGE;
     S.viewMode = 'live';
     S.viewLabel = '';
+    S.newCount = 0;
     updateHistoryBar();
     renderChat();
-    anchorBottom();
+    if (opts.keepScroll) {
+      // 保持用户正在看的位置（重绘前后内容高度变了，按差值补偿）
+      box.scrollTop = prevTop + (box.scrollHeight - prevH);
+    } else {
+      anchorBottom();
+    }
+    updateJumpButton();
   } catch (e) { /* ignore */ }
 }
 
@@ -357,16 +378,8 @@ function renderMsg(role, content, thinking, createdAt, id) {
   text.textContent = content;
   el.appendChild(text);
 
-  if (thinking) {
-    const det = document.createElement('details');
-    det.className = 'think';
-    const sum = document.createElement('summary');
-    sum.textContent = '她当时在想什么';
-    const body = document.createElement('div');
-    body.className = 'think-body';
-    body.textContent = thinking;
-    det.appendChild(sum); det.appendChild(body);
-    el.appendChild(det);
+  if (thinking && S.showThinking) {
+    el.appendChild(buildThinkBlock(thinking));
   }
   if (createdAt) {
     const st = document.createElement('span');
@@ -375,6 +388,48 @@ function renderMsg(role, content, thinking, createdAt, id) {
     el.appendChild(st);
   }
   return el;
+}
+
+/* ---------- 思考过程 ---------- */
+
+/** 生成"她当时在想什么"折叠块 */
+function buildThinkBlock(thinking) {
+  const det = document.createElement('details');
+  det.className = 'think';
+  const sum = document.createElement('summary');
+  sum.textContent = '她当时在想什么';
+  const body = document.createElement('div');
+  body.className = 'think-body';
+  body.textContent = thinking;
+  det.appendChild(sum); det.appendChild(body);
+  return det;
+}
+
+/* ---------- 回到最新（微信式） ---------- */
+
+/**
+ * 用户往上翻历史时，右下角出现一个悬浮按钮：
+ * - 没有新消息：显示"回到最新"
+ * - 有新消息：显示"N 条新消息"
+ * 点一下直接跳到底部。
+ */
+function updateJumpButton() {
+  const btn = $('btn-jump-latest');
+  if (!btn) return;
+  const show = S.viewMode === 'live' && !wasAtBottom;
+  btn.classList.toggle('hidden', !show);
+  const label = $('jump-latest-label');
+  if (label) label.textContent = S.newCount > 0 ? `${S.newCount} 条新消息` : '回到最新';
+}
+
+/** 重新渲染当前这屏，但保持用户正在看的位置 */
+function rerenderKeepScroll() {
+  const box = $('chat');
+  const prevH = box.scrollHeight;
+  const prevTop = box.scrollTop;
+  renderChat();
+  box.scrollTop = prevTop + (box.scrollHeight - prevH);
+  updateJumpButton();
 }
 
 function scrollBottom(instant) {
@@ -503,6 +558,7 @@ async function jumpToDate(date) {
     updateHistoryBar();
     renderChat();
     anchorBottom();
+    updateJumpButton();
     closeDrawer();
     toast(S.viewLabel);
   } catch (e) { toast('加载失败'); }
@@ -517,6 +573,7 @@ async function jumpToMessage(id) {
     S.hasMore = false;
     updateHistoryBar();
     renderChat();
+    updateJumpButton();
     closeSearch();
     // 滚到目标消息
     setTimeout(() => {
@@ -636,7 +693,9 @@ function handleWs(m) {
       el.firstChild.appendChild(cursor);
       box.appendChild(el);
       S.streamEl = el;
-      scrollBottom();
+      S.streamThinking = '';
+      // 只有用户本来就在底部才自动跟到底，否则会把正在翻历史的人硬拽下去
+      if (wasAtBottom) scrollBottom();
       break;
     }
     case 'delta': {
@@ -645,7 +704,12 @@ function handleWs(m) {
       const cur = text.querySelector('.cursor');
       if (cur) cur.remove();
       text.textContent += m.content || '';
-      scrollBottom();
+      if (wasAtBottom) scrollBottom();
+      break;
+    }
+    case 'thinking': {
+      // 服务端单独推来的思考过程，先存着，done 时挂到消息上
+      S.streamThinking = m.content || '';
       break;
     }
     case 'done': {
@@ -656,16 +720,27 @@ function handleWs(m) {
         st.className = 'stamp';
         st.textContent = fmtTime(new Date().toISOString());
         S.streamEl.appendChild(st);
+        const think = S.streamThinking || null;
+        // 思考过程：有就存进内存（开关打开时立刻能显示）
+        if (think && S.showThinking) {
+          S.streamEl.insertBefore(buildThinkBlock(think), st);
+        }
         // 同步进 S.messages（保持内存态一致）
         S.messages.push({
           id: Date.now(), role: 'assistant',
           content: S.streamEl.firstChild.textContent,
+          thinking: think,
           created_at: new Date().toISOString(),
         });
+        // 用户往上翻着的时候来了新消息 → 记角标，别把人拽回底部
+        if (wasAtBottom) scrollBottom();
+        else S.newCount += 1;
       }
       S.streamEl = null;
+      S.streamThinking = '';
       S.sending = false;
       $('btn-send').disabled = false;
+      updateJumpButton();
       break;
     }
     case 'error': {
@@ -752,6 +827,12 @@ $('scrim').onclick = closeDrawer;
 $('btn-search').onclick = openSearch;
 $('btn-search-close').onclick = closeSearch;
 $('btn-back-live').onclick = backToLive;
+$('btn-jump-latest').onclick = () => {
+  S.newCount = 0;
+  wasAtBottom = true;
+  anchorBottom();
+  updateJumpButton();
+};
 
 $('input').addEventListener('input', (e) => {
   const el = e.target;
@@ -796,8 +877,13 @@ $('toggle-thinking').addEventListener('change', async (e) => {
       method: 'PUT',
       body: JSON.stringify({ show_thinking: S.showThinking }),
     });
+    if (S.viewMode === 'live') {
+      // 重拉这一页（带/不带 think），并保持用户正在看的位置
+      await loadHistory(true, { withThinking: S.showThinking, keepScroll: true });
+    } else {
+      rerenderKeepScroll();
+    }
     toast(S.showThinking ? '会显示她的思考过程' : '不显示思考过程');
-    loadHistory(true);
   } catch (err) { toast('设置失败'); }
 });
 
@@ -822,6 +908,9 @@ $('chat').addEventListener('scroll', () => {
   if (box.scrollTop < 80) loadOlder();
   // 记住是否贴在底部（发送时不要把用户拉走）
   wasAtBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  // 自己滑回底部了 → 角标清零
+  if (wasAtBottom) S.newCount = 0;
+  updateJumpButton();
 });
 
 /* 点聊天区 → 收起键盘
@@ -839,7 +928,8 @@ $('chat').addEventListener('click', (e) => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     if (!S.connected) connect();
-    else if (S.viewMode === 'live') loadHistory(true);
+    // 回到前台：在底部就保持贴底，在翻历史就保持原来的位置
+    else if (S.viewMode === 'live') loadHistory(true, { keepScroll: !wasAtBottom });
   }
 });
 

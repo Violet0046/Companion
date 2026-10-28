@@ -643,6 +643,67 @@ GET /api/persona/{u}/{p}/search?q=&scope=all|messages|memories
 所以直接用 `LIKE` + 关键词 OR（如它在 `note_fts` 里那样）。
 数据量大了（十万条以上）再换 FTS5 —— 当时再做，现在扫全表对个人应用可接受。
 
+## 4.16 Web 端体验三件套（2026-10-28）
+
+这一轮把手机端用起来的几个"别扭"的地方收拾了。
+
+### 1. 打开页面自动停在最新消息
+
+**症状**：进页面停在聊天记录顶部，不是最后一条。
+
+**根因**：`styles.css` 里 `.chat { scroll-behavior: smooth; }`。
+按 CSSOM-View 规范，`scrollTo({behavior: 'auto'})` 里的 `auto`
+**不是"立即滚动"**，而是"由元素自己的 `scroll-behavior` 决定" ——
+所以 `scrollBottom(true)` 的 `instant` 参数形同虚设，
+打开页面时从顶部平滑滚几千像素，被 `syncViewport()` 改高度打断后停在中间。
+
+**修法**：
+
+- 删掉 CSS 里的 `scroll-behavior: smooth`，要动画的地方在 JS 里显式写 `behavior:'smooth'`
+- `scrollBottom(instant)` 的立即分支改成 `box.scrollTop = box.scrollHeight`
+- 新增 `anchorBottom()`：渲染后在两帧后再补两次滚（布局稳定后内容可能又撑高）
+- `syncViewport()` 高度变化时重新贴底（键盘弹起/收起、app 高度重算）
+
+回归测试：`tests/test_scroll_anchor.py`
+
+### 2. 思考过程：开关打开就能看到，不用刷新
+
+**症状**：点开"显示她的思考过程"后，当前这屏消息不出现折叠块，
+必须关掉再打开（或刷新）才看得到。
+
+**根因**：WebSocket 只推正文，**思考过程从来没发到前端**。
+前端那条最新消息是本地拼的（`id: Date.now()`），压根没有 thinking 字段。
+之前"切开关能看到"是因为切开关会触发 `loadHistory(true)` 重新拉历史 ——
+拉到的是库里已经落库的 thinking。
+
+**修法**：
+
+- 服务端：`_stream_reply` 在流结束后用**入库时同一个** `split_assistant_reply()`
+  算出思考过程，单独推一条 `{"type":"thinking"}` 事件
+- 前端：收到 thinking 存进 `S.streamThinking`，`done` 时挂到那条消息上，
+  并写进 `S.messages`（开关打开时立刻能显示）
+- 前端：拉历史时**显式**传 `include_thinking=1/0`，不再依赖服务端自己的设置
+- 前端：`boot()` 里先 `loadSettings()` 再 `loadHistory()`（原来并行，有竞态）
+- 前端：切开关时重拉当前这页并**保持滚动位置**，不再把你甩到底部
+
+验证：真实 MiniMax 下事件序列 = `start → delta×3 → thinking → done`，
+thinking 807 字符，正文 109 字符且不含 think 标签。
+
+### 3. 微信式「回到最新」悬浮按钮
+
+- 用户往上翻历史时，右下角出现悬浮按钮
+- 期间来了新消息 → 显示"N 条新消息"；自己滑回底部 → 角标清零
+- **流式输出时不再把正在翻历史的人拽回底部**：
+  以前每个 delta 都无条件 `scrollBottom()`，现在只在"用户本来就在底部"时才跟
+- 切到历史视图（按日期/搜索跳转）时按钮自动隐藏
+
+### 4. 开关位置挪到抽屉靠上
+
+原来「显示她的思考过程」在「沉淀的 wiki」下面，几乎找不到。
+现在放在「结束这次对话 · 让她记住」下面 —— 打开抽屉第一屏就能看到。
+
+回归测试：`tests/test_web_chat_ux.py`（含 WebSocket 端到端）
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

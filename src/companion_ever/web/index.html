@@ -58,6 +58,12 @@
     <div id="load-more-hint" class="load-more-hint hidden">向上滑动加载更旧的聊天</div>
 
     <footer class="composer">
+      <button id="btn-jump-latest" class="jump-latest hidden" aria-label="回到最新消息">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+          <path fill="currentColor" d="M12 16.5 5.5 10l1.4-1.4L12 13.7l5.1-5.1L18.5 10z"/>
+        </svg>
+        <span id="jump-latest-label">回到最新</span>
+      </button>
       <div class="composer-row">
         <textarea id="input" rows="1" placeholder="说点什么…" autocomplete="off"
                   enterkeyhint="send" aria-label="消息输入"></textarea>
@@ -88,6 +94,16 @@
         </button>
 
         <div class="drawer-section">
+          <div class="drawer-label">设置</div>
+          <label class="switch-row">
+            <span>显示她的思考过程</span>
+            <input type="checkbox" id="toggle-thinking" checked>
+            <i class="switch"></i>
+          </label>
+          <div class="stat-line" id="stat-line"></div>
+        </div>
+
+        <div class="drawer-section">
           <div class="drawer-label">按日期回溯</div>
           <div id="date-list" class="date-list"></div>
         </div>
@@ -98,15 +114,6 @@
           <div id="note-list" class="note-list"></div>
         </div>
 
-        <div class="drawer-section">
-          <div class="drawer-label">设置</div>
-          <label class="switch-row">
-            <span>显示她的思考过程</span>
-            <input type="checkbox" id="toggle-thinking" checked>
-            <i class="switch"></i>
-          </label>
-          <div class="stat-line" id="stat-line"></div>
-        </div>
       </div>
     </aside>
 

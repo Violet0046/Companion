@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
-def _make_ctx(db_path: str, llm_response: str = "回复内容"):
+def _make_ctx(db_path: str, llm_response: str = "回复内容", *, check_same_thread: bool = True):
     """构造一个 mock 过的 ctx。"""
     from companion_ever.config import AppConfig, RetrievalConfig
     from companion_ever.application.authz import Authorizer
@@ -51,7 +51,7 @@ def _make_ctx(db_path: str, llm_response: str = "回复内容"):
         retrieval={"always_include_types": ["profile_fact"], "top_k": 10},
     )
 
-    conn = init_db(db_path)
+    conn = init_db(db_path, check_same_thread=check_same_thread)
     setting_repo = SettingRepo(conn)
     user_repo = UserRepo(conn)
     note_repo = NoteRepo(conn)

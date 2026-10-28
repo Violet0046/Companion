@@ -60,7 +60,7 @@ def main() -> int:
     )
     assert "requestAnimationFrame" in anchor, "anchorBottom 缺少 requestAnimationFrame 兜底"
 
-    load_hist = re.search(r"async function loadHistory\(reset\)\s*\{(.*?)\n\}", js, re.S)
+    load_hist = re.search(r"async function loadHistory\([^)]*\)\s*\{(.*?)\n\}", js, re.S)
     assert load_hist, "找不到 loadHistory"
     assert "anchorBottom()" in load_hist.group(1), (
         "loadHistory 渲染完必须调 anchorBottom()，否则打开页面停在顶部"

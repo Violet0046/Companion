@@ -183,6 +183,7 @@ body {
 /* ---------- 输入区 ---------- */
 
 .composer {
+  position: relative;   /* 悬浮按钮（回到最新）的定位参照 */
   flex: 0 0 auto;
   padding: 8px calc(12px + var(--safe-r)) calc(8px + var(--safe-b)) calc(12px + var(--safe-l));
   background: var(--bg);
@@ -501,3 +502,27 @@ body {
   white-space: pre;
   pointer-events: none;
 }
+
+/* ============================================================
+   回到最新（微信式悬浮按钮）
+   用户往上翻历史时出现；有新消息时显示"N 条新消息"
+   ============================================================ */
+.jump-latest {
+  position: absolute;
+  right: 14px;
+  bottom: calc(100% + 10px);
+  z-index: 8;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 18px rgba(0,0,0,.32);
+  font-family: inherit; font-size: 12.5px; line-height: 1.4;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  animation: jump-in .18s ease-out;
+}
+.jump-latest:active { transform: scale(.96); }
+@keyframes jump-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
