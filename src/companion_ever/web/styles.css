@@ -772,3 +772,32 @@ body {
   font-size: 10px; font-weight: 600; line-height: 16px;
   text-align: center; box-sizing: border-box;
 }
+
+/* ============================================================
+   顶栏居中 + "对方正在输入"（微信那套）
+   ============================================================ */
+.topbar-nav { position: relative; justify-content: flex-start; }
+.nav-center {
+  position: absolute; left: 0; right: 0;
+  display: flex; flex-direction: column; align-items: center;
+  pointer-events: none;
+}
+.topbar-sub:empty { display: none; }
+.nav-btn-ico svg { display: block; }
+
+/* 正在输入的三个点 */
+.dots {
+  display: inline-flex; gap: 3px; margin-left: 3px;
+  vertical-align: middle;
+}
+.dots i {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--accent); display: inline-block;
+  animation: dot-bounce 1.2s infinite ease-in-out;
+}
+.dots i:nth-child(2) { animation-delay: .16s; }
+.dots i:nth-child(3) { animation-delay: .32s; }
+@keyframes dot-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: .35; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}

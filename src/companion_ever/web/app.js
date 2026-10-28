@@ -57,6 +57,12 @@ const S = {
   streamThinking: '',
   /* 距离上一条时间分隔条已经过了几条消息 */
   sinceLastSep: 0,
+  /* 顶栏显示的名字（等回复时会临时变成"对方正在输入…"） */
+  personaTitle: '',
+  /* 正在等她回复 */
+  typing: false,
+  /* 发送看门狗的定时器 */
+  sendTimer: null,
   debug: new URLSearchParams(location.search).has('debug'),
 };
 
@@ -220,6 +226,61 @@ async function refreshConv(user, persona) {
   if (idx < 0) return;
   S.convs[idx] = await fetchConv(S.convs[idx]);
   renderConvs();
+}
+
+/* ---------- "对方正在输入" + 发送看门狗 ---------- */
+
+/**
+ * 顶栏中间的提示。
+ *
+ * 以前是往聊天区里插一个空气泡 + 闪烁光标（微信不是这么干的，
+ * 那个框一直跳很吵），现在改成微信那种：顶栏名字变成"对方正在输入…"。
+ */
+function setTyping(on) {
+  S.typing = !!on;
+  const el = $('persona-name');
+  if (!el) return;
+  if (on) {
+    el.innerHTML = '对方正在输入<span class="dots"><i></i><i></i><i></i></span>';
+  } else {
+    el.textContent = S.personaTitle || S.persona || '';
+  }
+}
+
+/**
+ * 发送看门狗。
+ *
+ * 以前发完消息要把发送按钮置灰（等回复），但如果这期间
+ * **WebSocket 断了**，就永远等不到 'done' → 按钮永久变灰，
+ * 能打字但发不出去，只能关掉页面重进。
+ * 现在：连接断开 / 服务端不回 / 超时，三条路都会把按钮恢复。
+ */
+const SEND_WATCHDOG_MS = 120000;
+
+function startSendWatchdog() {
+  stopSendWatchdog();
+  S.sendTimer = setTimeout(() => {
+    S.sendTimer = null;
+    if (S.sending) {
+      S.sending = false;
+      $('btn-send').disabled = false;
+      setTyping(false);
+      toast('这次没等到回复，可以再发一次', 3200);
+    }
+  }, SEND_WATCHDOG_MS);
+}
+
+function stopSendWatchdog() {
+  if (S.sendTimer) { clearTimeout(S.sendTimer); S.sendTimer = null; }
+}
+
+/** 恢复"可以发送"的状态（连接断了 / 出错了 / 超时了都走这里） */
+function resetSending() {
+  S.sending = false;
+  const btn = $('btn-send');
+  if (btn) btn.disabled = false;
+  stopSendWatchdog();
+  setTyping(false);
 }
 
 /* ---------- 消息（Tab 1） ---------- */
@@ -392,6 +453,7 @@ async function switchTarget(user, persona) {
   S.user = user; S.persona = persona;
   localStorage.setItem('ce_user', user);
   localStorage.setItem('ce_persona', persona);
+  S.personaTitle = persona;
   $('persona-name').textContent = persona;
   $('btn-avatar').textContent = persona.slice(0, 1);
   if (changed) {
@@ -876,7 +938,10 @@ async function loadPersona() {
   try {
     S.info = await api(base());
     const basics = S.info.persona_basics || {};
-    if (basics.name) $('persona-name').textContent = basics.name;
+    if (basics.name) {
+      S.personaTitle = basics.name;
+      $('persona-name').textContent = basics.name;
+    }
     $('btn-avatar').textContent = (basics.name || S.persona || '·').slice(0, 1);
   } catch (e) { /* ignore */ }
 }
@@ -1355,10 +1420,20 @@ function connect() {
   const ws = new WebSocket(wsUrl());
   S.ws = ws;
 
-  ws.onopen = () => { S.connected = true; setStatus('在线', 'online'); };
+  ws.onopen = () => {
+    S.connected = true;
+    setStatus('', 'online');        // 不再显示"在线"（AI 一直都在）
+    // 连接恢复了：可能有一轮卡在"等待回复"，这里清掉
+    resetSending();
+    loadConvs();
+  };
   ws.onclose = () => {
     S.connected = false;
     setStatus('已断开 · 重连中…', 'offline');
+    // 连接断了 → 这一轮永远等不到回复了，
+    // 不清掉的话发送按钮会一直灰着（能打字但发不出去）
+    resetSending();
+    if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
     clearTimeout(S.reconnectTimer);
     S.reconnectTimer = setTimeout(connect, 2500);
   };
@@ -1366,34 +1441,49 @@ function connect() {
   ws.onmessage = (ev) => {
     let m;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
-    handleWs(m);
+    try {
+      handleWs(m);
+    } catch (e) {
+      // 安全网：一条消息处理出错，绝不能让界面卡在坏状态
+      // （以前就是这里抛了异常，发送按钮永久变灰、能打字但发不出去）
+      console.error('处理服务端消息出错', e);
+      resetSending();
+      toast('出了点问题，已经恢复', 3000);
+    }
   };
 }
 
 function handleWs(m) {
   switch (m.type) {
     case 'ready':
-      setStatus('在线', 'online');
+      setStatus('', 'online')  // 不显示"在线"（对 AI 来说它一直都在）;
       // 连上了说明服务器活着了 → 刷新聊天列表（服务器重启后自动恢复）
       loadConvs();
       break;
     case 'start': {
+      // 不再往聊天区插空气泡了（那个框一直跳很吵），
+      // 改成顶栏中间的"对方正在输入…"
       const box = $('chat');
       const empty = box.querySelector('.empty');
       if (empty) empty.remove();
-      const el = renderMsg('assistant', '', null, null);
-      const cursor = document.createElement('span');
-      cursor.className = 'cursor';
-      el.firstChild.appendChild(cursor);
-      appendChatMsg(el, new Date().toISOString());
-      S.streamEl = el;
+      S.streamEl = null;
       S.streamThinking = '';
-      // 只有用户本来就在底部才自动跟到底，否则会把正在翻历史的人硬拽下去
-      if (wasAtBottom) scrollBottom();
+      setTyping(true);
+      startSendWatchdog();
       break;
     }
     case 'delta': {
-      if (!S.streamEl) break;
+      if (!S.streamEl) {
+        // 第一段文字到了才真正建气泡（等待期间只有顶栏的提示）
+        const el = renderMsg('assistant', '', null, null);
+        const cur = document.createElement('span');
+        cur.className = 'cursor';
+        el.firstChild.appendChild(cur);
+        appendChatMsg(el, new Date().toISOString());
+        S.streamEl = el;
+        // 只有用户本来就在底部才自动跟到底，否则会把正在翻历史的人硬拽下去
+        if (wasAtBottom) scrollBottom();
+      }
       const text = S.streamEl.firstChild;
       const cur = text.querySelector('.cursor');
       if (cur) cur.remove();
@@ -1413,7 +1503,7 @@ function handleWs(m) {
         const think = S.streamThinking || null;
         // 思考过程：有就存进内存（开关打开时立刻能显示）
         if (think && S.showThinking) {
-          S.streamEl.insertBefore(buildThinkBlock(think), st);
+          S.streamEl.appendChild(buildThinkBlock(think));
         }
         // 流式期间是纯文本，收尾时升级成 markdown 渲染
         // 注意：入库/进内存的必须是**原始文本**（含 ** 标记），不能是渲染后的
@@ -1434,6 +1524,8 @@ function handleWs(m) {
       S.streamThinking = '';
       S.sending = false;
       $('btn-send').disabled = false;
+      stopSendWatchdog();
+      setTyping(false);
       updateJumpButton();
       refreshConv(S.user, S.persona);
       break;
@@ -1442,6 +1534,8 @@ function handleWs(m) {
       if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
       S.sending = false;
       $('btn-send').disabled = false;
+      stopSendWatchdog();
+      setTyping(false);
       toast('出错了：' + (m.message || '未知错误'), 4000);
       break;
     }
@@ -1507,6 +1601,14 @@ $('btn-avatar').onclick = () => openProfile(S.user, S.persona);
 $('btn-profile-back').onclick = () => showView('chat');
 $('btn-memory-back').onclick = () => showView('profile');
 $('btn-new-conv').onclick = () => toast('新建会话：还没做', 2500);
+$('btn-conv-search').onclick = () => {
+  const bar = $('conv-searchbar');
+  const open = bar.classList.toggle('hidden');
+  if (!open) {
+    const input = $('conv-search');
+    if (input) { input.value = ''; S.convQuery = ''; renderConvs(); input.focus(); }
+  }
+};
 $('btn-cal-close').onclick = closeCalendar;
 $('cal-scroll').addEventListener('scroll', () => {
   const el = $('cal-scroll');
