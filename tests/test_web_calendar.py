@@ -24,18 +24,27 @@ def main() -> int:
 
     # --- 1. 日历弹层 ---
     assert 'id="calendar-panel"' in html, "缺少日历弹层"
-    assert 'id="cal-grid"' in html, "缺少日历格子容器"
+    assert 'id="cal-scroll"' in html, "缺少日历滚动容器"
     assert 'id="cal-title"' in html, "缺少年份月份标题"
-    assert 'id="btn-cal-prev"' in html and 'id="btn-cal-next"' in html, "缺少上下月"
+    assert 'id="btn-cal-today"' in html, "缺少回到本月"
+    # 不再是"点按钮切月"，而是一路往上滑
+    assert 'id="btn-cal-prev"' not in html and 'id="btn-cal-next"' not in html, \
+        "上下月按钮应该去掉，改成一直往上滑"
     assert ".cal-day.has" in css, "缺少「有记录的日期」样式"
     assert ".cal-day.empty" in css, "缺少「没记录的日期（置灰）」样式"
     assert ".cal-day.today" in css, "缺少「今天」样式"
-    print("[OK] 日历弹层（格子 / 上下月 / 有记录 / 置灰 / 今天）")
+    # --- 2b. 无限上滑 ---
+    assert "function loadOlderMonths" in js, "日历没有往上加载更早月份"
+    assert "addEventListener('scroll'" in js, "日历没有滚动监听"
+    assert "el.scrollTop < 140" in js, "滑到顶部没有触发加载更早的月份"
+    assert "function monthHtml" in js, "日历没有按月份分块渲染"
+    assert "cal-month" in js, "缺少月份分块"
+    print("[OK] 日历弹层（可无限上滑 / 有记录 / 置灰 / 今天）")
 
     # --- 2. 有记录的日期可点，没记录的置灰不可点 ---
-    assert "const info = S.calDates[key];" in js, "日历没按日期取记录"
-    assert "cls.push(info ? 'has' : 'empty');" in js, "没记录的日期没置灰"
-    assert "grid.querySelectorAll('.cal-day.has')" in js, "只有有记录的日期才能点"
+    assert "S.calDates[dk]" in js, "日历没按日期取记录"
+    assert "has ? 'has' : 'empty'" in js, "没记录的日期没置灰"
+    assert "querySelectorAll('.cal-day.has')" in js, "只有有记录的日期才能点"
     assert "data-date" in js, "日历格子没有带日期"
     print("[OK] 有记录的日期可点，没记录的置灰")
 

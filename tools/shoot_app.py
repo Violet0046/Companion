@@ -45,6 +45,7 @@ SHOTS = [
     ("4-profile", "openProfile(S.user, S.persona)"),
     ("5-memory", "openMemory(S.user, S.persona)"),
     ("6-chat", "openChat(S.user, S.persona)"),
+    ("7-calendar", "openCalendar(S.user, S.persona)"),
 ]
 
 

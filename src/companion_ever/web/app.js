@@ -49,7 +49,9 @@ const S = {
   /* 日历 */
   calUser: null,
   calPersona: null,
-  calMonth: '',
+  calCurMonth: '',
+  calMonths: [],      // 已加载的月份（从早到晚）
+  calLoading: false,
   calDates: {},
   /* 本轮流式输出里收到的思考过程 */
   streamThinking: '',
@@ -410,54 +412,50 @@ async function openChat(user, persona) {
 
 /* ---------- 日历（按日期回溯） ---------- */
 
+/** 一次加载几个月的日历 */
+const CAL_SPAN = 3;
+
 async function openCalendar(user, persona) {
   S.calUser = user; S.calPersona = persona;
   const now = new Date();
-  S.calMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const cur = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   S.calDates = {};
+  S.calMonths = [];
+  // 先给前面几个月，这样一打开就能往上滑
+  for (let i = CAL_SPAN; i >= 1; i--) S.calMonths.push(monthShift(cur, -i));
+  S.calMonths.push(cur);
+  S.calCurMonth = cur;
+  S.calLoading = false;
   $('calendar-panel').classList.remove('hidden');
-  $('cal-grid').innerHTML = '';
+  const scroll = $('cal-scroll');
+  scroll.innerHTML = '';
   try {
     const dates = await api(`/api/persona/${enc(user)}/${enc(persona)}/dates`);
     dates.forEach((d) => { S.calDates[d.date] = d; });
   } catch (e) { /* ignore */ }
   renderCalendar();
+  // 打开时停在本月（而不是最底下，本月是最后一块，停最底会把它切一半）
+  const curBlock = scroll.querySelector(`.cal-month[data-month="${S.calCurMonth}"]`);
+  if (curBlock) scroll.scrollTop = curBlock.offsetTop;
+  updateCalTitle();
 }
 
 function closeCalendar() {
   $('calendar-panel').classList.add('hidden');
 }
 
-function calShiftMonth(delta) {
-  const [y, m] = S.calMonth.split('-').map(Number);
+/** 月份偏移：'2026-10' 加 -1 -> '2026-09' */
+function monthShift(key, delta) {
+  const [y, m] = key.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);
-  S.calMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  renderCalendar();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+/** 渲染所有已加载的月份（越往上越早，可以一直往上滑） */
 function renderCalendar() {
-  const grid = $('cal-grid');
-  if (!grid) return;
-  const [y, m] = S.calMonth.split('-').map(Number);
-  const days = new Date(y, m, 0).getDate();
-  const lead = new Date(y, m - 1, 1).getDay();   // 0 = 周日
-  $('cal-title').textContent = `${y}年${m}月`;
-
-  const now = new Date();
-  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-
-  let html = '';
-  for (let i = 0; i < lead; i++) html += '<div class="cal-day empty"></div>';
-  for (let d = 1; d <= days; d++) {
-    const key = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const info = S.calDates[key];
-    const cls = ['cal-day'];
-    cls.push(info ? 'has' : 'empty');
-    if (key === todayKey) cls.push('today');
-    html += `<div class="${cls.join(' ')}"${info ? ` data-date="${key}"` : ''}>${d}</div>`;
-  }
-  grid.innerHTML = html;
-  grid.querySelectorAll('.cal-day.has').forEach((el) => {
+  const scroll = $('cal-scroll');
+  scroll.innerHTML = S.calMonths.map(monthHtml).join('');
+  scroll.querySelectorAll('.cal-day.has').forEach((el) => {
     el.onclick = async () => {
       const info = S.calDates[el.dataset.date];
       const date = el.dataset.date;
@@ -466,12 +464,68 @@ function renderCalendar() {
       await jumpToDate(date, info && info.first_id);
     };
   });
+}
 
-  const inMonth = Object.keys(S.calDates).filter((k) => k.startsWith(S.calMonth));
+/** 某个月的格子 */
+function monthHtml(key) {
+  const [y, m] = key.split('-').map(Number);
+  const days = new Date(y, m, 0).getDate();
+  const lead = new Date(y, m - 1, 1).getDay();
+  const now = new Date();
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  let html = `<div class="cal-month" data-month="${key}">`
+    + `<div class="cal-month-title">${y}年${m}月</div>`
+    + '<div class="cal-week"><span>日</span><span>一</span><span>二</span><span>三</span>'
+    + '<span>四</span><span>五</span><span>六</span></div><div class="cal-days">';
+  for (let i = 0; i < lead; i++) html += '<div class="cal-day empty"></div>';
+  for (let d = 1; d <= days; d++) {
+    const dk = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const has = !!S.calDates[dk];
+    const cls = ['cal-day', has ? 'has' : 'empty'];
+    const isToday = dk === todayKey;
+    if (isToday) cls.push('today');
+    // 今天的数字包一层 span（圆形用 span 画，才不会被网格拉变形）
+    const inner = isToday ? `<span>${d}</span>` : String(d);
+    html += `<div class="${cls.join(' ')}"${has ? ` data-date="${dk}"` : ''}>${inner}</div>`;
+  }
+  return html + '</div></div>';
+}
+
+/** 滑到顶就加载更早的月份 */
+function loadOlderMonths() {
+  if (S.calLoading || !S.calMonths.length) return;
+  S.calLoading = true;
+  const scroll = $('cal-scroll');
+  const prevH = scroll.scrollHeight;
+  const prevTop = scroll.scrollTop;
+  const first = S.calMonths[0];
+  const added = [];
+  for (let i = CAL_SPAN; i >= 1; i--) added.push(monthShift(first, -i));
+  S.calMonths = added.concat(S.calMonths);
+  renderCalendar();
+  // 顶部插了内容，滚动位置要补偿，不然会跳
+  scroll.scrollTop = prevTop + (scroll.scrollHeight - prevH);
+  S.calLoading = false;
+}
+
+/** 标题跟着当前看到的月份走 */
+function updateCalTitle() {
+  const scroll = $('cal-scroll');
+  const box = scroll.getBoundingClientRect();
+  const mid = box.top + box.height / 2;   // 用视口中间判断，比"最上面那个"更符合直觉
+  let cur = null;
+  scroll.querySelectorAll('.cal-month').forEach((m) => {
+    if (cur === null && m.getBoundingClientRect().bottom > mid) cur = m.dataset.month;
+  });
+  if (!cur) cur = S.calMonths[0] || '';
+  const [y, m] = cur.split('-').map(Number);
+  $('cal-title').textContent = `${y}年${m}月`;
+  $('btn-cal-today').classList.toggle('hidden', cur === S.calCurMonth);
+  const inMonth = Object.keys(S.calDates).filter((k) => k.startsWith(cur));
   const msgs = inMonth.reduce((a, k) => a + (S.calDates[k].count || 0), 0);
   $('cal-foot').textContent = inMonth.length
-    ? `本月有 ${inMonth.length} 天聊过天，共 ${msgs} 条消息`
-    : '这个月还没有聊天记录';
+    ? `${m}月有 ${inMonth.length} 天聊过天，共 ${msgs} 条消息`
+    : `${m}月还没有聊天记录`;
 }
 
 /**
@@ -1388,8 +1442,15 @@ $('btn-profile-back').onclick = () => showView('chat');
 $('btn-memory-back').onclick = () => showView('profile');
 $('btn-new-conv').onclick = () => toast('新建会话：还没做', 2500);
 $('btn-cal-close').onclick = closeCalendar;
-$('btn-cal-prev').onclick = () => calShiftMonth(-1);
-$('btn-cal-next').onclick = () => calShiftMonth(1);
+$('cal-scroll').addEventListener('scroll', () => {
+  const el = $('cal-scroll');
+  if (el.scrollTop < 140) loadOlderMonths();
+  updateCalTitle();
+});
+$('btn-cal-today').onclick = () => {
+  const cur = $('cal-scroll').querySelector(`.cal-month[data-month="${S.calCurMonth}"]`);
+  if (cur) $('cal-scroll').scrollTo({ top: cur.offsetTop, behavior: 'smooth' });
+};
 
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.onclick = () => {

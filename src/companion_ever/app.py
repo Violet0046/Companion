@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from typing import Any
 
 from companion_ever.application.authz import Authorizer
 from companion_ever.application.chat.chat_service import ChatService
@@ -87,7 +88,7 @@ class AppContext:
     """应用上下文——持有 cfg / connection / llm / repos / services / workflows。"""
 
     cfg: AppConfig
-    conn: sqlite3.Connection
+    conn: Any   # ThreadLocalConnection（每线程一条连接）
     llm: LLMClient
     repos: Repos
     services: Services

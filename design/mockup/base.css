@@ -5,18 +5,23 @@
    ============================================================ */
 
 :root {
-  --bg:          #14100f;
-  --bg-soft:     #1c1716;
-  --surface:     #262020;
-  --surface-2:   #322b2a;
-  --text:        #f2e9e6;
-  --text-dim:    #a29692;
-  --text-muted:  #857a77;
-  --accent:      #e8927c;
-  --accent-soft: #f0a892;
-  --bubble-me:   #7a4a3d;
-  --bubble-me-tx:#fdf4f1;
-  --line:        #ffffff14;
+  /* 明亮主题（2026-10-28 定稿）：柔和浅灰底 + 纯白卡片 + 小红书红 */
+  --bg:          #f2f3f6;
+  --bg-soft:     #ffffff;
+  --surface:     #ffffff;
+  --surface-2:   #e8eaee;
+  --text:        #16181c;
+  --text-dim:    #565c66;
+  --text-muted:  #9aa0aa;
+  --accent:      #ff2442;
+  --accent-soft: #ff6b81;
+  --accent-dim:  #ffdde3;
+  --bubble-me:   #ff2442;
+  --bubble-me-tx:#ffffff;
+  --line:        #ecedf0;
+  --ava-1-bg:    #dceaff; --ava-1-fg: #2f6fed;
+  --ava-2-bg:    #d8f5e7; --ava-2-fg: #0f9d6e;
+  --ava-3-bg:    #ffe8cc; --ava-3-fg: #dd7b16;
   --radius:      18px;
   --radius-sm:   12px;
   --nav-h:       48px;
