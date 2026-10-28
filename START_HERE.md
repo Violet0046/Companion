@@ -349,6 +349,36 @@ companion-cli maintain restore-thinking --source memory/companion.db.bak-2026102
 2. thinking_log 里有思考过程
 3. prompt 里绝对没有 think
 
+## 4.10 换模型也不怕（2026-10-28）
+
+思考处理做成了**模型无关**，换任何推理模型都不用改代码。
+
+### 三种情况都正常工作
+
+| 情况 | 处理 |
+|---|---|
+| **模型没有思考功能**（普通 GPT） | 正文原样入库，**不产生 thinking_log 记录**，prompt 正常 |
+| **模型用不同标签**（`<thinking>` / `<reasoning>`） | 统一识别 think / thinking / reasoning 三种，都能剔掉 |
+| **模型把思考放在独立字段**（`reasoning_content`） | 从字段里捕获，优先于从正文解析，存进 thinking_log |
+
+测试：`tests/test_model_agnostic.py` 四个用例（无思考 / 别的标签 / reasoning_content / 零宽字符）。
+
+### 关键原则：思考内容绝不能进 prompt
+
+三条路径都只能写入 `thinking_log`，`conversation_log`（送 prompt 的那份）永远是干净的。
+测试里有断言守着这条。
+
+### 零宽字符（BOM）清理
+
+不可见字符会进数据库、破坏检索、让模型的分词失效（例如
+PowerShell 管道输入带来的 UTF-8 BOM）。
+
+- 写入路径：`strip_invisible()` 清理网络传入的不可见字符
+- 保留 ZWJ / ZWNJ（U+200D / U+200C）——它们在 emoji 序列里是有意义的
+- 存量：`maintain clean-history` 会一并清掉
+
+已清理：4 行。
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

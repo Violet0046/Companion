@@ -12,29 +12,35 @@ Web 前端要把思考过程藏起来，但又不能等整段生成完再显示�
 """
 from __future__ import annotations
 
-_THINK_OPEN = "<think>"
-_THINK_CLOSE = "</think>"
+import re
+
+from companion_ever.utils.text import THINK_TAG_NAMES
+
+# 支持 think / thinking / reasoning 三种标签（换模型时无需改代码）
+_TAG_ALT = "|".join(THINK_TAG_NAMES)
+_OPEN_RE = re.compile(r"<(" + _TAG_ALT + r")>", re.IGNORECASE)
 
 
 def visible_prefix(text: str) -> str:
     """返回 text 中"到此刻可见"的部分。
 
-    - 已闭合的 <think>...</think> 整段剔除
-    - 尚未闭合的 <think>...（后面还没到）整段隐藏
+    - 已闭合的思考块整段剔除
+    - 尚未闭合的思考块（后面还没到）整段隐藏
     """
     out: list[str] = []
     rest = text
     while True:
-        start = rest.find(_THINK_OPEN)
-        if start == -1:
+        m = _OPEN_RE.search(rest)
+        if not m:
             out.append(rest)
             return "".join(out)
-        out.append(rest[:start])
-        end = rest.find(_THINK_CLOSE, start + len(_THINK_OPEN))
-        if end == -1:
+        out.append(rest[: m.start()])
+        close = re.compile(r"</" + re.escape(m.group(1)) + r">", re.IGNORECASE)
+        cm = close.search(rest, m.end())
+        if not cm:
             # 未闭合 → 后面的内容先全部藏起来
             return "".join(out)
-        rest = rest[end + len(_THINK_CLOSE) :]
+        rest = rest[cm.end():]
 
 
 def _split_safe(buf: str) -> tuple[str, str]:
@@ -42,9 +48,16 @@ def _split_safe(buf: str) -> tuple[str, str]:
 
     暂存的尾部一定是 "<think>" 的真前缀（最多 5 个字符）。
     """
-    for k in range(min(len(buf), len(_THINK_OPEN) - 1), 0, -1):
-        if _THINK_OPEN.startswith(buf[-k:]):
-            return buf[:-k], buf[-k:]
+    idx = buf.rfind("<")
+    if idx == -1:
+        return buf, ""
+    frag = buf[idx + 1:].lower()
+    if not frag:
+        # 只有一个 "<"，也可能是标签开头
+        return buf[:idx], buf[idx:]
+    for name in THINK_TAG_NAMES:
+        if name.startswith(frag) or frag.startswith(name):
+            return buf[:idx], buf[idx:]
     return buf, ""
 
 

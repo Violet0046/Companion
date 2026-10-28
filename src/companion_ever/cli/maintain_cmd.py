@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 
 from companion_ever.application.llm_json import THINK_PATTERN
-from companion_ever.utils.text import strip_format_prefix
+from companion_ever.utils.text import strip_format_prefix, strip_invisible
 
 
 
@@ -276,6 +276,16 @@ def cmd_clean_history(args) -> int:
             ).fetchall()
             quit_rows.extend(rs)
 
+        # --- 2b. 找含零宽字符的行（BOM 等） ---
+        invisible_rows = []
+        for r in conn.execute(
+            "SELECT id, role, content FROM conversation_log WHERE content LIKE ?",
+            ("%﻿%",),
+        ).fetchall():
+            new = strip_invisible(r["content"])
+            if new != r["content"]:
+                invisible_rows.append((r["id"], r["content"], new))
+
         # --- 2. 找带格式模仿前缀的 assistant 行（排除将被删除的 /quit 行）---
         quitting_ids = {r["id"] for r in quit_rows}
         prefix_rows = []
@@ -309,6 +319,12 @@ def cmd_clean_history(args) -> int:
         if len(prefix_rows) > 8:
             print(f"    ... 共 {len(prefix_rows)} 行")
 
+        print(f"\n[2b] 零宽字符（BOM 等）：{len(invisible_rows)} 行")
+        for rid, old, new in invisible_rows[:6]:
+            print(f"    id={rid:>4}")
+            print(f"        前: {_fmt_preview(old)}")
+            print(f"        后: {_fmt_preview(new)}")
+
         before_total = conn.execute(
             "SELECT COALESCE(SUM(length(content)), 0) FROM conversation_log"
         ).fetchone()[0]
@@ -337,6 +353,16 @@ def cmd_clean_history(args) -> int:
                 (new, rid),
             )
 
+        for rid, old, new in invisible_rows:
+            conn.execute(
+                "UPDATE conversation_log SET content = ? WHERE id = ?",
+                (new, rid),
+            )
+            conn.execute(
+                "UPDATE conversation_log SET content = ? WHERE id = ?",
+                (new, rid),
+            )
+
         after_total = conn.execute(
             "SELECT COALESCE(SUM(length(content)), 0) FROM conversation_log"
         ).fetchone()[0]
@@ -346,7 +372,9 @@ def cmd_clean_history(args) -> int:
         ).fetchone()[0]
 
         print()
-        print(f"[OK] 删除 {len(quit_rows)} 行 /quit 轮次，剥掉 {len(prefix_rows)} 行格式前缀")
+        print(f"[OK] 删除 {len(quit_rows)} 行 /quit 轮次，"
+              f"剔掉 {len(prefix_rows)} 行格式前缀，"
+              f"清理 {len(invisible_rows)} 行零宽字符")
         print(f"     conversation_log 总字符：{before_total:,} -> {after_total:,}")
         print(f"     仍带 '[' 开头的 assistant 行：{remain}（属于正常内容，不用管）")
         print("     session_close 哨兵已保留")

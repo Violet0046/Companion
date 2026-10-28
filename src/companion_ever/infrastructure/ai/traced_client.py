@@ -96,6 +96,11 @@ class TracedLLMClient:
     def model(self) -> str:
         return str(getattr(self.inner, "model", "") or "")
 
+    @property
+    def last_reasoning(self) -> str | None:
+        """内层客户端单独返回的思考字段（如 reasoning_content）。"""
+        return getattr(self.inner, "last_reasoning", None)
+
     def chat(self, messages: list[dict], **kwargs) -> str:
         t0 = time.perf_counter()
         text = self.inner.chat(messages, **kwargs)

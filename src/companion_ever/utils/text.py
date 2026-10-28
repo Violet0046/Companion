@@ -36,7 +36,9 @@ _PUNCT = set(
 )
 
 # 零宽 / 不可见字符（含 UTF-8 BOM）——管道输入时经常混进来
-_INVISIBLE = set("﻿​‌‍⁠ ")
+# 零宽 / 不可见字符。不含 ZWJ/ZWNJ（U+200D/U+200C），
+# 它们在 emoji 序列里是有意义的，删了会破坏表情。
+_INVISIBLE = set("﻿​⁠ ")
 
 # 停用字：常见虚词/代词/语气词。2 字关键词要求每个字都不是停用字。
 _STOP_CHARS = set(
@@ -82,7 +84,20 @@ def strip_format_prefix(content: str) -> tuple[str, int]:
     return text, layers
 
 
-_THINK_BLOCK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+# 不同厂商的推理模型用的思考标签不一样：
+#   MiniMax-M3 / DeepSeek-R1 / Qwen  -> <think>
+#   Anthropic 风格                   -> <think>
+#   一些自建/代理网关                 -> <thinking> / <reasoning>
+# 换模型时不用改代码，这里统一识别。
+THINK_TAG_NAMES = ("think", "thinking", "reasoning")
+
+THINK_PATTERN = re.compile(
+    r"<(" + "|".join(THINK_TAG_NAMES) + r")>(.*?)</\1>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+# 兼容旧名字
+_THINK_BLOCK_RE = THINK_PATTERN
 
 
 def extract_thinking(text: str) -> tuple[str, str | None]:
@@ -94,12 +109,29 @@ def extract_thinking(text: str) -> tuple[str, str | None]:
     用途：思考过程要保存到 thinking_log（给用户看），
     正文要进 conversation_log（给模型看）。
     """
-    blocks = _THINK_BLOCK_RE.findall(text)
+    blocks = THINK_PATTERN.findall(text)
     if not blocks:
         return text, None
-    body = _THINK_BLOCK_RE.sub("", text).strip()
-    think = "\n\n".join(b.strip() for b in blocks if b.strip())
+    body = THINK_PATTERN.sub("", text).strip()
+    think = "\n\n".join(b.strip() for _tag, b in blocks if b.strip())
     return body, (think or None)
+
+
+def strip_thinking(text: str) -> str:
+    """移除思考块（包含标签本身）。
+
+    不限于某一种模型：识别 think / thinking / reasoning 三种标签。
+    """
+    return THINK_PATTERN.sub("", text).strip()
+
+
+def strip_invisible(text: str) -> str:
+    """去掉零宽 / 不可见字符（含 UTF-8 BOM）。
+
+    这些字符看不出来，但会进数据库、会破坏检索、会让模型
+    的分词失效。例如 PowerShell 管道输入带来的 BOM。
+    """
+    return "".join(ch for ch in text if ch not in _INVISIBLE)
 
 
 def normalize(text: str) -> str:
@@ -191,6 +223,10 @@ def keyword_hit_ratio(content: str, keywords: Iterable[str]) -> float:
 __all__ = [
     "normalize",
     "extract_thinking",
+    "strip_thinking",
+    "strip_invisible",
+    "THINK_PATTERN",
+    "THINK_TAG_NAMES",
     "strip_format_prefix",
     "extract_keywords",
     "all_keywords",

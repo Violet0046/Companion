@@ -23,6 +23,7 @@ from collections.abc import Iterator
 
 from companion_ever.application.chat.conversation_service import ConversationService
 from companion_ever.application.chat.assistant_reply import split_assistant_reply
+from companion_ever.utils.text import strip_invisible
 from companion_ever.application.chat.prompt_service import PromptService
 
 from companion_ever.infrastructure.ai.llm_client import LLMClient
@@ -79,9 +80,12 @@ class ChatService:
                 persona_id=persona_id,
                 turn_index=next_turn,
                 role="user",
-                content=user_input,
+                content=strip_invisible(user_input),
             )
-            body, think = split_assistant_reply(response_text)
+            body, think = split_assistant_reply(
+                response_text,
+                getattr(self.llm_client, "last_reasoning", None),
+            )
             msg_id = self.conversation_service.log_turn(
                 user_id=user_id,
                 persona_id=persona_id,

@@ -20,6 +20,7 @@ from langgraph.graph import END, START, StateGraph
 
 from companion_ever.application.chat.conversation_service import ConversationService
 from companion_ever.application.chat.assistant_reply import split_assistant_reply
+from companion_ever.utils.text import strip_invisible
 from companion_ever.application.chat.prompt_service import PromptService
 from companion_ever.application.chat.session_close_service import SessionCloseService
 from companion_ever.infrastructure.ai.llm_client import LLMClient
@@ -64,11 +65,15 @@ def _make_chat_node(prompt_service: PromptService, conversation_service: Convers
             _t1 = _time.perf_counter()
             conversation_service.log_turn(
                 user_id=user_id, persona_id=persona_id,
-                turn_index=next_turn_index, role="user", content=user_input,
+                turn_index=next_turn_index, role="user",
+                content=strip_invisible(user_input),
             )
             # assistant 内容剥掉 <think> 块：推理模型的思考过程对后续对话
             # 没有价值，却会占掉历史 token 的 90%+（还会污染模型上下文）。
-            body, think = split_assistant_reply(response)
+            body, think = split_assistant_reply(
+                response,
+                getattr(llm_client, "last_reasoning", None),
+            )
             msg_id = conversation_service.log_turn(
                 user_id=user_id, persona_id=persona_id,
                 turn_index=next_turn_index, role="assistant",

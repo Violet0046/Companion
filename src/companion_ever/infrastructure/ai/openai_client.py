@@ -29,6 +29,9 @@ class OpenAICompatibleClient:
         self.timeout = timeout
         self._client = None  # lazy load
         self.last_usage = None  # 最近一次调用的 token 用量（给 trace 包装层读）
+        # 模型单独返回的思考字段（如 DeepSeek/MiniMax 的 reasoning_content）。
+        # 没有这个字段的模型就是 None，说明它把思考写在正文里了。
+        self.last_reasoning = None
 
     @property
     def client(self):
@@ -54,8 +57,13 @@ class OpenAICompatibleClient:
             messages=messages,
             **kwargs,
         )
-        text = response.choices[0].message.content or ""
+        message = response.choices[0].message
+        text = message.content or ""
         self.last_usage = getattr(response, "usage", None)
+        self.last_reasoning = (
+            getattr(message, "reasoning_content", None)
+            or getattr(message, "reasoning", None)
+        )
         return text
 
     def stream_chat(self, messages: list[dict], **kwargs) -> Iterator[str]:
@@ -67,13 +75,20 @@ class OpenAICompatibleClient:
             **kwargs,
         )
         parts: list[str] = []
+        reasoning_parts: list[str] = []
         for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                piece = chunk.choices[0].delta.content
-                parts.append(piece)
-                yield piece
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            rc = getattr(delta, "reasoning_content", None)
+            if rc:
+                reasoning_parts.append(rc)
+            if delta.content:
+                parts.append(delta.content)
+                yield delta.content
 
         self.last_usage = None
+        self.last_reasoning = "".join(reasoning_parts) or None
 
 
 __all__ = ["OpenAICompatibleClient"]

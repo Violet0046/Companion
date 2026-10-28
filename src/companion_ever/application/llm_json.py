@@ -6,7 +6,7 @@
 - persona_edit_service._clean_response
 
 公开 API：
-- THINK_PATTERN: 匹配 <think>...</think> 的正则
+- THINK_PATTERN: 匹配 <think>/<thinking>/<reasoning> 块的正则（定义在 utils/text.py）
 - strip_thinking(text): 移除思考块
 - clean_response(text): 清理 JSON 响应（剥 think / 剥 markdown / 提取首个 {...}）
 """
@@ -16,19 +16,17 @@ import json
 import re
 from typing import Any
 
+# 思考块模式定义在 utils/text.py（共享，换模型时只改那里）
+
 
 # === Thinking 块剥离 ===
 
-THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
-
-
-def strip_thinking(text: str) -> str:
-    """剥掉 LLM 的 <think>...</think> 思考块（用于持久化）。
-
-    实时的 chat() / stream_chat() 返回原值（用户可见思考过程）。
-    但写入 conversation_log 时调用此函数剥掉（保持干净）。
-    """
-    return THINK_PATTERN.sub("", text).strip()
+# pattern 定义在 utils/text.py（支持 think / thinking / reasoning 三种标签）。
+# 这里再导出一份，为了保持旧的导入路径不拉下。
+from companion_ever.utils.text import (  # noqa: E402
+    THINK_PATTERN,
+    strip_thinking,
+)
 
 
 # === JSON 响应清理 ===
