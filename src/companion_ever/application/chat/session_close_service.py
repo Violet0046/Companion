@@ -15,13 +15,19 @@
 """
 from __future__ import annotations
 
+import logging
+import threading
+
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from companion_ever.application.authz import Authorizer
 from companion_ever.application.chat.conversation_service import ConversationService
 from companion_ever.infrastructure.trace import trace_scope
+from companion_ever.utils.time import parse_sqlite_ts
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from langgraph.graph import CompiledGraph
@@ -73,6 +79,76 @@ class SessionCloseService:
         self.authorizer = authorizer
         self.conversation_service = conversation_service
         self.extraction_graph = extraction_graph
+
+    # ============ 自动管理 session 边界 ============
+
+    def close_if_stale(
+        self,
+        user_id: str,
+        persona_id: str,
+        idle_minutes: int,
+    ) -> bool:
+        """如果上一个 session 已空闲超时，自动关闭它。
+
+        为什么要这个：
+        session 边界不能依赖用户记得按 /quit。用户可能直接关掉 App、
+        切后台、断网，边界就没了。边界没了，摘要、抽取、上下文的边界全乱。
+
+        三个触发点都调这个函数：
+        - 用户发下一条消息时（回来了 -> 先关上一个）
+        - 服务器定时任务（用户永远不回来也能关）
+        - 进程启动时（CLI / 服务器重启）
+
+        Args:
+            idle_minutes: 空闲阈值（分钟）。0 = 禁用自动判定。
+
+        Returns:
+            True = 已自动关闭（抽取在后台跑，不阻塞调用方）
+        """
+        if idle_minutes <= 0:
+            return False
+
+        active = self.conversation_service.get_active_session(
+            user_id=user_id, persona_id=persona_id,
+        )
+        if not active:
+            return False  # 没有未关闭的 session
+
+        last_at = parse_sqlite_ts(active["last_message_at"])
+        if last_at is None:
+            return False
+
+        gap = (datetime.now(timezone.utc) - last_at).total_seconds()
+        if gap < idle_minutes * 60:
+            return False
+
+        # 空闲超时 -> 自动关闭（抽取在后台跑，不阻塞当前消息）
+        self.close_session_background(user_id, persona_id)
+        return True
+
+    def close_session_background(self, user_id: str, persona_id: str) -> None:
+        """在后台线程里关闭 session（不阻塞调用方）。
+
+        用于自动边界管理：抽取是一次完整 LLM 调用（几十秒），
+        不能让用户等它。
+        """
+        thread = threading.Thread(
+            target=self._close_worker,
+            args=(user_id, persona_id),
+            daemon=True,
+            name="session-close",
+        )
+        thread.start()
+
+    def _close_worker(self, user_id: str, persona_id: str) -> None:
+        """后台线程的实现（异常不影响主流程）。"""
+        try:
+            self.close_session(user_id, persona_id)
+        except Exception:
+            logger.exception(
+                "自动关闭 session 失败: user=%s persona=%s",
+                user_id, persona_id,
+            )
 
     def close_session(
         self,

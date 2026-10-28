@@ -4,8 +4,9 @@
 - schema.sql 放在 persistence/ 包内（importlib.resources 读取）
 - 连接默认开启 PRAGMA foreign_keys（CHECK 约束必须）
 - 用 WAL 模式（允许并发读）
-- check_same_thread 默认 True（同步 SQLite，单进程安全）
-  → Web 层（FastAPI 多线程）传 False；SQLite 本身是 serialized 模式，安全
+- check_same_thread 默认 False
+  → 需要跨线程用同一条连接（Web 层、会话自动关闭的后台线程）
+  → SQLite 本身是 serialized 模式（threadsafety=3），跨线程安全
 """
 from __future__ import annotations
 

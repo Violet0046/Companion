@@ -502,6 +502,49 @@ assistant 输出（爱撒娇、爱抱抱）
 
 现在三个环节都断了：不注入 prompt / 不给 LLM 看 / 应用层过滤。
 
+## 4.13 会话边界自动管理（2026-10-28）
+
+### 问题
+
+`/quit` 是用户主动触发的。用户可能直接关掉 App、切后台、断网——
+**session 边界就没了**。边界没了，摘要、抽取、上下文的边界全乱。
+
+最冻的是：**用户离开后再也不回来** —— 那段对话的记忆永远不会被抽取。
+
+### 解决：服务端自动管理边界
+
+阈值：`COMPANION_IDLE_MINUTES`（默认 120 分钟）。
+离上次说话超过阈值 → 上一个 session 算结束。
+
+**三个触发点（都调同一个函数）**：
+
+| 触发点 | 覆盖场景 | 实现 |
+|---|---|---|
+| 用户发下一条消息时 | 用户离开后回来了 | `ChatService` / `chat_workflow` 开头调 `close_if_stale` |
+| 服务器定时任务（每 60 秒） | **用户再也不回来** | `api/server.py::_session_sweeper` |
+| 进程启动时 | CLI / 服务器重启 | 上面两处的调用自然覆盖 |
+
+**抽取在后台线程里跑**（`close_session_background`），不阻塞当前消息——
+抽取是一次完整 LLM 调用（几十秒），不能让用户等它。
+
+### 底层变化：check_same_thread 默认改 False
+
+后台线程要用主线程建的 SQLite 连接。
+SQLite 本身是 serialized 模式（`threadsafety=3`），跨线程安全。
+
+### 新增接口
+
+```python
+# 判定并自动关闭（返回是否关了）
+session_close_service.close_if_stale(user_id, persona_id, idle_minutes)
+
+# 后台关闭（不阻塞）
+session_close_service.close_session_background(user_id, persona_id)
+
+# 列出所有未关闭的 session（定时扫描用）
+conversation_service.list_active_sessions()
+```
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

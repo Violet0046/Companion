@@ -134,7 +134,11 @@ def build_app(cfg: AppConfig) -> AppContext:
         cfg.tz_offset_hours,
         cfg.recent_message_limit,
     )
-    chat_svc = ChatService(prompt_svc, conversation_svc, llm)
+    # session_close_svc 在下面构造，这里先占位，后面回填
+    chat_svc = ChatService(
+        prompt_svc, conversation_svc, llm,
+        session_close_service=None, idle_session_minutes=cfg.idle_session_minutes,
+    )
     extraction_svc = ExtractionService(
         conversation_svc, note_svc, block_svc, llm,
     )
@@ -150,11 +154,14 @@ def build_app(cfg: AppConfig) -> AppContext:
     session_close_svc = SessionCloseService(
         authorizer, conversation_svc, extraction_graph,
     )
+    # 回填：chat 路径也要能自动关 session
+    chat_svc.session_close_service = session_close_svc
     chat_graph = build_chat_graph(
         prompt_service=prompt_svc,
         conversation_service=conversation_svc,
         llm_client=llm,
         session_close_service=session_close_svc,
+        idle_session_minutes=cfg.idle_session_minutes,
     )
 
     services = Services(

@@ -147,6 +147,19 @@ class ConversationService:
         """删除一个 session_close marker（抽取失败时回滚）。"""
         return self.conv_repo.delete_session_close(marker_id)
 
+    def get_active_session(
+        self, user_id: str, persona_id: str,
+    ) -> Optional[dict]:
+        """未关闭 session 的信息（最后一个 marker 之后还有 message）。"""
+        self.authorizer.require_persona(user_id, persona_id)
+        return self.conv_repo.get_active_session(
+            user_id=user_id, persona_id=persona_id,
+        )
+
+    def list_active_sessions(self) -> list[dict]:
+        """列出所有未关闭的 session（系统内部用，不做权限校验）。"""
+        return self.conv_repo.list_active_sessions()
+
     def get_max_turn_index(self, user_id: str, persona_id: str) -> int:
         """当前最大的 turn_index（没有则 0）——用来算下一轮的 turn_index。"""
         self.authorizer.require_persona(user_id, persona_id)

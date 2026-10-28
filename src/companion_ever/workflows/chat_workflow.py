@@ -39,7 +39,13 @@ class ChatState(TypedDict, total=False):
     close_report: object  # SessionCloseReport
 
 
-def _make_chat_node(prompt_service: PromptService, conversation_service: ConversationService, llm_client: LLMClient):
+def _make_chat_node(
+    prompt_service: PromptService,
+    conversation_service: ConversationService,
+    llm_client: LLMClient,
+    session_close_service: SessionCloseService | None = None,
+    idle_session_minutes: int = 120,
+):
     """构造 chat 节点。"""
     def chat_node(state: ChatState) -> ChatState:
         user_id = state["user_id"]
@@ -47,6 +53,14 @@ def _make_chat_node(prompt_service: PromptService, conversation_service: Convers
         user_input = state["user_input"]
 
         with trace_scope("chat", user_id, persona_id) as tr:
+            # 0. 空闲超时：先自动关上一个 session（不依赖用户按 /quit）
+            try:
+                session_close_service.close_if_stale(
+                    user_id, persona_id, idle_session_minutes,
+                )
+            except Exception:
+                pass
+
             # 1. 拼 system prompt（自动只取当前 session 的对话历史——见 PromptService）
             _t0 = _time.perf_counter()
             prompt_result = prompt_service.build(
@@ -128,6 +142,7 @@ def build_chat_graph(
     conversation_service: ConversationService,
     llm_client: LLMClient,
     session_close_service: SessionCloseService,
+    idle_session_minutes: int = 120,
 ):
     """构建 LangGraph StateGraph 并 compile。
 
@@ -138,7 +153,13 @@ def build_chat_graph(
     """
     workflow = StateGraph(ChatState)
 
-    workflow.add_node("chat", _make_chat_node(prompt_service, conversation_service, llm_client))
+    workflow.add_node(
+        "chat",
+        _make_chat_node(
+            prompt_service, conversation_service, llm_client,
+            session_close_service, idle_session_minutes,
+        ),
+    )
     workflow.add_node("close", _make_close_node(session_close_service))
 
     # 先路由：/quit 直接进 close 节点，不经过 chat（因此不会调 LLM）

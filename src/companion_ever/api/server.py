@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import socket
 from pathlib import Path
 
@@ -23,6 +25,43 @@ from companion_ever.config import AppConfig, WebConfig
 
 # 静态资源目录：src/companion_ever/web/
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+
+
+async def _session_sweeper(app: FastAPI, interval: int = 60) -> None:
+    """定期清扫：把空闲超时的 session 自动关掉（并触发抽取）。
+
+    这是「用户离开后再也不回来」的唯一保障——
+    没有它，那段对话的记忆永远不会被抽取。
+
+    抽取在后台线程里跑，不阻塞任何请求。
+    """
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            ctx = app.state.ctx
+            idle = int(getattr(ctx.cfg, "idle_session_minutes", 120) or 0)
+            if idle <= 0:
+                continue
+            for s in ctx.services.conversation.list_active_sessions():
+                ctx.services.session_close.close_if_stale(
+                    s["user_id"], s["persona_id"], idle,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """启动后台清扫任务，停止时取消。"""
+    task = asyncio.create_task(_session_sweeper(app))
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 def create_app(
@@ -47,6 +86,7 @@ def create_app(
         title="Companion Ever Memory",
         description="长期记忆 AI 伴侣 —— Web / PWA 接口",
         version="0.3.0",
+        lifespan=_lifespan,
     )
 
     # 挂到 app.state，路由里直接取

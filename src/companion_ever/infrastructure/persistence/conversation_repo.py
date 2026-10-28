@@ -251,6 +251,55 @@ class ConversationRepo:
         )
         return cur.rowcount > 0
 
+    def get_active_session(
+        self, *, user_id: str, persona_id: str,
+    ) -> Optional[dict]:
+        """返回"未关闭 session"的信息。
+
+        即：最后一个 session_close marker 之后还有 message，则返回
+        {"last_message_id": int, "last_message_at": str}；没有则返回 None。
+
+        用途：判定是否应该自动关闭 session（空闲超时）。
+        """
+        row = self.conn.execute(
+            "SELECT MAX(id) AS mid, MAX(created_at) AS mat FROM conversation_log "
+            "WHERE user_id = ? AND persona_id = ? "
+            "  AND role IN ('user', 'assistant') "
+            "  AND id > COALESCE("
+            "      (SELECT MAX(id) FROM conversation_log "
+            "       WHERE user_id = ? AND persona_id = ? AND role = 'session_close'), 0)",
+            (user_id, persona_id, user_id, persona_id),
+        ).fetchone()
+        if row is None or row["mid"] is None:
+            return None
+        return {
+            "last_message_id": int(row["mid"]),
+            "last_message_at": row["mat"],
+        }
+
+    def list_active_sessions(self) -> list[dict]:
+        """列出所有"未关闭的 session"（用于服务器定时扫描）。"""
+        rows = self.conn.execute(
+            "SELECT c.user_id AS user_id, c.persona_id AS persona_id, "
+            "       MAX(c.id) AS mid, MAX(c.created_at) AS mat "
+            "FROM conversation_log c "
+            "WHERE c.role IN ('user', 'assistant') "
+            "  AND c.id > COALESCE(("
+            "      SELECT MAX(m.id) FROM conversation_log m "
+            "       WHERE m.user_id = c.user_id AND m.persona_id = c.persona_id "
+            "         AND m.role = 'session_close'), 0) "
+            "GROUP BY c.user_id, c.persona_id"
+        ).fetchall()
+        return [
+            {
+                "user_id": r["user_id"],
+                "persona_id": r["persona_id"],
+                "last_message_id": int(r["mid"]),
+                "last_message_at": r["mat"],
+            }
+            for r in rows
+        ]
+
     def get_max_turn_index(self, *, user_id: str, persona_id: str) -> int:
         """返回该 (user, persona) 下最大的 turn_index（没有则 0）。
 

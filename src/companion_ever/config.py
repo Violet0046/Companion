@@ -160,6 +160,7 @@ class AppConfig:
     __slots__ = (
         "db_path", "tz_offset_hours", "recent_message_limit",
         "history_max_messages", "llm", "retrieval", "check_same_thread",
+        "idle_session_minutes",
     )
 
     def __init__(
@@ -170,7 +171,8 @@ class AppConfig:
         history_max_messages: int = 50,
         llm: LLMConfig | dict | None = None,
         retrieval: RetrievalConfig | dict | None = None,
-        check_same_thread: bool = True,
+        check_same_thread: bool = False,
+        idle_session_minutes: int = 120,
     ):
         self.db_path = Path(db_path)
         self.tz_offset_hours = tz_offset_hours
@@ -179,9 +181,12 @@ class AppConfig:
         self.history_max_messages = history_max_messages
         self.llm = LLMConfig.from_any(llm)
         self.retrieval = RetrievalConfig.from_any(retrieval)
-        # Web 层（FastAPI）会跨线程用同一条连接，需置 False；
-        # CLI 单线程保持默认 True。
+        # 跨线程共用同一条连接（会话自动关闭的后台线程也要用）。
+        # SQLite 本身是 serialized 模式（threadsafety=3），跨线程安全。
         self.check_same_thread = check_same_thread
+        # 空闲多久自动判定为"上一个 session 已结束"（分钟）。
+        # 0 = 关闭自动判定（只能手动 /quit）。
+        self.idle_session_minutes = idle_session_minutes
 
     @classmethod
     def from_env(
@@ -219,6 +224,7 @@ class AppConfig:
             tz_offset_hours=int(env_source.get("COMPANION_TZ_OFFSET_HOURS", "8")),
             recent_message_limit=int(env_source.get("COMPANION_RECENT_MESSAGE_LIMIT", "20")),
             history_max_messages=int(env_source.get("COMPANION_HISTORY_MAX", "50")),
+            idle_session_minutes=int(env_source.get("COMPANION_IDLE_MINUTES", "120")),
             llm=LLMConfig(
                 api_key=env_source.get("OPENAI_API_KEY", ""),
                 base_url=env_source.get("OPENAI_BASE_URL", ""),

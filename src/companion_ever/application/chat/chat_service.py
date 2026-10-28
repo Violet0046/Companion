@@ -38,10 +38,15 @@ class ChatService:
         prompt_service: PromptService,
         conversation_service: ConversationService,
         llm_client: LLMClient,
+        session_close_service=None,
+        idle_session_minutes: int = 120,
     ):
         self.prompt_service = prompt_service
         self.conversation_service = conversation_service
         self.llm_client = llm_client
+        # 自动管理 session 边界（可选，为不提供时保持兼容）
+        self.session_close_service = session_close_service
+        self.idle_session_minutes = idle_session_minutes
 
     def chat(self, user_id: str, persona_id: str, user_input: str) -> str:
         """单轮对话：拼 prompt + 调 LLM + log。
@@ -59,6 +64,9 @@ class ChatService:
             PermissionError: user 不拥有 persona（由 prompt_service.build 触发）
         """
         with trace_scope("chat", user_id, persona_id) as tr:
+            # 0. 空闲超时：先自动关上一个 session（不依赖用户按 /quit）
+            self._maybe_close_stale(user_id, persona_id)
+
             # 1. 拼 prompt + 历史（把 user_input 作为 query 触发检索）
             result = self.prompt_service.build(user_id, persona_id, query=user_input)
             messages = list(result["messages"])  # 复制
@@ -110,6 +118,17 @@ class ChatService:
 
             return response_text
 
+    def _maybe_close_stale(self, user_id: str, persona_id: str) -> None:
+        """空闲超时就自动关上一个 session。"""
+        if self.session_close_service is None:
+            return
+        try:
+            self.session_close_service.close_if_stale(
+                user_id, persona_id, self.idle_session_minutes,
+            )
+        except Exception:
+            pass
+
     def _next_turn_index(self, user_id: str, persona_id: str) -> int:
         """算下一个 turn_index（现有最大 + 1）。
 
@@ -126,6 +145,7 @@ class ChatService:
     ) -> Iterator[str]:
         """流式对话：返回 LLM 的增量输出（含 <think> 块，用户可见）。"""
         with trace_scope("chat", user_id, persona_id) as tr:
+            self._maybe_close_stale(user_id, persona_id)
             result = self.prompt_service.build(user_id, persona_id, query=user_input)
             messages = list(result["messages"])
             messages.append({"role": "user", "content": user_input})
