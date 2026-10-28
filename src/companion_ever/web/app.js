@@ -37,9 +37,14 @@ const S = {
   convs: [],
   /* 各角色的汇总信息（note_count 等） */
   summaries: {},
-  /* 正在看资料 / 记忆的角色 */
+  /* 正在看资料 / 记忆 / 关系状态的角色 */
   profilePersona: null,
   memoryPersona: null,
+  relationPersona: null,
+  /* 正在记录中的角色：key -> true（「记一次」按钮变「记录中…」） */
+  recording: {},
+  /* 本次手动记录还没回来的标记（WS 推送 record_done 时清掉） */
+  recordPending: null,
   memoryNotes: [],
   memoryFilter: 'all',
   convQuery: '',
@@ -67,6 +72,8 @@ const S = {
 };
 
 const PAGE = 50;
+/* 关系阶段：block 里存的是英文 key，这里翻成中文 */
+const REL_STAGE = { stranger: '初识', familiar: '熟悉', close: '亲近', deep_bond: '深交' };
 let wasAtBottom = true;
 
 /* ---------- 工具 ---------- */
@@ -619,10 +626,9 @@ async function loadAround(firstId) {
 function relStage(info) {
   const blocks = (info && info.blocks) || [];
   const rel = blocks.find((b) => b.block_type === 'relationship_state');
-  const stageMap = { stranger: '初识', familiar: '熟悉', close: '亲近', deep_bond: '深交' };
   if (!rel) return '—';
   const f = rel.fields || {};
-  return stageMap[f.stage] || f.stage || '—';
+  return REL_STAGE[f.stage] || f.stage || '—';
 }
 
 async function openProfile(user, persona) {
@@ -644,7 +650,6 @@ function renderProfile(user, persona, info) {
   const basics = (info && info.persona_basics) || {};
   const name = basics.name || persona;
   const tag = basics.tag || basics.description || '';
-  const lastRec = info && info.last_record_at;
   body.innerHTML = `
     <div class="profile-hero">
       <div class="ava ava-xl ${avaClass(persona)}">${esc(name.slice(0, 1))}</div>
@@ -662,24 +667,114 @@ function renderProfile(user, persona, info) {
       <div class="row" id="row-dates"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>
       <div class="row" id="row-relation"><span>关系状态</span><span class="row-val">${esc(relStage(info))} <span class="chev">›</span></span></div>
     </div>
-    <div id="rel-card" class="rel-card hidden"></div>
-    <div class="group">
-      <div class="row"><span>上次记录</span><span class="row-val" id="last-record-val">${esc(fmtAgo(lastRec))}</span></div>
-      <div class="row"><span>手动记一次</span>
-        <span class="row-val"><span class="btn-mini" id="btn-record-now">记一次</span></span></div>
-    </div>
-    <div class="hint">对话${esc(intervalText())}自动记录一次，记录后她会记住聊过的事。<br/>想现在记也可以手动触发。</div>
+    <div class="hint">对话${esc(intervalText())}自动记录一次，记录后她会记住聊过的事。<br/>关系状态、上次记录都在「关系状态」页里。</div>
   `;
   const q = (id) => body.querySelector('#' + id);
   q('row-chat').onclick = () => openChat(user, persona);
   q('row-memory').onclick = () => openMemory(user, persona);
   q('row-dates').onclick = () => openCalendar(user, persona);
-  q('row-relation').onclick = () => {
-    const card = q('rel-card');
-    card.classList.toggle('hidden');
-    if (!card.classList.contains('hidden')) { S.info = info; renderRelation(); }
-  };
-  q('btn-record-now').onclick = (e) => recordNow(user, persona, e.target);
+  q('row-relation').onclick = () => openRelation(user, persona);
+}
+
+/* ---------- 关系状态（独立子页面） ---------- */
+
+/**
+ * 关系状态卡片的内容（纯函数：只认 info，不碰 DOM）。
+ * 资料页只显示阶段，关系状态页显示全部（阶段 / 进展 / 关键时刻 / 偏好）。
+ */
+function relationHtml(info) {
+  const blocks = (info && info.blocks) || [];
+  const rel = blocks.find((b) => b.block_type === 'relationship_state');
+  const prof = blocks.find((b) => b.block_type === 'user_profile');
+  if (!rel && !prof) {
+    return '<div class="empty">还没有关系数据<br/>多聊几句，她就会开始记你们之间的事了</div>';
+  }
+  let html = '';
+  if (rel) {
+    const f = rel.fields || {};
+    const stage = REL_STAGE[f.stage] || f.stage || '—';
+    const prog = Math.round((f.stage_progress || 0) * 100);
+    html += `<div class="row"><span class="k">关系</span><span class="v">${esc(stage)}</span></div>`;
+    html += `<div class="row"><span class="k">进展</span><span class="v">${prog}%</span></div>`;
+    html += `<div class="meter"><i style="width:${prog}%"></i></div>`;
+    const mom = Array.isArray(f.key_moments) ? f.key_moments : [];
+    if (mom.length) {
+      html += '<div class="moments"><ul>'
+        + mom.slice(-6).map((m) => `<li>${esc(m)}</li>`).join('') + '</ul></div>';
+    }
+  }
+  if (prof) {
+    const f = prof.fields || {};
+    const arr = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+    const p = arr(f.preferences).slice(0, 3);
+    if (p.length) {
+      html += `<div class="row" style="margin-top:8px"><span class="k">偏好</span><span class="v">${esc(p.join('、'))}</span></div>`;
+    }
+  }
+  return html;
+}
+
+/** 打开关系状态页（和「她的记忆」「聊天记录」一样的子页面） */
+async function openRelation(user, persona) {
+  S.relationPersona = { user, persona };
+  showView('relation');
+  const body = $('relation-body');
+  if (!body) return;
+  body.innerHTML = '<div class="empty">载入中…</div>';
+  let info = null;
+  try {
+    info = await api(`/api/persona/${enc(user)}/${enc(persona)}`);
+    S.summaries[pkey(user, persona)] = info;
+  } catch (e) { /* ignore */ }
+  renderRelationPage(user, persona, info);
+}
+
+/** 渲染关系状态页 */
+function renderRelationPage(user, persona, info) {
+  const body = $('relation-body');
+  if (!body) return;
+  const basics = (info && info.persona_basics) || {};
+  const name = basics.name || persona;
+  const key = pkey(user, persona);
+  // 「记录中」两个来源：本地刚点的 / 服务器说正在记
+  const recording = !!S.recording[key] || !!(info && info.recording);
+  const lastRec = info && info.last_record_at;
+  body.innerHTML = `
+    <div class="profile-hero">
+      <div class="ava ava-xl ${avaClass(persona)}">${esc(name.slice(0, 1))}</div>
+      <div class="profile-name">${esc(name)}</div>
+      <div class="profile-sub">你们的关系</div>
+    </div>
+    <div class="rel-card">${relationHtml(info)}</div>
+    <div class="group">
+      <div class="row"><span>上次记录</span>
+        <span class="row-val col">
+          <span id="last-record-val">${esc(fmtAgo(lastRec))}</span>
+          ${lastRec ? `<span class="dim-sm">${esc(fmtTime(lastRec))}</span>` : ''}
+        </span></div>
+      <div class="row"><span>手动记一次</span>
+        <span class="row-val"><span class="btn-mini${recording ? ' is-busy' : ''}" id="btn-record-now">${recording ? '记录中…' : '记一次'}</span></span></div>
+    </div>
+    <div class="hint">对话${esc(intervalText())}自动记录一次，记录后她会记住聊过的事。<br/>想现在记也可以手动触发，记录完这里会自动刷新。</div>
+  `;
+  const btn = body.querySelector('#btn-record-now');
+  if (btn && !recording) btn.onclick = (e) => recordNow(user, persona, e.target);
+}
+
+/** 关系状态页当前是开着这个角色的话，就地重画（不跳页、不打断） */
+function renderRelationIfOpen(user, persona) {
+  const rp = S.relationPersona;
+  if (!rp || rp.user !== user || rp.persona !== persona) return;
+  if (S.view !== 'relation') return;
+  renderRelationPage(user, persona, S.summaries[pkey(user, persona)]);
+}
+
+/** 资料页开着这个角色的话，也顺手重画（关系阶段可能变了） */
+function renderProfileIfOpen(user, persona) {
+  const pp = S.profilePersona;
+  if (!pp || pp.user !== user || pp.persona !== persona) return;
+  if (S.view !== 'profile') return;
+  renderProfile(user, persona, S.summaries[pkey(user, persona)]);
 }
 
 /**
@@ -687,11 +782,17 @@ function renderProfile(user, persona, info) {
  *
  * **不等**：抽取是一次完整 LLM 调用（几十秒），
  * 所以后端丢到后台跑，这里立刻返回，用户可以继续聊天。
- * 然后轮询 last_record_at，等它变了再更新界面。
+ *
+ * 记完之后怎么知道？**服务端会主动推 record_done**（WS）——
+ * 所以关系状态页会自己刷新，不用退出重进。
+ * 万一 WS 断了，还有 pollRecordDone 兜底。
  */
 async function recordNow(user, persona, btn) {
-  const before = (S.summaries[pkey(user, persona)] || {}).last_record_at || null;
-  if (btn) { btn.textContent = '记录中…'; btn.style.pointerEvents = 'none'; }
+  const key = pkey(user, persona);
+  const before = (S.summaries[key] || {}).last_record_at || null;
+  if (btn) { btn.textContent = '记录中…'; btn.classList.add('is-busy'); btn.style.pointerEvents = 'none'; }
+  S.recording[key] = true;
+  S.recordPending = { user, persona, before, key };
   try {
     const res = await api('/api/session/close', {
       method: 'POST',
@@ -699,39 +800,71 @@ async function recordNow(user, persona, btn) {
     });
     if (res && res.started === false) {
       toast('已经在记录中了', 2500);
-      if (btn) { btn.textContent = '记一次'; btn.style.pointerEvents = ''; }
+      S.recording[key] = false;
+      S.recordPending = null;
+      restoreRecordBtn(btn);
       return;
     }
     toast('开始记录，你可以继续聊', 2200);
-    pollRecordDone(user, persona, before);
+    pollRecordDone(user, persona, before);   // 兜底（WS 正常时它会自己退出）
   } catch (e) {
     toast('记录失败：' + (e.message || ''), 4000);
-    if (btn) { btn.textContent = '记一次'; btn.style.pointerEvents = ''; }
+    S.recording[key] = false;
+    S.recordPending = null;
+    restoreRecordBtn(btn);
   }
 }
 
-/** 轮询直到这次记录完成（last_record_at 变了） */
-async function pollRecordDone(user, persona, before, tries = 60) {
+function restoreRecordBtn(btn) {
+  if (!btn) return;
+  btn.textContent = '记一次';
+  btn.classList.remove('is-busy');
+  btn.style.pointerEvents = '';
+}
+
+/**
+ * 兜底轮询：WS 没推 record_done（比如断线了）时，靠它发现记录完成。
+ *
+ * 判定完成的两个条件缺一不可：
+ *   1. last_record_at 变了 —— marker 写了（= 开始记录的时刻）
+ *   2. recording 变回 false —— 抽取真的跑完了
+ * 只看 1 会**提前误判**成「记好了」（那时候记忆还没抽出来）。
+ */
+async function pollRecordDone(user, persona, before, tries = 40) {
+  const key = pkey(user, persona);
   for (let i = 0; i < tries; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 3000));
+    // 已经被 WS 推送处理过了 → 不用管
+    if (!S.recordPending || S.recordPending.key !== key) return;
     let info = null;
     try {
       info = await api(`/api/persona/${enc(user)}/${enc(persona)}`);
     } catch (e) { continue; }
-    if (info && info.last_record_at && info.last_record_at !== before) {
-      S.summaries[pkey(user, persona)] = info;
-      const val = $('last-record-val');
-      if (val) val.textContent = fmtAgo(info.last_record_at);
-      const btn = $('btn-record-now');
-      if (btn) { btn.textContent = '记一次'; btn.style.pointerEvents = ''; }
-      toast('记好了', 2000);
-      loadConvs();
+    if (!S.recordPending || S.recordPending.key !== key) return;
+    if (info && info.last_record_at && info.last_record_at !== before && !info.recording) {
+      finishRecord(user, persona, info, true);
       return;
     }
   }
-  const btn = $('btn-record-now');
-  if (btn) { btn.textContent = '记一次'; btn.style.pointerEvents = ''; }
+  // 超时：记录可能还在跑，把按钮恢复
+  S.recording[key] = false;
+  if (S.recordPending && S.recordPending.key === key) S.recordPending = null;
+  renderRelationIfOpen(user, persona);
+  restoreRecordBtn($('btn-record-now'));
   toast('记录还没完成，过一会儿再看', 3000);
+}
+
+/** 记录完成后的收尾：更新缓存 + 重画关系状态页 + 刷新会话列表 */
+function finishRecord(user, persona, info, toastIt) {
+  const key = pkey(user, persona);
+  S.recording[key] = false;
+  if (S.recordPending && S.recordPending.key === key) S.recordPending = null;
+  if (info) S.summaries[key] = info;
+  renderRelationIfOpen(user, persona);
+  renderProfileIfOpen(user, persona);
+  restoreRecordBtn($('btn-record-now'));
+  if (toastIt) toast('记好了', 2000);
+  loadConvs();
 }
 
 /* ---------- 她的记忆 ---------- */
@@ -1253,39 +1386,6 @@ function anchorBottom() {
   });
 }
 
-function renderRelation(info) {
-  const card = $('rel-card');
-  if (!card) return;
-  const src = info || S.info;
-  if (!src) { card.innerHTML = ''; return; }
-  const blocks = src.blocks || [];
-  const rel = blocks.find((b) => b.block_type === 'relationship_state');
-  const prof = blocks.find((b) => b.block_type === 'user_profile');
-  let html = '';
-  if (rel) {
-    const f = rel.fields || {};
-    const stageMap = { stranger: '初识', familiar: '熟悉', close: '亲近', deep_bond: '深交' };
-    const stage = stageMap[f.stage] || f.stage || '—';
-    const prog = Math.round((f.stage_progress || 0) * 100);
-    html += `<div class="row"><span class="k">关系</span><span class="v">${esc(stage)}</span></div>`;
-    html += `<div class="row"><span class="k">进展</span><span class="v">${prog}%</span></div>`;
-    html += `<div class="meter"><i style="width:${prog}%"></i></div>`;
-    const mom = f.key_moments || [];
-    if (mom.length) {
-      html += '<div class="moments"><ul>' + mom.slice(-6).map((m) => `<li>${esc(m)}</li>`).join('') + '</ul></div>';
-    }
-  }
-  if (prof) {
-    const f = prof.fields || {};
-    const arr = (v) => (Array.isArray(v) ? v : v ? [v] : []);
-    const p = arr(f.preferences).slice(0, 3);
-    if (p.length) {
-      html += `<div class="row" style="margin-top:8px"><span class="k">偏好</span><span class="v">${esc(p.join('、'))}</span></div>`;
-    }
-  }
-  card.innerHTML = html || '<div class="empty">还没有关系数据</div>';
-}
-
 /* ---------- 历史跳转 ---------- */
 
 function updateHistoryBar() {
@@ -1539,6 +1639,38 @@ function handleWs(m) {
       toast('出错了：' + (m.message || '未知错误'), 4000);
       break;
     }
+    case 'record_done': {
+      // 后台记录跑完了（手动点的 / 空闲自动的都有）
+      // 服务端主动推的 —— 所以关系状态页不用退出重进就会自己刷新。
+      //
+      // 注意：通讯录里可以打开**任意角色**的资料页，
+      // 而 WS 只连着当前在聊的那个角色 —— 所以服务端按 user 推，
+      // 事件里带 persona_id，这里判断是不是当前角色再决定要不要打扰。
+      const u = m.user_id || S.user;
+      const p = m.persona_id || S.persona;
+      const key = pkey(u, p);
+      const isCurrent = (u === S.user && p === S.persona);
+      const wasPending = !!(S.recordPending && S.recordPending.key === key);
+      S.recording[key] = false;
+      if (S.recordPending && S.recordPending.key === key) S.recordPending = null;
+      // 重新拉一次汇总：关系状态、记忆条数、上次记录时间都变了
+      api(`/api/persona/${enc(u)}/${enc(p)}`).then((info) => {
+        S.summaries[key] = info;
+        renderRelationIfOpen(u, p);
+        renderProfileIfOpen(u, p);
+        if (isCurrent) loadConvs();
+      }).catch(() => { /* ignore */ });
+      if (!isCurrent) break;   // 不是当前角色的记录 → 静默刷新就行，不打扰
+      const bits = [];
+      if (m.facts_created) bits.push(`记住了 ${m.facts_created} 件事`);
+      if (m.blocks_updated) bits.push(`关系状态更新了 ${m.blocks_updated} 项`);
+      if (wasPending) {
+        toast(bits.length ? `记好了，${bits.join('，')}` : '记好了', 3000);
+      } else {
+        toast(bits.length ? `刚才那轮已自动记下，${bits.join('，')}` : '刚才那轮已自动记下', 3000);
+      }
+      break;
+    }
     case 'session_closed': {
       const bits = [];
       if (m.facts_created) bits.push(`记住了 ${m.facts_created} 件事`);
@@ -1600,6 +1732,7 @@ $('btn-back-list').onclick = () => showView('messages');
 $('btn-avatar').onclick = () => openProfile(S.user, S.persona);
 $('btn-profile-back').onclick = () => showView('chat');
 $('btn-memory-back').onclick = () => showView('profile');
+$('btn-relation-back').onclick = () => showView('profile');
 $('btn-new-conv').onclick = () => toast('新建会话：还没做', 2500);
 $('btn-conv-search').onclick = () => {
   const bar = $('conv-searchbar');

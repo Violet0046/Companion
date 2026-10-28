@@ -99,6 +99,10 @@ def create_app(
     app.include_router(chat.router)
     app.include_router(memory.router)
 
+    # 记录（抽取记忆）跑完后，服务端**主动推送** record_done 给前端。
+    # 前端收到就刷新关系状态 / 记忆 / 计数——不用「退出重进」才能看到变化。
+    ctx.services.session_close.on_record_done = chat.notify_record_done
+
     @app.exception_handler(PermissionError)
     async def _permission_handler(request: Request, exc: PermissionError):
         """权限错误返回 403（不是 500）。

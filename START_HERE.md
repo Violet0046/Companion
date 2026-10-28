@@ -871,6 +871,89 @@ thinking 807 字符，正文 109 字符且不含 think 标签。
 > 「按钮卡死、界面坏掉」，最难自己发现。
 > 注入一个运行时错误验证过，这个测试确实会红。
 
+## 4.21 关系状态独立页 + 记录完成后自动刷新（2026-10-29）
+
+### 关系状态从「资料页里的一行」变成独立子页面
+
+以前「关系状态」是资料页里一个**点开就展开**的卡片（`#rel-card`），
+现在跟「她的记忆」「聊天记录」一样，是一个**独立子页面** `view-relation`：
+
+```
+资料页 ──► 关系状态页
+             ├─ 关系（初识 / 熟悉 / 亲近 / 深交）
+             ├─ 进展（百分比 + 进度条）
+             ├─ 关键时刻（最近 6 条）
+             ├─ 偏好
+             ├─ 上次记录（多久之前 + 精确到分钟）
+             └─ 手动记一次（记一次 / 记录中…）
+```
+
+**为什么把「上次记录 / 手动记一次」搬过来**：
+记录改的就是关系状态（抽取出来的 block 就是关系状态），
+把它们放在同一个页面里，逻辑才自洽 ——
+「记录」是**手段**，「关系状态」是**结果**。
+
+> `relationHtml(info)` 写成**纯函数**（只认 info，不碰 DOM），
+> 关系状态页和未来的其它入口都能复用，也方便测试。
+
+### 记录完成后怎么自动刷新？（不用退出重进）
+
+**服务端主动推 WS 事件 `record_done`**：
+
+```
+前端点「记一次」
+   └─ POST /api/session/close ──► 后台线程跑抽取（几十秒）
+        │                              │
+        │  前端立刻返回，可以继续聊天    │  抽取完
+        │                              ▼
+        └──────────────────────  on_record_done 回调
+                                       ▼
+                            broadcast(user, persona, record_done)
+                                       ▼
+                            前端收到 → 重新拉汇总 + 重画关系状态页
+```
+
+实现要点：
+
+| 位置 | 干什么 |
+|---|---|
+| `session_close_service.py` | 加 `on_record_done` 回调；`close_session()` 拆成「外壳 + `_close_session_inner`」，外壳负责维护 `_closing` 状态 + 触发回调 |
+| `api/routes/chat.py` | WS **连接注册表**（`_CONNS`）+ `broadcast()` + `notify_record_done()` |
+| `api/server.py` | `create_app()` 里把 `chat.notify_record_done` 挂到 `ctx.services.session_close.on_record_done` |
+| `api/schemas.py` | `PersonaSummary` 加 `recording`（现在是不是正在记录） |
+| `web/app.js` | `case 'record_done'` → 清状态 + 重拉汇总 + 重画关系状态页 |
+
+**踩过的坑（重要）**：
+
+1. **WS 发送要串行化**。主处理循环在发消息、后台线程也在推事件，
+   两个协程同时 `send_json` 会把帧交错，客户端直接解析失败。
+   → 每条连接一个 `asyncio.Lock`（`_Conn.send`）。
+2. **后台线程不能直接 `send_json`**。
+   → `asyncio.run_coroutine_threadsafe(coro, loop)`，
+   并且**先判断当前是不是就在事件循环线程里**（是的话 `create_task`，否则会死锁）。
+3. **推送范围是「用户」而不是「(用户, 角色)」。**
+   通讯录里能打开**任意角色**的资料页 / 关系状态页，
+   而 WS 只连着「当前在聊的那个角色」。
+   如果按 (user, persona) 分组，那么「在通讯录里点开另一个角色手动记一次」
+   就收不到 record_done，页面还是得退出重进。
+   → 注册表按 **user_id** 分组，事件里带 `persona_id`，
+   前端判断是不是当前角色再决定要不要弹提示（不是当前角色就静默刷新）。
+4. **`last_record_at` 不能当"记好了"的判据**。
+   它是 marker 的**写入时间**（= 开始记录的时刻），
+   轮询看到它变了就报"记好了"是**提前误判** —— 那时候记忆还没抽出来。
+   → 判定完成必须**同时**满足：`last_record_at` 变了 **且** `recording` 变回 `false`。
+   （`recording` 就是 `session_close.is_closing()`，两条路径下都准。）
+
+### 回归测试
+
+新增 `tests/test_web_relation_page.py`（24 个测试套件之一）：
+
+- 静态检查：视图 / 函数 / 「上次记录」搬没搬 / `record_done` 有没有处理
+- 后端：后台线程推 `record_done` 能到连接上；`on_record_done` 会被调用；**回调抛异常不影响记录本身**
+- node 真跑：`handleWs({type:'record_done'})` 不抛异常、状态复位、关系状态页自动重画
+
+另外用**真实运行的服务**端到端验过：点「记一次」→ 收到 `record_done` → `recording` 复位。
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

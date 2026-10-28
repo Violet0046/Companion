@@ -20,7 +20,7 @@ import threading
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from companion_ever.application.authz import Authorizer
 from companion_ever.application.chat.conversation_service import ConversationService
@@ -81,6 +81,14 @@ class SessionCloseService:
         self.extraction_graph = extraction_graph
         # 正在进行的记录任务（防止重复触发）
         self._closing: set[tuple[str, str]] = set()
+        # 记录完成后的回调：(user_id, persona_id, report) -> None
+        #
+        # 为什么需要它：记录是**后台线程**跑的，前端是 WebSocket 连着的，
+        # 没有回调的话前端只能靠轮询 last_record_at 猜「记好了没」——
+        # 而 last_record_at 是 marker 的写入时间（= 开始记录的时刻），
+        # 不是「抽取完成」的时刻，轮询会提前误判。
+        # Web 层在这里挂一个广播函数，把 record_done 推给前端。
+        self.on_record_done: Callable[[str, str, "SessionCloseReport"], None] | None = None
 
     # ============ 自动管理 session 边界 ============
 
@@ -172,6 +180,28 @@ class SessionCloseService:
         user_id: str,
         persona_id: str,
     ) -> SessionCloseReport:
+        """会话关闭（对外入口）：维护 running 状态 + 触发完成回调。
+
+        这里做两件事：
+        1. 把 (user_id, persona_id) 放进 _closing —— 这样 is_closing() 在
+           **任何**调用路径下都是准的（后台线程 / Web 直接调用）。
+           前端靠它显示「记录中…」。
+        2. 抽取结束后调用 on_record_done 回调（Web 层推送 record_done 事件），
+           让前端不用退出重进就能看到更新后的关系状态。
+        """
+        key = (user_id, persona_id)
+        self._closing.add(key)
+        try:
+            report = self._close_session_inner(user_id, persona_id)
+        finally:
+            self._closing.discard(key)
+        return report
+
+    def _close_session_inner(
+        self,
+        user_id: str,
+        persona_id: str,
+    ) -> SessionCloseReport:
         """会话关闭：写 marker + 立即抽取（走 extraction_workflow）。
 
         抽取失败不影响 marker（marker 已持久化，下次可重试）。
@@ -228,10 +258,22 @@ class SessionCloseService:
                         reason="; ".join(report.errors)[:200])
                 final_marker_id = 0  # 0 = 已回滚，本次未成功
 
-            return SessionCloseReport(
+            result = SessionCloseReport(
                 marker_id=final_marker_id,
                 extraction=report,
             )
+
+            # 通知外部：记录做完了（Web 层推 record_done 给前端）
+            if self.on_record_done is not None:
+                try:
+                    self.on_record_done(user_id, persona_id, result)
+                except Exception:  # noqa: BLE001 —— 回调失败不能影响记录本身
+                    logger.exception(
+                        "record_done 回调失败: user=%s persona=%s",
+                        user_id, persona_id,
+                    )
+
+            return result
 
 
 __all__ = ["SessionCloseReport", "ExtractionReport", "SessionCloseService"]

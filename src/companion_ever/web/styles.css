@@ -261,7 +261,7 @@ body {
 .drawer-scroll { flex: 1 1 auto; overflow-y: auto; padding: 0 16px 20px; }
 
 .rel-card {
-  margin: 14px 0 4px; padding: 12px 14px;
+  margin: 14px 14px 4px; padding: 12px 14px;
   background: var(--surface); border-radius: var(--radius-sm); font-size: 13px;
 }
 .rel-card .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
@@ -638,10 +638,13 @@ body {
 .row + .row::before { content: ''; position: absolute; left: 16px; right: 0; top: 0;
                        height: 1px; background: var(--line); }
 .row-val { color: var(--text-muted); font-size: 14px; display: flex; align-items: center; gap: 6px; }
+.row-val.col { flex-direction: column; align-items: flex-end; gap: 2px; }
+.dim-sm { font-size: 11.5px; color: var(--text-dim); }
 .chev { color: var(--text-muted); font-size: 16px; line-height: 1; }
 .switch-inline { padding: 0; background: none; border-radius: 0; }
 .btn-mini { background: var(--accent); color: #fff; border-radius: 999px;
             padding: 4px 13px; font-size: 12.5px; font-weight: 600; }
+.btn-mini.is-busy { opacity: .55; }
 
 /* ---------- 底部 Tab ---------- */
 .tabbar {

@@ -119,6 +119,9 @@ class PersonaSummary(BaseModel):
     # 最近一次「记录」（session_close marker）的时间。
     # 前端用它显示"上次记录：3 天前"，并提供手动记一次的入口。
     last_record_at: Optional[str] = None
+    # 现在是不是正在记录中（抽取跑着）。
+    # 前端用它把「记一次」按钮变成「记录中…」，也用来判断记录是否已完成。
+    recording: bool = False
 
 
 class UserOut(BaseModel):

@@ -44,6 +44,10 @@ SHOTS = [
     ("3-me", "showView('me'); renderMe();"),
     ("4-profile", "openProfile(S.user, S.persona)"),
     ("5-memory", "openMemory(S.user, S.persona)"),
+    ("5b-relation", "openRelation(S.user, S.persona)"),
+    ("5c-relation-recording",
+     "S.recording[pkey(S.user, S.persona)] = true;"
+     " renderRelationPage(S.user, S.persona, S.summaries[pkey(S.user, S.persona)])"),
     ("6-chat", "openChat(S.user, S.persona)"),
     ("7-calendar", "openCalendar(S.user, S.persona)"),
 ]

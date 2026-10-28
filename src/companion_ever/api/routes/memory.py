@@ -119,6 +119,8 @@ def persona_summary(
         last_conversation_at=_s(last_at, tz),
         # markers 是时间升序，最后一个就是最近一次记录
         last_record_at=_s(markers[-1].created_at, tz) if markers else None,
+        # 现在正在记录吗？（前端用来显示「记录中…」）
+        recording=ctx.services.session_close.is_closing(user_id, persona_id),
     )
 
 
