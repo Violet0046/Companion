@@ -37,6 +37,11 @@
           <div class="topbar-sub" id="persona-sub">连接中…</div>
         </div>
       </div>
+      <button id="btn-search" class="icon-btn" aria-label="搜索聊天记录">
+        <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
+          <path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/>
+        </svg>
+      </button>
       <button id="btn-drawer" class="icon-btn" aria-label="记忆面板">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
           <path fill="currentColor" d="M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z"/>
@@ -44,7 +49,12 @@
       </button>
     </header>
 
+    <div id="history-bar" class="history-bar hidden">
+      <span id="history-label">正在查看历史聊天</span>
+      <button id="btn-back-live">回到最新</button>
+    </div>
     <main id="chat" class="chat" aria-live="polite"></main>
+    <div id="load-more-hint" class="load-more-hint hidden">向上滑动加载更旧的聊天</div>
 
     <footer class="composer">
       <div class="composer-row">
@@ -74,6 +84,11 @@
         <div id="rel-card" class="rel-card"></div>
 
         <div class="drawer-section">
+          <div class="drawer-label">按日期回溯</div>
+          <div id="date-list" class="date-list"></div>
+        </div>
+
+        <div class="drawer-section">
           <div class="drawer-label">记忆条目 <span id="note-count" class="muted"></span></div>
           <div id="note-filters" class="chip-row"></div>
           <div id="note-list" class="note-list"></div>
@@ -91,6 +106,27 @@
       </div>
     </aside>
 
+  </div>
+
+  <!-- ===== 搜索面板 ===== -->
+  <div id="search-panel" class="search-panel hidden">
+    <div class="search-head">
+      <input id="search-input" type="search" placeholder="搜索聊天记录、她记得的事…"
+             autocomplete="off" enterkeyhint="search" aria-label="搜索">
+      <button id="btn-search-close" class="icon-btn" aria-label="关闭">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="search-tabs">
+      <button class="chip active" data-scope="all">全部</button>
+      <button class="chip" data-scope="messages">聊天记录</button>
+      <button class="chip" data-scope="memories">她记得的</button>
+    </div>
+    <div id="search-results" class="search-results">
+      <div class="empty">输入关键词，搜索过去的聊天和记忆</div>
+    </div>
   </div>
 
   <div id="toast" class="toast hidden"></div>

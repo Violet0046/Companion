@@ -16,7 +16,7 @@ import contextlib
 import socket
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -98,6 +98,12 @@ def create_app(
 
     app.include_router(chat.router)
     app.include_router(memory.router)
+
+    @app.exception_handler(PermissionError)
+    async def _permission_handler(request: Request, exc: PermissionError):
+        """权限错误返回 403（不是 500）。
+        否则前端会看到一个无意义的 500，而不是"你没权限访问这个角色"。"""
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
 
     @app.get("/api/health", include_in_schema=False)
     def health() -> JSONResponse:

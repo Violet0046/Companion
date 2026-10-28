@@ -58,10 +58,30 @@ class MessageOut(BaseModel):
     也可用 include_thinking 参数强制指定。
     """
 
+    id: int = Field(description="消息 id，用作分页游标（before_id / after_id）")
     role: str
     content: str
     created_at: Optional[str] = None
     thinking: Optional[str] = None
+
+
+class DateEntry(BaseModel):
+    """有对话的一天。"""
+
+    date: str
+    count: int
+
+
+class SearchHit(BaseModel):
+    """搜索结果项。"""
+
+    kind: str = Field(description="message | memory")
+    id: str
+    content: str
+    created_at: Optional[str] = None
+    role: Optional[str] = None
+    type: Optional[str] = None
+    importance: Optional[float] = None
 
 
 class SettingsOut(BaseModel):
@@ -103,6 +123,8 @@ __all__ = [
     "NoteOut",
     "BlockOut",
     "MessageOut",
+    "DateEntry",
+    "SearchHit",
     "SettingsOut",
     "SettingsIn",
     "PersonaSummary",

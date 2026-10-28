@@ -300,6 +300,102 @@ class ConversationRepo:
             for r in rows
         ]
 
+    # === 游标分页（微信式无限上翻）===
+
+    def get_page(
+        self,
+        *,
+        user_id: str,
+        persona_id: str,
+        before_id: Optional[int] = None,
+        after_id: Optional[int] = None,
+        date: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[ConversationMessage]:
+        """按游标取一页消息（始终返回时间正序）。
+
+        语义（与微信的上翻加载一致）：
+        - before_id=X → 取 id < X 的最近 limit 条（即「紧跟着 X 上面」）
+        - after_id=X  → 取 id > X 的最近 limit 条（即「从 X 往后」）
+        - 都不给 → 取最新的 limit 条（首次加载）
+        - date 可与其中一个组合（“看某一天”）
+
+        Args:
+            before_id: 游标，取这之前的
+            after_id: 游标，取这之后的
+            date: "YYYY-MM-DD" 形式的日期
+            limit: 最多返回多少条
+        """
+        sql = (
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at "
+            "FROM conversation_log "
+            "WHERE user_id = ? AND persona_id = ? AND role IN ('user', 'assistant')"
+        )
+        params: list = [user_id, persona_id]
+
+        if before_id is not None:
+            sql += " AND id < ?"
+            params.append(before_id)
+            order = "DESC"          # 先取最近的，再反转成正序
+        elif after_id is not None:
+            sql += " AND id > ?"
+            params.append(after_id)
+            order = "ASC"
+        else:
+            order = "DESC"
+
+        if date:
+            sql += " AND created_at LIKE ?"
+            params.append(f"{date}%")
+
+        sql += f" ORDER BY id {order} LIMIT ?"
+        params.append(limit)
+
+        rows = self.conn.execute(sql, params).fetchall()
+        msgs = [row_to_conversation_message(r) for r in rows]
+        return list(reversed(msgs)) if order == "DESC" else msgs
+
+    def list_dates(
+        self, *, user_id: str, persona_id: str,
+    ) -> list[dict]:
+        """列出有对话的日期（降序）+ 每天的消息数。"""
+        rows = self.conn.execute(
+            "SELECT substr(created_at, 1, 10) AS d, COUNT(*) AS n "
+            "FROM conversation_log "
+            "WHERE user_id = ? AND persona_id = ? AND role IN ('user', 'assistant') "
+            "GROUP BY d ORDER BY d DESC",
+            (user_id, persona_id),
+        ).fetchall()
+        return [{"date": r["d"], "count": r["n"]} for r in rows]
+
+    def search(
+        self,
+        *,
+        user_id: str,
+        persona_id: str,
+        patterns: list[str],
+        limit: int = 50,
+    ) -> list[ConversationMessage]:
+        """按多个关键词 OR 搜索消息。
+
+        为什么不用 FTS5：中文可能只有 2 字（“面试”“阳台”），
+        trigram 分词器要求 ≥3 字，而每次扫描整表对个人应用可以接受。
+        大量用户时再换 FTS5（见 START_HERE.md）。
+        """
+        if not patterns:
+            return []
+        where = " OR ".join(["content LIKE ?"] * len(patterns))
+        sql = (
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at "
+            "FROM conversation_log "
+            f"WHERE user_id = ? AND persona_id = ? AND role IN ('user', 'assistant') "
+            f"  AND ({where}) "
+            "ORDER BY id DESC LIMIT ?"
+        )
+        params = [user_id, persona_id] + [f"%{p}%" for p in patterns] + [limit]
+        rows = self.conn.execute(sql, params).fetchall()
+        return [row_to_conversation_message(r) for r in rows]
+
     def get_max_turn_index(self, *, user_id: str, persona_id: str) -> int:
         """返回该 (user, persona) 下最大的 turn_index（没有则 0）。
 

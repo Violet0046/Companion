@@ -16,6 +16,7 @@ from typing import Optional
 from companion_ever.application.authz import Authorizer
 from companion_ever.domain.entities import ConversationMessage
 from companion_ever.infrastructure.persistence.conversation_repo import ConversationRepo
+from companion_ever.utils.text import extract_keywords
 
 
 class ConversationService:
@@ -159,6 +160,51 @@ class ConversationService:
     def list_active_sessions(self) -> list[dict]:
         """列出所有未关闭的 session（系统内部用，不做权限校验）。"""
         return self.conv_repo.list_active_sessions()
+
+    # === 游标分页 / 日期 / 搜索（微信式历史浏览）===
+
+    def get_page(
+        self,
+        user_id: str,
+        persona_id: str,
+        *,
+        before_id: Optional[int] = None,
+        after_id: Optional[int] = None,
+        date: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[ConversationMessage]:
+        """按游标取一页消息（时间正序）。"""
+        self.authorizer.require_persona(user_id, persona_id)
+        return self.conv_repo.get_page(
+            user_id=user_id, persona_id=persona_id,
+            before_id=before_id, after_id=after_id, date=date, limit=limit,
+        )
+
+    def list_dates(self, user_id: str, persona_id: str) -> list[dict]:
+        """有对话的日期列表（降序）+ 每天消息数。"""
+        self.authorizer.require_persona(user_id, persona_id)
+        return self.conv_repo.list_dates(user_id=user_id, persona_id=persona_id)
+
+    def search_messages(
+        self,
+        user_id: str,
+        persona_id: str,
+        query: str,
+        limit: int = 50,
+    ) -> list[ConversationMessage]:
+        """搜索对话记录。
+
+        关键词抽取重用 utils/text.py（与记忆检索同一套逻辑）。
+        """
+        self.authorizer.require_persona(user_id, persona_id)
+        short_kw, long_kw = extract_keywords(query)
+        patterns = short_kw + long_kw
+        if not patterns:
+            return []
+        return self.conv_repo.search(
+            user_id=user_id, persona_id=persona_id,
+            patterns=patterns, limit=limit,
+        )
 
     def get_max_turn_index(self, user_id: str, persona_id: str) -> int:
         """当前最大的 turn_index（没有则 0）——用来算下一轮的 turn_index。"""

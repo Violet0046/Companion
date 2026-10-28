@@ -126,6 +126,7 @@ class UserRepo:
             )
 
         personas.append(persona_id)
+        # 原子写（避免与其他进程的 read-modify-write 竞态）
         self.conn.execute(
             "UPDATE user SET persona_ids = ? WHERE id = ?",
             (",".join(personas), user_id),

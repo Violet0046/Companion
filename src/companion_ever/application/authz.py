@@ -25,15 +25,40 @@ class Authorizer:
     def require_persona(self, user_id: str, persona_id: str) -> None:
         """校验 user_id 存在且拥有 persona_id。
 
+        主动优先使用**权威来源**：persona_basics note 存在 → 这个 persona 确实存在。
+        `user.persona_ids` 只是一个**反规范化的 CSV 缓存**，可能与真实数据漂移，
+        而一旦漂移，整个系统就会报“用户不拥有 persona”——即使用户之前
+        真的用过这个 persona。
+
         Raises:
             PermissionError: user 不存在 / 不拥有 persona
         """
         if not self.user_repo.exists(user_id):
             raise PermissionError(f"User '{user_id}' 不存在")
-        if not self.user_repo.owns_persona(user_id, persona_id):
-            raise PermissionError(
-                f"User '{user_id}' 不拥有 persona '{persona_id}'"
+        if self.user_repo.owns_persona(user_id, persona_id):
+            return
+        # CSV 缓存不一致 → 用权威来源再确认一次
+        if self._persona_exists_in_data(user_id, persona_id):
+            return
+        raise PermissionError(
+            f"User '{user_id}' 不拥有 persona '{persona_id}'"
+        )
+
+    def _persona_exists_in_data(self, user_id: str, persona_id: str) -> bool:
+        """权威判定：这个 (user, persona) 真的有数据吗。"""
+        if self.note_repo is None:
+            return False
+        try:
+            from companion_ever.domain.enums import NoteType
+            notes = self.note_repo.find(
+                user_id=user_id,
+                persona_id=persona_id,
+                types=[NoteType.PERSONA_BASICS],
+                limit=1,
             )
+            return bool(notes)
+        except Exception:
+            return False
 
     def require_note_owner(self, note_id: str, user_id: str) -> None:
         """校验 note 存在且属于 user。

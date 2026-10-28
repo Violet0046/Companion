@@ -28,6 +28,7 @@ from companion_ever.cli.maintain_cmd import (
     cmd_backup,
     cmd_clean_history,
     cmd_clean_quit_notes,
+    cmd_repair_csv,
     cmd_restore_thinking,
     cmd_strip_think,
 )
@@ -348,6 +349,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="只报告会改什么，不实际改动",
     )
 
+    m_repair = maint_sub.add_parser(
+        "repair-csv",
+        help="修复 user.persona_ids 与真实数据不一致",
+    )
+
     m_restore = maint_sub.add_parser(
         "restore-thinking",
         help="从备份里把历史思考过程恢复到 thinking_log",
@@ -413,6 +419,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_backup(args)
         elif args.maint_cmd == "restore-thinking":
             return cmd_restore_thinking(args)
+        elif args.maint_cmd == "repair-csv":
+            return cmd_repair_csv(args)
         else:
             print("[FAIL] 未知 maintain 子命令")
             return 1

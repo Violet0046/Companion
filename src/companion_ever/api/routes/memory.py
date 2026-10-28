@@ -18,9 +18,11 @@ from companion_ever.app import AppContext
 from companion_ever.api.deps import check_pin, resolve_target
 from companion_ever.api.schemas import (
     BlockOut,
+    DateEntry,
     MessageOut,
     NoteOut,
     PersonaSummary,
+    SearchHit,
     SettingsIn,
     SettingsOut,
     UserOut,
@@ -169,12 +171,26 @@ def list_history(
     persona_id: str,
     x_pin: str = Header(default=""),
     limit: int = Query(default=50, ge=1, le=500),
+    before_id: Optional[int] = Query(
+        default=None, description="取这之前的（上翻加载）",
+    ),
+    after_id: Optional[int] = Query(
+        default=None, description="取这之后的（从某条往后追）",
+    ),
+    date: Optional[str] = Query(
+        default=None, description="只看某一天（YYYY-MM-DD）",
+    ),
     include_thinking: Optional[str] = Query(
         default=None,
         description="auto（跟随用户设置）/ 1 强制包含 / 0 强制不包含",
     ),
 ) -> list[MessageOut]:
-    """最近对话（时间正序，已过滤掉 session_close marker）。
+    """按游标分页的对话历史（时间正序）。
+
+    - 不传游标 → 最新的 limit 条（首次加载）
+    - before_id → 紧跟着它上面的 limit 条（上翻）
+    - after_id → 从它往后的 limit 条（搜索结果跳转）
+    - date → 只看某天
 
     思考过程（thinking）默认跟随用户的 show_thinking 设置；
     此到此，**prompt 里从不会出现 think 内容**（它另存在 thinking_log）。
@@ -185,8 +201,9 @@ def list_history(
     if include_thinking is not None:
         want_thinking = include_thinking not in ("0", "false", "off", "no")
 
-    messages = ctx.services.conversation.get_recent_messages(
-        user_id=user_id, persona_id=persona_id, limit=limit,
+    messages = ctx.services.conversation.get_page(
+        user_id=user_id, persona_id=persona_id,
+        before_id=before_id, after_id=after_id, date=date, limit=limit,
     )
 
     thinking_map: dict[int, str] = {}
@@ -198,6 +215,7 @@ def list_history(
 
     return [
         MessageOut(
+            id=m.id,
             role=m.role,
             content=m.content,
             created_at=_s(m.created_at),
@@ -205,6 +223,62 @@ def list_history(
         )
         for m in messages
     ]
+
+
+# ============ 历史检索（微信式）============
+
+@router.get("/api/persona/{user_id}/{persona_id}/dates", response_model=list[DateEntry])
+def list_dates(
+    request: Request,
+    user_id: str,
+    persona_id: str,
+    x_pin: str = Header(default=""),
+) -> list[DateEntry]:
+    """有对话的日期（降序）+ 每天的消息数。"""
+    ctx, _ = _ctx_and_cfg(request, x_pin)
+    return [
+        DateEntry(date=d["date"], count=d["count"])
+        for d in ctx.services.conversation.list_dates(user_id, persona_id)
+    ]
+
+
+@router.get("/api/persona/{user_id}/{persona_id}/search", response_model=list[SearchHit])
+def search_history(
+    request: Request,
+    user_id: str,
+    persona_id: str,
+    q: str = Query(description="关键词"),
+    scope: str = Query(default="all", description="all | messages | memories"),
+    limit: int = Query(default=50, ge=1, le=200),
+    x_pin: str = Header(default=""),
+) -> list[SearchHit]:
+    """搜索对话记录 + 记忆条目。
+
+    关键词抽取与记忆检索同一套逻辑（utils/text.py）。
+    """
+    ctx, _ = _ctx_and_cfg(request, x_pin)
+    q = (q or "").strip()
+    if not q:
+        return []
+
+    hits: list[SearchHit] = []
+
+    if scope in ("all", "messages"):
+        for m in ctx.services.conversation.search_messages(user_id, persona_id, q, limit=limit):
+            hits.append(SearchHit(
+                kind="message", id=str(m.id), content=m.content,
+                created_at=m.created_at, role=m.role,
+            ))
+
+    if scope in ("all", "memories"):
+        for n in ctx.services.note.search_notes(user_id, persona_id, q, limit=limit):
+            content = n.content if isinstance(n.content, str) else json.dumps(n.content, ensure_ascii=False)
+            hits.append(SearchHit(
+                kind="memory", id=n.id, content=content,
+                created_at=None, type=n.type.value, importance=n.importance,
+            ))
+
+    return hits[: limit * 2]
 
 
 # ============ 设置 ============

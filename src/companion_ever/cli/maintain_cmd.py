@@ -140,6 +140,59 @@ def cmd_backup(args) -> int:
         ctx.conn.close()
 
 
+# ============ maintain repair-csv ============
+
+def cmd_repair_csv(args) -> int:
+    """修复 user.persona_ids 与真实数据不一致的情况。
+
+    背景：`user.persona_ids` 是一个**反规范化的 CSV 缓存**，但却是授权检查的
+    依赖它。一旦漂移（如并发写入、手工改过数据库），整个系统就会报
+    "用户不拥有 persona"，即使用户之前真的用过。
+
+    这个命令扫描所有有数据的 (user, persona) 组合，把 CSV 补回去。
+    """
+    from companion_ever.cli import _build_app
+
+    ctx = _build_app(args.db)
+    try:
+        conn = ctx.conn
+        pairs = conn.execute(
+            "SELECT DISTINCT user_id, persona_id FROM ("
+            "  SELECT user_id, persona_id FROM note"
+            "  UNION SELECT user_id, persona_id FROM conversation_log"
+            "  UNION SELECT user_id, persona_id FROM memory_block"
+            ")"
+        ).fetchall()
+
+        fixed = 0
+        for p in pairs:
+            uid, pid = p["user_id"], p["persona_id"]
+            row = conn.execute(
+                "SELECT persona_ids FROM user WHERE id = ?", (uid,)
+            ).fetchone()
+            if row is None:
+                print(f"  [skip] 用户 '{uid}' 不存在（有数据但没有 user 行）")
+                continue
+            current = [x.strip() for x in (row["persona_ids"] or "").split(",") if x.strip()]
+            if pid in current:
+                continue
+            current.append(pid)
+            conn.execute(
+                "UPDATE user SET persona_ids = ? WHERE id = ?",
+                (",".join(current), uid),
+            )
+            print(f"  [fix] {uid} 的 persona_ids 补上 '{pid}'")
+            fixed += 1
+
+        if fixed:
+            print(f"[OK] 修复了 {fixed} 个用户的 persona_ids")
+        else:
+            print("[OK] persona_ids 与真实数据一致，无需修复")
+        return 0
+    finally:
+        ctx.conn.close()
+
+
 # ============ maintain restore-thinking ============
 
 def cmd_restore_thinking(args) -> int:
@@ -465,6 +518,7 @@ def cmd_clean_quit_notes(args) -> int:
 
 __all__ = [
     "cmd_strip_think",
+    "cmd_repair_csv",
     "cmd_restore_thinking",
     "cmd_clean_history",
     "cmd_clean_quit_notes",
