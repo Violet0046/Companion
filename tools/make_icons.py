@@ -3,7 +3,7 @@ import struct
 import zlib
 from pathlib import Path
 
-OUT = Path("src/companion_ever/web")
+OUT = Path(__file__).resolve().parent.parent / "src" / "companion_ever" / "web"
 
 
 def write_png(path, w, h, pixels):
