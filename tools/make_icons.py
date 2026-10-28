@@ -75,7 +75,7 @@ def make_icon(size):
     return rows
 
 
-for sz in (192, 512):
+for sz in (180, 192, 512):
     pixels = make_icon(sz)
     path = OUT / ("icon-%d.png" % sz)
     write_png(path, sz, sz, pixels)
