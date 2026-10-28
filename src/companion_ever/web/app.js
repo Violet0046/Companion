@@ -375,7 +375,8 @@ function renderMsg(role, content, thinking, createdAt, id) {
   el.className = 'msg ' + (role === 'user' ? 'me' : 'them');
   if (id) el.dataset.id = id;
   const text = document.createElement('div');
-  text.textContent = content;
+  text.className = 'body';
+  text.innerHTML = renderMarkdown(content);
   el.appendChild(text);
 
   if (thinking && S.showThinking) {
@@ -388,6 +389,64 @@ function renderMsg(role, content, thinking, createdAt, id) {
     el.appendChild(st);
   }
   return el;
+}
+
+/* ---------- Markdown 渲染（零依赖 / 离线可用 / XSS 安全） ---------- */
+
+/**
+ * 为什么自己写而不用 marked.js：
+ * - 零构建、零 CDN —— 局域网、离线都要能打开，不能依赖外网
+ * - LLM 输出是不可信输入，必须自己保证不注入 HTML
+ *
+ * 支持：粗体、*斜体*、~~删除线~~、`行内代码`、无序/有序列表、换行
+ * 不支持：标题、代码块、链接、图片（伴侣聊天用不上，少一个 XSS 面）
+ */
+function renderInlineMd(text) {
+  // 行内代码先摘出来，里面不做任何替换
+  const codes = [];
+  let s = text.replace(/`([^`\n]+)`/g, (m, c) => {
+    codes.push(c);
+    return '\u0000C' + (codes.length - 1) + '\u0000';
+  });
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  // 注意：中文不属于 \w，所以边界不能用 \w 判断（否则中文里的 *斜体* 匹配不上）
+  s = s.replace(/(^|[^*\s])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  s = s.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+  // 注意：codes[i] 在摘出来时就已经转义过了，这里不能再 esc 一次（否则 &lt; 变 &amp;lt;）
+  s = s.replace(/\u0000C(\d+)\u0000/g, (m, i) => '<code>' + codes[+i] + '</code>');
+  return s;
+}
+
+function renderMarkdown(src) {
+  const lines = esc(src).replace(/\r\n?/g, '\n').split('\n');
+  const blocks = [];
+  let para = [];
+  let list = null;
+  let items = [];
+
+  const flushPara = () => {
+    if (para.length) { blocks.push(para.map(renderInlineMd).join('<br>')); para = []; }
+  };
+  const flushList = () => {
+    if (list) {
+      blocks.push('<' + list + '>' + items.map((t) => '<li>' + renderInlineMd(t) + '</li>').join('') + '</' + list + '>');
+      list = null; items = [];
+    }
+  };
+
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '');
+    const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+    const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (ul) { flushPara(); if (list !== 'ul') { flushList(); list = 'ul'; } items.push(ul[1]); continue; }
+    if (ol) { flushPara(); if (list !== 'ol') { flushList(); list = 'ol'; } items.push(ol[1]); continue; }
+    flushList();
+    para.push(line);
+  }
+  flushPara();
+  flushList();
+  // 段落之间用 \n 分隔（父元素是 pre-wrap，会渲染成换行）
+  return blocks.join('\n');
 }
 
 /* ---------- 思考过程 ---------- */
@@ -725,10 +784,14 @@ function handleWs(m) {
         if (think && S.showThinking) {
           S.streamEl.insertBefore(buildThinkBlock(think), st);
         }
+        // 流式期间是纯文本，收尾时升级成 markdown 渲染
+        // 注意：入库/进内存的必须是**原始文本**（含 ** 标记），不能是渲染后的
+        const rawText = S.streamEl.firstChild.textContent;
+        S.streamEl.firstChild.innerHTML = renderMarkdown(rawText);
         // 同步进 S.messages（保持内存态一致）
         S.messages.push({
           id: Date.now(), role: 'assistant',
-          content: S.streamEl.firstChild.textContent,
+          content: rawText,
           thinking: think,
           created_at: new Date().toISOString(),
         });
