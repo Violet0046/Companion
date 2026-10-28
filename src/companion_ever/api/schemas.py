@@ -51,11 +51,29 @@ class BlockOut(BaseModel):
 
 
 class MessageOut(BaseModel):
-    """一条历史消息。"""
+    """一条历史消息。
+
+    thinking: 模型的思考过程（仅 assistant 消息可能有）。
+    是否返回由用户的 show_thinking 设置控制，
+    也可用 include_thinking 参数强制指定。
+    """
 
     role: str
     content: str
     created_at: Optional[str] = None
+    thinking: Optional[str] = None
+
+
+class SettingsOut(BaseModel):
+    """用户设置。"""
+
+    show_thinking: bool = True
+
+
+class SettingsIn(BaseModel):
+    """修改用户设置。"""
+
+    show_thinking: bool = True
 
 
 class PersonaSummary(BaseModel):
@@ -85,6 +103,8 @@ __all__ = [
     "NoteOut",
     "BlockOut",
     "MessageOut",
+    "SettingsOut",
+    "SettingsIn",
     "PersonaSummary",
     "UserOut",
 ]

@@ -82,6 +82,26 @@ def strip_format_prefix(content: str) -> tuple[str, int]:
     return text, layers
 
 
+_THINK_BLOCK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def extract_thinking(text: str) -> tuple[str, str | None]:
+    """从 LLM 回复里拆出 <think> 块。
+
+    Returns:
+        (去掉 think 的正文, think 原文 or None)
+
+    用途：思考过程要保存到 thinking_log（给用户看），
+    正文要进 conversation_log（给模型看）。
+    """
+    blocks = _THINK_BLOCK_RE.findall(text)
+    if not blocks:
+        return text, None
+    body = _THINK_BLOCK_RE.sub("", text).strip()
+    think = "\n\n".join(b.strip() for b in blocks if b.strip())
+    return body, (think or None)
+
+
 def normalize(text: str) -> str:
     """去掉标点与空白，只保留实义字符。"""
     return "".join(
@@ -170,6 +190,7 @@ def keyword_hit_ratio(content: str, keywords: Iterable[str]) -> float:
 
 __all__ = [
     "normalize",
+    "extract_thinking",
     "strip_format_prefix",
     "extract_keywords",
     "all_keywords",

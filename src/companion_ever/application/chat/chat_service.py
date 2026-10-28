@@ -22,25 +22,11 @@ import time as _time
 from collections.abc import Iterator
 
 from companion_ever.application.chat.conversation_service import ConversationService
+from companion_ever.application.chat.assistant_reply import split_assistant_reply
 from companion_ever.application.chat.prompt_service import PromptService
-from companion_ever.application.llm_json import strip_thinking
-from companion_ever.utils.text import strip_format_prefix
+
 from companion_ever.infrastructure.ai.llm_client import LLMClient
 from companion_ever.infrastructure.trace import trace_scope
-
-
-def _clean_assistant_reply(text: str) -> str:
-    """清理 assistant 回复再入库。
-
-    两份清理：
-    1. <think> 块（推理模型的思考过程）——对后续对话没价值，
-       却占掉历史 token 的 90%+，还会污染模型的上下文。
-    2. 模仿旧格式的前缀（"[2026-09-29 11:14:12] assistant: "）——
-       模型看了几百轮 "[时间戳] 内容" 的历史格式后学会了它，
-       开始自己的回复也加上前缀。入库时剔掉。
-    """
-    stripped, _ = strip_format_prefix(text)
-    return strip_thinking(stripped)
 
 
 class ChatService:
@@ -95,13 +81,23 @@ class ChatService:
                 role="user",
                 content=user_input,
             )
-            self.conversation_service.log_turn(
+            body, think = split_assistant_reply(response_text)
+            msg_id = self.conversation_service.log_turn(
                 user_id=user_id,
                 persona_id=persona_id,
                 turn_index=next_turn,
                 role="assistant",
-                content=_clean_assistant_reply(response_text),
+                content=body,
             )
+            if think:
+                # 思考过程另存到 thinking_log（给用户看，不进 prompt）
+                self.conversation_service.log_thinking(
+                    message_id=msg_id,
+                    user_id=user_id,
+                    persona_id=persona_id,
+                    turn_index=next_turn,
+                    content=think,
+                )
             tr.step(
                 "db.log_turn",
                 ms=(_time.perf_counter() - _t0) * 1000,

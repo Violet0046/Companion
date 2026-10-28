@@ -32,10 +32,12 @@ def _make_ctx(db_path: str, llm_response: str = "回复内容"):
     from companion_ever.application.memory.note_service import NoteService
     from companion_ever.application.persona.block_service import BlockService
     from companion_ever.application.persona.persona_service import PersonaService
+    from companion_ever.application.setting_service import SettingService
     from companion_ever.infrastructure.persistence.block_repo import BlockRepo
     from companion_ever.infrastructure.persistence.conversation_repo import ConversationRepo
     from companion_ever.infrastructure.persistence.db import init_db
     from companion_ever.infrastructure.persistence.note_repo import NoteRepo
+    from companion_ever.infrastructure.persistence.setting_repo import SettingRepo
     from companion_ever.infrastructure.persistence.user_repo import UserRepo
     from companion_ever.app import Repos, Services, Workflows, AppContext
     from companion_ever.workflows import build_chat_graph, build_extraction_graph
@@ -50,6 +52,7 @@ def _make_ctx(db_path: str, llm_response: str = "回复内容"):
     )
 
     conn = init_db(db_path)
+    setting_repo = SettingRepo(conn)
     user_repo = UserRepo(conn)
     note_repo = NoteRepo(conn)
     block_repo = BlockRepo(conn)
@@ -60,6 +63,7 @@ def _make_ctx(db_path: str, llm_response: str = "回复内容"):
     persona_svc = PersonaService(user_repo, block_repo, note_svc, authorizer)
     conv_svc = ConversationService(authorizer, conv_repo)
     retrieval_svc = RetrievalService(note_repo, authorizer, cfg.retrieval)
+    settings_svc = SettingService(authorizer, setting_repo)
     prompt_svc = PromptService(
         authorizer, conv_svc, block_svc, note_svc, retrieval_svc,
         cfg.tz_offset_hours, cfg.recent_message_limit,
@@ -90,6 +94,7 @@ def _make_ctx(db_path: str, llm_response: str = "回复内容"):
         persona_edit=None, conversation=conv_svc, retrieval=retrieval_svc,
         prompt=prompt_svc, chat=chat_svc, extraction=extraction_svc,
         session_close=close_svc,
+        settings=settings_svc,
     )
     workflows = Workflows(chat=chat_graph, extraction=extraction_graph)
     return AppContext(

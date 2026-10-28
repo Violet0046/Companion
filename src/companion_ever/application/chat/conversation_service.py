@@ -111,6 +111,38 @@ class ConversationService:
 
     # === 读取（5 个） ===
 
+    def log_thinking(
+        self,
+        *,
+        message_id: int,
+        user_id: str,
+        persona_id: str,
+        turn_index: int,
+        content: str,
+    ) -> int:
+        """记录一条思考过程。"""
+        self.authorizer.require_persona(user_id, persona_id)
+        return self.conv_repo.log_thinking(
+            message_id=message_id, user_id=user_id, persona_id=persona_id,
+            turn_index=turn_index, content=content,
+        )
+
+    def get_thinking_map(
+        self, *, user_id: str, persona_id: str, message_ids: list[int],
+    ) -> dict[int, str]:
+        """批量取思考记录 {message_id: think}"""
+        self.authorizer.require_persona(user_id, persona_id)
+        return self.conv_repo.get_thinking_map(
+            user_id=user_id, persona_id=persona_id, message_ids=message_ids,
+        )
+
+    def delete_all_thinking(self, *, user_id: str, persona_id: str) -> int:
+        """删除全部思考记录。"""
+        self.authorizer.require_persona(user_id, persona_id)
+        return self.conv_repo.delete_all_thinking(
+            user_id=user_id, persona_id=persona_id,
+        )
+
     def delete_session_close(self, marker_id: int) -> bool:
         """删除一个 session_close marker（抽取失败时回滚）。"""
         return self.conv_repo.delete_session_close(marker_id)

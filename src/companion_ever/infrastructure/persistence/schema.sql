@@ -99,6 +99,43 @@ CREATE TABLE IF NOT EXISTS conversation_log (
 CREATE INDEX IF NOT EXISTS idx_log_user_persona
     ON conversation_log(user_id, persona_id, turn_index);
 
+-- === 思考记录表 ===
+-- 用途：保存推理模型的 <think>...</think> 思考过程，与 conversation_log 一一对应。
+--
+-- 为什么分开存：
+--   conversation_log 的内容要送进 prompt（模型看的），思考过程是纯污染
+--   （占历史 token 的 90%+）；但它对用户展示很有价值（能看到"她在想什么"）。
+--   同一份数据两种用途 → 必须分开存。
+--
+-- 为什么不用第二张完整的 conversation_log：
+--   这里只多一个 content 列，其余元数据都能从 conversation_log 派生，
+--   不需要维护两套 UNIQUE 约束，也不会两路写入失步。
+CREATE TABLE IF NOT EXISTS thinking_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id  INTEGER NOT NULL REFERENCES conversation_log(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL REFERENCES user(id),
+    persona_id  TEXT NOT NULL,
+    turn_index  INTEGER NOT NULL,
+    content     TEXT NOT NULL,          -- 原始 <think>...</think> 内容
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_thinking_user
+    ON thinking_log(user_id, persona_id, turn_index);
+
+-- === 用户设置表 ===
+-- 用途：持久化用户的个性偏好（每个 persona 独立）。
+-- 目前只有 show_thinking：控制界面是否展示模型的思考过程。
+-- 数据两边都存着（干净正文 + 思考记录），这里只决定"给不给你看"。
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id        TEXT NOT NULL REFERENCES user(id),
+    persona_id     TEXT NOT NULL,
+    show_thinking  INTEGER NOT NULL DEFAULT 1,   -- 1 = 界面展示思考过程
+    updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, persona_id)
+);
+
 -- === FTS5 全文检索虚拟表 ===
 -- 用途：对 note.content 做关键词搜索
 CREATE VIRTUAL TABLE IF NOT EXISTS note_fts USING fts5(

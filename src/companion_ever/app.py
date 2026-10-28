@@ -34,12 +34,14 @@ from companion_ever.application.memory.note_service import NoteService
 from companion_ever.application.persona.block_service import BlockService
 from companion_ever.application.persona.persona_edit_service import PersonaEditService
 from companion_ever.application.persona.persona_service import PersonaService
+from companion_ever.application.setting_service import SettingService
 from companion_ever.config import AppConfig
 from companion_ever.infrastructure.ai.llm_client import LLMClient, create_llm_client
 from companion_ever.infrastructure.persistence.block_repo import BlockRepo
 from companion_ever.infrastructure.persistence.conversation_repo import ConversationRepo
 from companion_ever.infrastructure.persistence.db import init_db
 from companion_ever.infrastructure.persistence.note_repo import NoteRepo
+from companion_ever.infrastructure.persistence.setting_repo import SettingRepo
 from companion_ever.infrastructure.persistence.user_repo import UserRepo
 from companion_ever.infrastructure.trace import TraceStore, default_trace_dir, set_default_store
 from companion_ever.workflows import build_chat_graph, build_extraction_graph
@@ -65,6 +67,7 @@ class Services:
     persona_edit: PersonaEditService
     conversation: ConversationService
     retrieval: RetrievalService
+    settings: SettingService
     prompt: PromptService
     chat: ChatService
     extraction: ExtractionService
@@ -106,6 +109,7 @@ def build_app(cfg: AppConfig) -> AppContext:
         block=BlockRepo(conn),
         conversation=ConversationRepo(conn),
     )
+    setting_repo = SettingRepo(conn)
 
     # 3. LLM client
     llm = create_llm_client(cfg.llm)
@@ -120,6 +124,7 @@ def build_app(cfg: AppConfig) -> AppContext:
     persona_edit_svc = PersonaEditService(note_svc, llm)
     conversation_svc = ConversationService(authorizer, repos.conversation)
     retrieval_svc = RetrievalService(repos.note, authorizer, cfg.retrieval)
+    setting_svc = SettingService(authorizer, setting_repo)
     prompt_svc = PromptService(
         authorizer,
         conversation_svc,
@@ -159,6 +164,7 @@ def build_app(cfg: AppConfig) -> AppContext:
         persona_edit=persona_edit_svc,
         conversation=conversation_svc,
         retrieval=retrieval_svc,
+        settings=setting_svc,
         prompt=prompt_svc,
         chat=chat_svc,
         extraction=extraction_svc,

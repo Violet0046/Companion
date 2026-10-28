@@ -287,6 +287,68 @@ prompt 里历史消息的格式是 `[时间戳] 内容`，模型看了几百轮�
 耗时 180 秒 = `OPENAI_TIMEOUT` 60s × openai SDK 默认重试 2 次。
 **抽取这一步以后应该异步化**（用户不应该等它）。
 
+## 4.9 思考过程分表存储（2026-10-28）
+
+### 核心问题
+
+conversation_log 的内容要**同时满足两个相反的需求**：
+
+| 用途 | 对 think 的态度 | 为什么 |
+|---|---|---|
+| 送进 prompt（模型看） | **绝对不能要** | 占历史 token 的 90%+，还污染模型上下文 |
+| 展示给用户 | **很有价值** | 能看到"她在想什么"，是体验感的一部分 |
+
+一份数据两种用途 → 必须分开存。
+
+### 实现：一张表 + 一张薄表（不是两张完整表）
+
+```
+conversation_log   —— 只存干净正文  → 送 prompt + 存档
+thinking_log       —— 只存思考过程  → 只给用户看
+                     通过 message_id 关联，不重复存 user_id/persona_id/turn_index/created_at
+user_settings      —— 存展示偏好（show_thinking）
+```
+
+为什么不用第二张完整的 conversation_log：
+- 不需要维护两套 UNIQUE 约束
+- 不会两路写入失步
+- **隐私：一条 SQL 清空所有思考记录**
+
+### 规则：数据两边都存，设置只决定"给不给你看"”
+
+这样用户任何时候切换开关都不会丢历史。
+
+### 接口
+
+```bash
+# 读设置（默认 show_thinking=true）
+GET /api/settings/{user}/{persona}
+
+# 改设置
+PUT /api/settings/{user}/{persona}  {"show_thinking": false}
+
+# 读历史（思考过程默认跟随设置）
+GET /api/persona/{user}/{persona}/history?limit=50
+GET /api/persona/{user}/{persona}/history?include_thinking=1   # 强制包含
+GET /api/persona/{user}/{persona}/history?include_thinking=0   # 强制不包含
+```
+
+### 命令
+
+```powershell
+# 从备份里恢复历史思考过程到 thinking_log
+companion-cli maintain restore-thinking --source memory/companion.db.bak-20261027-232944 --user yike --persona 柳如烟
+```
+
+已执行：恢复 **59 条 / 88,528 字符**（跳过 9 条 = 已删的 /quit 轮次）。
+
+### 测试
+
+`tests/test_thinking_split.py` 守着三个约定：
+1. conversation_log 里没有 think / 模仿前缀
+2. thinking_log 里有思考过程
+3. prompt 里绝对没有 think
+
 ## 5. 下一步建议（按"手机上真能用"倒推）
 
 ### 阶段 1：让手机能聊（最高优先级）

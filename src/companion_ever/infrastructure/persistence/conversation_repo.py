@@ -184,6 +184,58 @@ class ConversationRepo:
         rows = self.conn.execute(sql, params).fetchall()
         return [row_to_conversation_message(r) for r in reversed(rows)]
 
+    # === thinking_log ===
+
+    def log_thinking(
+        self,
+        *,
+        message_id: int,
+        user_id: str,
+        persona_id: str,
+        turn_index: int,
+        content: str,
+    ) -> int:
+        """记录一条思考过程（与对应的 assistant 消息关联）。"""
+        cur = self.conn.execute(
+            "INSERT INTO thinking_log "
+            "(message_id, user_id, persona_id, turn_index, content) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (message_id, user_id, persona_id, turn_index, content),
+        )
+        return cur.lastrowid
+
+    def get_thinking_map(
+        self,
+        *,
+        user_id: str,
+        persona_id: str,
+        message_ids: list[int],
+    ) -> dict[int, str]:
+        """批量取思考记录，返回 {message_id: think_content}。"""
+        if not message_ids:
+            return {}
+        out: dict[int, str] = {}
+        CHUNK = 400
+        for i in range(0, len(message_ids), CHUNK):
+            chunk = message_ids[i : i + CHUNK]
+            marks = ",".join("?" * len(chunk))
+            rows = self.conn.execute(
+                f"SELECT message_id, content FROM thinking_log "
+                f"WHERE user_id = ? AND persona_id = ? AND message_id IN ({marks})",
+                (user_id, persona_id, *chunk),
+            ).fetchall()
+            for r in rows:
+                out[int(r["message_id"])] = r["content"]
+        return out
+
+    def delete_all_thinking(self, *, user_id: str, persona_id: str) -> int:
+        """删除该 persona 的全部思考记录（隐私用途）。"""
+        cur = self.conn.execute(
+            "DELETE FROM thinking_log WHERE user_id = ? AND persona_id = ?",
+            (user_id, persona_id),
+        )
+        return cur.rowcount
+
     def delete_session_close(self, marker_id: int) -> bool:
         """删除一个 session_close marker（抽取失败时回滚用）。
 

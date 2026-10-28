@@ -21,6 +21,8 @@ from companion_ever.api.schemas import (
     MessageOut,
     NoteOut,
     PersonaSummary,
+    SettingsIn,
+    SettingsOut,
     UserOut,
 )
 from companion_ever.domain.enums import NoteType
@@ -167,16 +169,71 @@ def list_history(
     persona_id: str,
     x_pin: str = Header(default=""),
     limit: int = Query(default=50, ge=1, le=500),
+    include_thinking: Optional[str] = Query(
+        default=None,
+        description="auto（跟随用户设置）/ 1 强制包含 / 0 强制不包含",
+    ),
 ) -> list[MessageOut]:
-    """最近对话（时间正序，已过滤掉 session_close marker）。"""
+    """最近对话（时间正序，已过滤掉 session_close marker）。
+
+    思考过程（thinking）默认跟随用户的 show_thinking 设置；
+    此到此，**prompt 里从不会出现 think 内容**（它另存在 thinking_log）。
+    """
     ctx, _ = _ctx_and_cfg(request, x_pin)
+
+    want_thinking = ctx.services.settings.get_show_thinking(user_id, persona_id)
+    if include_thinking is not None:
+        want_thinking = include_thinking not in ("0", "false", "off", "no")
+
     messages = ctx.services.conversation.get_recent_messages(
         user_id=user_id, persona_id=persona_id, limit=limit,
     )
+
+    thinking_map: dict[int, str] = {}
+    if want_thinking:
+        thinking_map = ctx.services.conversation.get_thinking_map(
+            user_id=user_id, persona_id=persona_id,
+            message_ids=[m.id for m in messages],
+        )
+
     return [
-        MessageOut(role=m.role, content=m.content, created_at=_s(m.created_at))
+        MessageOut(
+            role=m.role,
+            content=m.content,
+            created_at=_s(m.created_at),
+            thinking=thinking_map.get(m.id),
+        )
         for m in messages
     ]
+
+
+# ============ 设置 ============
+
+@router.get("/api/settings/{user_id}/{persona_id}", response_model=SettingsOut)
+def get_settings(
+    request: Request,
+    user_id: str,
+    persona_id: str,
+    x_pin: str = Header(default=""),
+) -> SettingsOut:
+    """读设置（当前只有 show_thinking）。"""
+    ctx, _ = _ctx_and_cfg(request, x_pin)
+    return SettingsOut(**ctx.services.settings.get_settings(user_id, persona_id))
+
+
+@router.put("/api/settings/{user_id}/{persona_id}", response_model=SettingsOut)
+def put_settings(
+    request: Request,
+    user_id: str,
+    persona_id: str,
+    payload: SettingsIn,
+    x_pin: str = Header(default=""),
+) -> SettingsOut:
+    """改设置（当前只有 show_thinking）。"""
+    ctx, _ = _ctx_and_cfg(request, x_pin)
+    return SettingsOut(**ctx.services.settings.set_show_thinking(
+        user_id, persona_id, payload.show_thinking,
+    ))
 
 
 __all__ = ["router"]

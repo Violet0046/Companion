@@ -140,6 +140,106 @@ def cmd_backup(args) -> int:
         ctx.conn.close()
 
 
+# ============ maintain restore-thinking ============
+
+def cmd_restore_thinking(args) -> int:
+    """从备份里把历史思考过程恢复到 thinking_log。
+
+    背景：以前的 assistant 消息里存着完整的 <think> 块，
+    后来为了修 prompt 尺寸把它们剔掉了（那时尚未分表）。
+    备份里还有它们，这个命令把它们找回来，存到 thinking_log。
+
+    匹配方式：(user_id, persona_id, turn_index, role='assistant')
+    """
+    import glob
+    import os
+    import sqlite3
+
+    from companion_ever.cli import _build_app
+    from companion_ever.utils.text import extract_thinking
+
+    ctx = _build_app(args.db)
+    try:
+        conn = ctx.conn
+
+        # --- 选备份 ---
+        if args.source:
+            src_path = args.source
+            if not os.path.exists(src_path):
+                print(f"[FAIL] 备份不存在: {src_path}")
+                return 1
+        else:
+            cands = sorted(glob.glob("memory/*.db.bak-*"))
+            if not cands:
+                print("[!] 没有找到备份文件（memory/*.db.bak-*）")
+                return 1
+            src_path = cands[-1]
+        print()
+        print(f"备份源: {src_path}")
+
+        src = sqlite3.connect(src_path)
+        src.row_factory = sqlite3.Row
+
+        rows = src.execute(
+            "SELECT user_id, persona_id, turn_index, content FROM conversation_log "
+            "WHERE role = 'assistant' AND content LIKE '%<think>%'"
+        ).fetchall()
+
+        restored = 0
+        skipped = 0
+        matched = 0
+        for r in rows:
+            _, think = extract_thinking(r["content"])
+            if not think:
+                continue
+
+            # 在当前库里找对应的 assistant 消息
+            live = conn.execute(
+                "SELECT id FROM conversation_log "
+                "WHERE user_id = ? AND persona_id = ? AND turn_index = ? AND role = 'assistant' "
+                "ORDER BY id LIMIT 1",
+                (r["user_id"], r["persona_id"], r["turn_index"]),
+            ).fetchone()
+            if live is None:
+                skipped += 1
+                continue
+
+            exists = conn.execute(
+                "SELECT 1 FROM thinking_log WHERE message_id = ?",
+                (live["id"],),
+            ).fetchone()
+            if exists:
+                skipped += 1
+                continue
+
+            conn.execute(
+                "INSERT INTO thinking_log "
+                "(message_id, user_id, persona_id, turn_index, content) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (live["id"], r["user_id"], r["persona_id"], r["turn_index"], think),
+            )
+            restored += 1
+            matched += 1
+
+        total = conn.execute(
+            "SELECT COUNT(*) FROM thinking_log WHERE user_id = ? AND persona_id = ?",
+            (args.user, args.persona),
+        ).fetchone()[0]
+        chars = conn.execute(
+            "SELECT COALESCE(SUM(length(content)), 0) FROM thinking_log "
+            "WHERE user_id = ? AND persona_id = ?",
+            (args.user, args.persona),
+        ).fetchone()[0]
+
+        print(f"[OK] 恢复 {restored} 条思考记录（跳过 {skipped} 条："
+              "已存在或对应消息已被删除）")
+        print(f"     thinking_log 当前：{total} 条 / {chars:,} 字符")
+        print("     提示：thinking_log 不会进 prompt，只影响界面展示")
+        return 0
+    finally:
+        ctx.conn.close()
+
+
 # ============ maintain clean-history ============
 
 def cmd_clean_history(args) -> int:
@@ -337,6 +437,7 @@ def cmd_clean_quit_notes(args) -> int:
 
 __all__ = [
     "cmd_strip_think",
+    "cmd_restore_thinking",
     "cmd_clean_history",
     "cmd_clean_quit_notes",
     "cmd_backup",

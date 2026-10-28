@@ -27,6 +27,7 @@ from companion_ever.cli.maintain_cmd import (
     cmd_backup,
     cmd_clean_history,
     cmd_clean_quit_notes,
+    cmd_restore_thinking,
     cmd_strip_think,
 )
 from companion_ever.cli.trace_cmd import (
@@ -344,6 +345,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="只报告会改什么，不实际改动",
     )
 
+    m_restore = maint_sub.add_parser(
+        "restore-thinking",
+        help="从备份里把历史思考过程恢复到 thinking_log",
+    )
+    m_restore.add_argument("--source", default="", help="备份文件路径（默认取最新的 memory/*.db.bak-*）")
+    m_restore.add_argument("--user", required=True)
+    m_restore.add_argument("--persona", required=True)
+
     m_bak = maint_sub.add_parser(
         "backup",
         help="做一份完整的数据库备份（含 WAL 内容）",
@@ -391,6 +400,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_clean_quit_notes(args)
         elif args.maint_cmd == "backup":
             return cmd_backup(args)
+        elif args.maint_cmd == "restore-thinking":
+            return cmd_restore_thinking(args)
         else:
             print("[FAIL] 未知 maintain 子命令")
             return 1

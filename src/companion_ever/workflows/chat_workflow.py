@@ -19,18 +19,11 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from companion_ever.application.chat.conversation_service import ConversationService
+from companion_ever.application.chat.assistant_reply import split_assistant_reply
 from companion_ever.application.chat.prompt_service import PromptService
 from companion_ever.application.chat.session_close_service import SessionCloseService
-from companion_ever.application.llm_json import strip_thinking
-from companion_ever.utils.text import strip_format_prefix
 from companion_ever.infrastructure.ai.llm_client import LLMClient
 from companion_ever.infrastructure.trace import trace_scope
-
-
-def _clean_assistant_reply(text: str) -> str:
-    """清理 assistant 回复再入库（剔 think 块 + 剔模仿前缀）。"""
-    stripped, _ = strip_format_prefix(text)
-    return strip_thinking(stripped)
 
 
 class ChatState(TypedDict, total=False):
@@ -75,11 +68,19 @@ def _make_chat_node(prompt_service: PromptService, conversation_service: Convers
             )
             # assistant 内容剥掉 <think> 块：推理模型的思考过程对后续对话
             # 没有价值，却会占掉历史 token 的 90%+（还会污染模型上下文）。
-            conversation_service.log_turn(
+            body, think = split_assistant_reply(response)
+            msg_id = conversation_service.log_turn(
                 user_id=user_id, persona_id=persona_id,
                 turn_index=next_turn_index, role="assistant",
-                content=_clean_assistant_reply(response),
+                content=body,
             )
+            if think:
+                # 思考过程另存到 thinking_log（给用户看，不进 prompt）
+                conversation_service.log_thinking(
+                    message_id=msg_id,
+                    user_id=user_id, persona_id=persona_id,
+                    turn_index=next_turn_index, content=think,
+                )
             tr.step(
                 "db.log_turn",
                 ms=(_time.perf_counter() - _t1) * 1000,
