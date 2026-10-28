@@ -49,7 +49,9 @@ body {
 
 .app {
   display: flex; flex-direction: column;
-  height: 100dvh; max-width: 720px; margin: 0 auto;
+  height: 100dvh;              /* 回退（不支持 visualViewport 时） */
+  height: var(--app-h, 100dvh); /* 实际可见区域的高度（JS 通过 visualViewport 设置） */
+  max-width: 720px; margin: 0 auto;
   position: relative; overflow: hidden;
 }
 
@@ -199,12 +201,23 @@ body {
 .send-btn:disabled { opacity: .35; cursor: default; }
 
 .session-btn {
-  width: 100%; margin-top: 7px; padding: 7px;
+  width: 100%; margin-top: 5px; padding: 5px;
   font: inherit; font-size: 12.5px; color: var(--text-muted);
   background: none; border: 1px dashed var(--line); border-radius: var(--radius-sm);
   cursor: pointer; transition: color .15s, border-color .15s;
 }
 .session-btn:hover { color: var(--accent-soft); border-color: var(--accent-dim); }
+
+/* 抽屉里的版本（更明显，因为不占聊天区的高度） */
+.drawer-session {
+  margin: 10px 0 0;
+  padding: 10px;
+  font-size: 13.5px;
+  color: var(--accent-soft);
+  border-color: var(--accent-dim);
+  background: var(--accent-dim);
+}
+.drawer-session:hover { color: var(--accent-soft); border-color: var(--accent); }
 .session-btn:active { transform: scale(.985); }
 .session-btn:disabled { opacity: .4; cursor: default; }
 

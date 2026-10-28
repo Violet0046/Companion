@@ -27,9 +27,11 @@ const S = {
   /* 搜索 */
   searchScope: 'all',
   searchTimer: null,
+  appH: 0,
 };
 
 const PAGE = 50;
+let wasAtBottom = true;
 
 /* ---------- 工具 ---------- */
 
@@ -91,6 +93,34 @@ async function api(path, opts = {}) {
 }
 
 const base = () => `/api/persona/${encodeURIComponent(S.user)}/${encodeURIComponent(S.persona)}`;
+
+/* ---------- 视口：用 visualViewport 精确跟随「实际可见区域」 ---------- */
+
+/**
+ * 为什么不能只用 100dvh：
+ * - iOS 键盘弹起时，**布局视口不变，可见视口变小**。
+ *   所以固定底部的输入栏会被键盘盖住，中间那块地方全浪费。
+ * - Alook 这类浏览器自带工具栏，布局视口也可能大于真实可见区域。
+ *
+ * 解法：用 visualViewport.height 直接定位 app 的高度。
+ * 键盘弹起 → app 缩短 → 输入栏自动升到键盘上方，聊天区占满余下的空间。
+ */
+function syncViewport() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const prev = S.appH || 0;
+  const h = Math.round(vv.height);
+  document.documentElement.style.setProperty('--app-h', h + 'px');
+  S.appH = h;
+  // 键盘弹起导臶可见区域变小 → 滚到底部（新消息不能被遮住）
+  if (prev && h < prev) scrollBottom();
+}
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', syncViewport);
+  window.visualViewport.addEventListener('scroll', syncViewport);
+}
+window.addEventListener('orientationchange', () => setTimeout(syncViewport, 200));
 
 /* ---------- 启动 ---------- */
 
@@ -565,6 +595,8 @@ function send() {
   S.sending = true;
   $('btn-send').disabled = true;
   scrollBottom();
+  // 键盘弹起时视口会变小，待底部重新滚动，避免新消息被掩住
+  setTimeout(() => { if (wasAtBottom) scrollBottom(); }, 320);
 }
 
 async function closeSession() {
@@ -578,6 +610,7 @@ async function closeSession() {
       body: JSON.stringify({ user_id: S.user, persona_id: S.persona }),
     });
     toast('这次聊天已结束', 2000);
+    closeDrawer();
   } catch (e) {
     toast('结束失败：' + (e.message || ''), 4000);
   } finally {
@@ -659,6 +692,20 @@ $('pin-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pi
 $('chat').addEventListener('scroll', () => {
   const box = $('chat');
   if (box.scrollTop < 80) loadOlder();
+  // 记住是否贴在底部（发送时不要把用户拉走）
+  wasAtBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+});
+
+/* 点聊天区 → 收起键盘
+   手机用户的习惯：点聊天区就把键盘收起来。
+   这样保护下的空间能够多展示几条聊天记录。 */
+$('chat').addEventListener('click', (e) => {
+  if (e.target.closest('details, summary, a, button')) return;
+  const input = $('input');
+  if (document.activeElement === input) {
+    input.blur();
+    setTimeout(syncViewport, 80);
+  }
 });
 
 document.addEventListener('visibilitychange', () => {
@@ -674,4 +721,5 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+syncViewport();
 boot();
