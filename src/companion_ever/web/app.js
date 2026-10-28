@@ -46,6 +46,11 @@ const S = {
   contactQuery: '',
   /* 服务端的自动记录间隔（分钟） */
   idleMinutes: 120,
+  /* 日历 */
+  calUser: null,
+  calPersona: null,
+  calMonth: '',
+  calDates: {},
   /* 本轮流式输出里收到的思考过程 */
   streamThinking: '',
   debug: new URLSearchParams(location.search).has('debug'),
@@ -360,6 +365,94 @@ async function openChat(user, persona) {
   showView('chat');
 }
 
+/* ---------- 日历（按日期回溯） ---------- */
+
+async function openCalendar(user, persona) {
+  S.calUser = user; S.calPersona = persona;
+  const now = new Date();
+  S.calMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  S.calDates = {};
+  $('calendar-panel').classList.remove('hidden');
+  $('cal-grid').innerHTML = '';
+  try {
+    const dates = await api(`/api/persona/${enc(user)}/${enc(persona)}/dates`);
+    dates.forEach((d) => { S.calDates[d.date] = d; });
+  } catch (e) { /* ignore */ }
+  renderCalendar();
+}
+
+function closeCalendar() {
+  $('calendar-panel').classList.add('hidden');
+}
+
+function calShiftMonth(delta) {
+  const [y, m] = S.calMonth.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  S.calMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  renderCalendar();
+}
+
+function renderCalendar() {
+  const grid = $('cal-grid');
+  if (!grid) return;
+  const [y, m] = S.calMonth.split('-').map(Number);
+  const days = new Date(y, m, 0).getDate();
+  const lead = new Date(y, m - 1, 1).getDay();   // 0 = 周日
+  $('cal-title').textContent = `${y}年${m}月`;
+
+  const now = new Date();
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  let html = '';
+  for (let i = 0; i < lead; i++) html += '<div class="cal-day empty"></div>';
+  for (let d = 1; d <= days; d++) {
+    const key = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const info = S.calDates[key];
+    const cls = ['cal-day'];
+    cls.push(info ? 'has' : 'empty');
+    if (key === todayKey) cls.push('today');
+    html += `<div class="${cls.join(' ')}"${info ? ` data-date="${key}"` : ''}>${d}</div>`;
+  }
+  grid.innerHTML = html;
+  grid.querySelectorAll('.cal-day.has').forEach((el) => {
+    el.onclick = async () => {
+      const info = S.calDates[el.dataset.date];
+      const date = el.dataset.date;
+      closeCalendar();
+      await switchTarget(S.calUser, S.calPersona);
+      await jumpToDate(date, info && info.first_id);
+    };
+  });
+
+  const inMonth = Object.keys(S.calDates).filter((k) => k.startsWith(S.calMonth));
+  const msgs = inMonth.reduce((a, k) => a + (S.calDates[k].count || 0), 0);
+  $('cal-foot').textContent = inMonth.length
+    ? `本月有 ${inMonth.length} 天聊过天，共 ${msgs} 条消息`
+    : '这个月还没有聊天记录';
+}
+
+/**
+ * 定位到某条消息：加载「它之前的一页」+「它之后的全部」。
+ *
+ * 这样看到的是**普通聊天界面**（能一直往上/往下翻全部历史），
+ * 而不是把视图锁在那一段里。
+ */
+async function loadAround(firstId) {
+  // 注意：before_id 是**排他**的（id < X），所以要传 firstId + 1
+  // 才能把目标消息本身也包含进来（否则定位不到它）
+  const older = await api(`${base()}/history?before_id=${firstId + 1}&limit=${PAGE}`);
+  let newer = [];
+  let after = firstId;
+  for (;;) {
+    const part = await api(`${base()}/history?after_id=${after}&limit=500`);
+    if (!part.length) break;
+    newer = newer.concat(part);
+    if (part.length < 500) break;
+    after = part[part.length - 1].id;
+  }
+  return { older, newer };
+}
+
 /* ---------- 角色资料 ---------- */
 
 function relStage(info) {
@@ -409,7 +502,6 @@ function renderProfile(user, persona, info) {
       <div class="row" id="row-relation"><span>关系状态</span><span class="row-val">${esc(relStage(info))} <span class="chev">›</span></span></div>
     </div>
     <div id="rel-card" class="rel-card hidden"></div>
-    <div id="date-list" class="date-list hidden"></div>
     <div class="group">
       <div class="row"><span>上次记录</span><span class="row-val">${esc(fmtAgo(lastRec))}</span></div>
       <div class="row"><span>手动记一次</span>
@@ -420,38 +512,13 @@ function renderProfile(user, persona, info) {
   const q = (id) => body.querySelector('#' + id);
   q('row-chat').onclick = () => openChat(user, persona);
   q('row-memory').onclick = () => openMemory(user, persona);
-  q('row-dates').onclick = () => toggleDates(user, persona);
+  q('row-dates').onclick = () => openCalendar(user, persona);
   q('row-relation').onclick = () => {
     const card = q('rel-card');
     card.classList.toggle('hidden');
     if (!card.classList.contains('hidden')) { S.info = info; renderRelation(); }
   };
   q('btn-record-now').onclick = (e) => recordNow(user, persona, e.target);
-}
-
-/** 角色资料页里展开"按日期回溯" */
-async function toggleDates(user, persona) {
-  const box = $('date-list');
-  if (!box) return;
-  if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
-  box.classList.remove('hidden');
-  box.innerHTML = '<div class="empty">载入中…</div>';
-  try {
-    const dates = await api(`/api/persona/${enc(user)}/${enc(persona)}/dates`);
-    if (!dates.length) { box.innerHTML = '<div class="empty">还没有历史对话</div>'; return; }
-    box.innerHTML = dates.map((d) => `
-      <div class="date-row" data-date="${escAttr(d.date)}">
-        <span>${esc(dayLabel(d.date))}</span><span class="n">${d.count} 条 ›</span>
-      </div>`).join('');
-    box.querySelectorAll('.date-row').forEach((r) => {
-      r.onclick = async () => {
-        await switchTarget(user, persona);
-        await jumpToDate(r.dataset.date);
-      };
-    });
-  } catch (e) {
-    box.innerHTML = '<div class="empty">载入失败</div>';
-  }
 }
 
 /** 手动触发一次记录 */
@@ -717,7 +784,7 @@ async function loadHistory(reset, opts) {
 
 /** 往上翻：加载更早的一页 */
 async function loadOlder() {
-  if (S.loadingOlder || !S.hasMore || S.viewMode !== 'live') return;
+  if (S.loadingOlder || !S.hasMore) return;
   if (!S.messages.length) return;
   S.loadingOlder = true;
   $('load-more-hint').classList.remove('hidden');
@@ -960,38 +1027,48 @@ function updateHistoryBar() {
   $('history-label').textContent = S.viewLabel || '正在查看历史聊天';
 }
 
-async function jumpToDate(date) {
+async function jumpToDate(date, firstId) {
   try {
-    const msgs = await api(`${base()}/history?date=${date}&limit=500`);
-    S.messages = msgs;
-    S.viewMode = 'date';
-    S.viewLabel = `正在查看 ${dayLabel(date)} 的对话`;
-    S.hasMore = false;
+    if (!firstId) { toast('这一天没有聊天记录'); return; }
+    // 定位到那天**第一条**消息，但视图仍然是普通聊天界面
+    const { older, newer } = await loadAround(firstId);
+    S.messages = older.concat(newer);
+    S.viewMode = 'jump';
+    S.viewLabel = `正在查看 ${dayLabel(date)} 附近的聊天`;
+    S.hasMore = older.length >= PAGE;
     updateHistoryBar();
     renderChat();
-    anchorBottom();
     updateJumpButton();
     showView('chat');
+    setTimeout(() => {
+      const el = $('chat').querySelector(`.msg[data-id="${firstId}"]`);
+      // 跨日期定位要瞬移（不是平滑滚），不然要滚好久
+      if (el) el.scrollIntoView({ block: 'start', behavior: 'instant' });
+      else anchorBottom();
+    }, 80);
     toast(S.viewLabel);
   } catch (e) { toast('加载失败'); }
 }
 
 async function jumpToMessage(id) {
   try {
-    const msgs = await api(`${base()}/history?after_id=${id}&limit=500`);
-    S.messages = msgs;
+    // 目标消息本身也要在列表里，所以取「它之前的一页」+「它之后的全部」
+    const { older, newer } = await loadAround(Number(id));
+    S.messages = older.concat(newer);
     S.viewMode = 'jump';
     S.viewLabel = '正在查看历史聊天';
-    S.hasMore = false;
+    S.hasMore = older.length >= PAGE;
     updateHistoryBar();
     renderChat();
     updateJumpButton();
     closeSearch();
+    showView('chat');
     // 滚到目标消息
     setTimeout(() => {
       const el = $('chat').querySelector(`.msg[data-id="${id}"]`);
       if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }, 60);
+      else anchorBottom();
+    }, 80);
     toast('已跳转到那条消息');
   } catch (e) { toast('跳转失败'); }
 }
@@ -1229,6 +1306,9 @@ $('btn-avatar').onclick = () => openProfile(S.user, S.persona);
 $('btn-profile-back').onclick = () => showView('chat');
 $('btn-memory-back').onclick = () => showView('profile');
 $('btn-new-conv').onclick = () => toast('新建会话：还没做', 2500);
+$('btn-cal-close').onclick = closeCalendar;
+$('btn-cal-prev').onclick = () => calShiftMonth(-1);
+$('btn-cal-next').onclick = () => calShiftMonth(1);
 
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.onclick = () => {

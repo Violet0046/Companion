@@ -239,7 +239,10 @@ def list_dates(
     """有对话的日期（降序）+ 每天的消息数。"""
     ctx, _ = _ctx_and_cfg(request, x_pin)
     return [
-        DateEntry(date=d["date"], count=d["count"])
+        DateEntry(
+            date=d["date"], count=d["count"],
+            first_id=d.get("first_id"), last_id=d.get("last_id"),
+        )
         for d in ctx.services.conversation.list_dates(user_id, persona_id)
     ]
 

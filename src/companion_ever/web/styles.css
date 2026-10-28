@@ -674,3 +674,51 @@ body {
 .chips { padding: 0 14px 8px; margin-bottom: 0; }
 .note-bar { height: 3px; background: var(--surface-2); border-radius: 2px; margin-top: 9px; }
 .note-bar > i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+
+/* ============================================================
+   日历（按日期回溯）
+   有聊天记录的日期可点；没有的置灰
+   ============================================================ */
+.cal-panel {
+  position: fixed; inset: 0; z-index: 70;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  padding-top: var(--safe-t);
+  animation: cal-in .18s ease-out;
+}
+@keyframes cal-in { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+.cal-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px 4px; }
+.cal-title { font-size: 17px; font-weight: 700; }
+.cal-week {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  padding: 8px 6px 4px; border-bottom: 1px solid var(--line);
+}
+.cal-week span { text-align: center; font-size: 12px; color: var(--text-muted); }
+.cal-grid {
+  flex: 1 1 auto; display: grid; grid-template-columns: repeat(7, 1fr);
+  align-content: start; padding: 4px 6px;
+}
+.cal-day {
+  aspect-ratio: 1; display: grid; place-items: center;
+  font-size: 15px; color: var(--text); position: relative;
+}
+.cal-day.empty { color: #ffffff1c; }
+.cal-day.has { cursor: pointer; }
+.cal-day.has:active { opacity: .55; }
+/* 有记录的日期：下面一个小圆点 */
+.cal-day.has::after {
+  content: ''; position: absolute; bottom: 5px; left: 50%;
+  transform: translateX(-50%);
+  width: 4px; height: 4px; border-radius: 50%; background: var(--accent);
+}
+/* 今天：实心圆 */
+.cal-day.today {
+  width: 36px; height: 36px; aspect-ratio: auto;
+  place-self: center; border-radius: 50%;
+  background: var(--accent); color: #fff; font-weight: 600;
+}
+.cal-day.today::after { display: none; }
+.cal-foot {
+  padding: 10px 16px calc(16px + var(--safe-b));
+  font-size: 12px; color: var(--text-muted); text-align: center;
+}

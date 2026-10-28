@@ -70,6 +70,9 @@ class DateEntry(BaseModel):
 
     date: str
     count: int
+    # 当天第一条 / 最后一条消息的 id（日历跳转定位用）
+    first_id: Optional[int] = None
+    last_id: Optional[int] = None
 
 
 class SearchHit(BaseModel):

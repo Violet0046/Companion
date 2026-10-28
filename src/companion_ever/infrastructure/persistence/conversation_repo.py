@@ -358,15 +358,29 @@ class ConversationRepo:
     def list_dates(
         self, *, user_id: str, persona_id: str,
     ) -> list[dict]:
-        """列出有对话的日期（降序）+ 每天的消息数。"""
+        """列出有对话的日期（降序）+ 每天的消息数 + 当天首/末消息 id。
+
+        first_id / last_id 是给"日历跳转"用的：
+        前端点某一天之后，要能定位到**那天第一条**消息，
+        而不是像以前那样把视图限制在那一天里。
+        """
         rows = self.conn.execute(
-            "SELECT substr(created_at, 1, 10) AS d, COUNT(*) AS n "
+            "SELECT substr(created_at, 1, 10) AS d, COUNT(*) AS n, "
+            "       MIN(id) AS first_id, MAX(id) AS last_id "
             "FROM conversation_log "
             "WHERE user_id = ? AND persona_id = ? AND role IN ('user', 'assistant') "
             "GROUP BY d ORDER BY d DESC",
             (user_id, persona_id),
         ).fetchall()
-        return [{"date": r["d"], "count": r["n"]} for r in rows]
+        return [
+            {
+                "date": r["d"],
+                "count": r["n"],
+                "first_id": r["first_id"],
+                "last_id": r["last_id"],
+            }
+            for r in rows
+        ]
 
     def search(
         self,
