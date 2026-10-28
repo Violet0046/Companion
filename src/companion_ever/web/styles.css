@@ -17,7 +17,7 @@
   --accent:      #ff2442;   /* 小红书红 */
   --accent-soft: #ff6b81;
   --accent-dim:  #ffdde3;   /* 浅粉底（开关选中 / 标签 / 提示条） */
-  --bubble-me:   #ff2442;   /* 我的气泡 */
+  --bubble-me:   #3a7dff;   /* 我的气泡：蓝底白字（红底看久了刺眼） */
   --bubble-me-tx:#ffffff;
   --line:        #ecedf0;
   --radius:      16px;
@@ -137,12 +137,6 @@ body {
   align-self: flex-end; background: var(--bubble-me); color: var(--bubble-me-tx);
   border-bottom-right-radius: 6px;
 }
-.msg .stamp {
-  display: block; font-size: 10.5px; color: var(--text-muted);
-  margin-top: 4px; opacity: .8;
-}
-.msg.me .stamp { color: #ffffff70; text-align: right; }
-
 .msg .cursor {
   display: inline-block; width: 7px; height: 15px;
   vertical-align: -2px; margin-left: 2px;
@@ -215,8 +209,8 @@ body {
 
 .send-btn {
   flex: 0 0 auto; width: 42px; height: 42px; border-radius: 50%;
-  border: none; background: linear-gradient(135deg, var(--accent-soft), var(--accent));
-  color: #2a1a16; display: grid; place-items: center; cursor: pointer;
+  border: none; background: var(--bubble-me);
+  color: #fff; display: grid; place-items: center; cursor: pointer;
   transition: transform .12s, opacity .15s;
 }
 .send-btn:active { transform: scale(.9); }
@@ -397,14 +391,13 @@ body {
    ============================================================ */
 
 /* 消息流里的日期分隔条 */
-.day-sep {
+/* 时间分隔条：只有"隔了很久"才插一条（微信那套） */
+.time-sep {
   align-self: center;
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--text-muted);
-  padding: 3px 10px;
-  background: var(--surface);
-  border-radius: 999px;
-  margin: 6px 0;
+  padding: 10px 0 4px;
+  margin: 0;
 }
 
 /* 正在查看历史时的提示条 */

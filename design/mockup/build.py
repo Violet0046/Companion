@@ -104,25 +104,27 @@ S4 = ('<div class="nav"><div class="nav-title">我</div></div><div class="scroll
       '<div class="row"><span>关于</span><span class="row-val">v0.3.0 <span class="chev">›</span></span></div>'
       '</div></div>' + tabs("me"))
 # ---------- 5. 会话 ----------
-def bubble(side, text, time, think=None):
+def bubble(side, text, time, think=None, sep=None):
+    """sep 有值就先插一条时间分隔条（气泡内不再放时间戳）。"""
     cls = "me" if side == "me" else "them"
     th = ""
     if think:
         th = ('<details class="think"><summary>她当时在想什么</summary>'
               f'<div class="think-body">{think}</div></details>')
-    return (f'<div class="msg {cls}"><div class="body">{text}</div>{th}'
-            f'<span class="stamp">{time}</span></div>')
+    s = f'<div class="time-sep">{sep}</div>' if sep else ""
+    return (f'{s}<div class="msg {cls}"><div class="body">{text}</div>{th}</div>')
 S5 = ('<div class="nav"><span class="back">‹</span>'
       '<div class="nav-center"><span class="nav-title">柳如烟</span><span class="nav-sub">在线</span></div>'
       '<div class="spacer"></div>'
       '<div class="avatar" style="width:32px;height:32px;border-radius:9px;font-size:14px">柳</div></div>'
       '<div class="chat">'
-      + bubble("them", "早呀～今天醒得挺早的嘛 ☀️", "09:12")
+      + bubble("them", "早呀～今天醒得挺早的嘛 ☀️", "09:12", sep="昨天 23:45")
       + bubble("me", "被你猜中了，刚醒", "09:14")
       + bubble("them", "那我去给你热杯牛奶，等你哦～", "09:15",
                "We need answer in Chinese, persona as girlfriend... 用户刚醒，语气应该是慵懒但亲昵的。")
       + bubble("me", "等着我，马上来", "09:16")
-      + bubble("them", "好呀～不过你要是又赖床，我可就要<b>生气</b>了哦 😤", "09:16")
+      + bubble("them", "好呀～不过你要是又赖床，我可就要<b>生气</b>了哦 😤", "09:16",
+               sep="00:14")
       + '</div><div class="composer"><span class="jump">⌄ 2 条新消息</span>'
         '<div class="composer-row"><div id="input">说点什么…</div>'
         '<button class="send"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">'

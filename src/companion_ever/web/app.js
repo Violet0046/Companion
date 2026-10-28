@@ -55,6 +55,8 @@ const S = {
   calDates: {},
   /* 本轮流式输出里收到的思考过程 */
   streamThinking: '',
+  /* 距离上一条时间分隔条已经过了几条消息 */
+  sinceLastSep: 0,
   debug: new URLSearchParams(location.search).has('debug'),
 };
 
@@ -941,6 +943,76 @@ async function loadOlder() {
   }
 }
 
+/* ---------- 时间分隔条 ---------- */
+
+/**
+ * 什么时候插一条时间分隔条 —— **两个条件满足其一，谁先到算谁**：
+ *
+ * 1. 时间间隔 > 10 分钟
+ *    不用微信那套 5 分钟：AI 陪聊时正常间隔就几秒，
+ *    按分钟切会把一段连贯的聊天切得很碎。
+ *
+ * 2. 连续超过 10 条消息
+ *    光看时间不够 —— 一段密集的长对话（比如一天聊了 150 条）
+ *    中间可能一条锚点都没有，往上滚完全不知道自己在哪。
+ *
+ * 两个阈值是配套的：10 条消息大概就是 10 分钟的来回，
+ * 这样"聊得密"和"停了一阵"会被切成同样大小的块。
+ */
+const TIME_SEP_GAP_MIN = 10;
+const TIME_SEP_GAP_MS = TIME_SEP_GAP_MIN * 60 * 1000;
+const TIME_SEP_MAX_MSGS = 10;
+
+function needTimeSep(prevIso, curIso, sinceLastSep) {
+  // 条件 2：这一段已经太长
+  if (sinceLastSep >= TIME_SEP_MAX_MSGS) return true;
+  if (!prevIso || !curIso) return false;
+  const a = new Date(prevIso), b = new Date(curIso);
+  if (isNaN(a) || isNaN(b)) return false;
+  // 条件 1：隔了很久
+  return Math.abs(b.getTime() - a.getTime()) > TIME_SEP_GAP_MS;
+}
+
+/**
+ * 分隔条上的文字，按远近自适应：
+ *   今天   -> 22:25
+ *   昨天   -> 昨天 22:25
+ *   更早   -> 10月28日 22:25
+ */
+function fmtTimeSep(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const now = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const time = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((dayStart(now) - dayStart(d)) / 86400000);
+  if (days <= 0) return time;
+  if (days === 1) return `昨天 ${time}`;
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${time}`;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${time}`;
+}
+
+/**
+ * 往消息流里追加一条消息。
+ * 实时消息和历史消息走同一套规则（否则刷新前后显示不一致）。
+ */
+function appendChatMsg(el, createdAt) {
+  const box = $('chat');
+  const prev = S.messages.length ? S.messages[S.messages.length - 1] : null;
+  if (needTimeSep(prev && prev.created_at, createdAt, S.sinceLastSep || 0)) {
+    const sep = document.createElement('div');
+    sep.className = 'time-sep';
+    sep.textContent = fmtTimeSep(createdAt);
+    box.appendChild(sep);
+    S.sinceLastSep = 0;
+  } else {
+    S.sinceLastSep = (S.sinceLastSep || 0) + 1;
+  }
+  box.appendChild(el);
+}
+
 /* ---------- 渲染 ---------- */
 
 function renderChat() {
@@ -953,21 +1025,25 @@ function renderChat() {
     box.appendChild(hint);
     return;
   }
-  let lastDay = null;
+  let prevAt = null;
+  let since = 0;
   S.messages.forEach((m) => {
-    const d = dayOf(m.created_at);
-    if (d && d !== lastDay) {
-      lastDay = d;
+    if (needTimeSep(prevAt, m.created_at, since)) {
       const sep = document.createElement('div');
-      sep.className = 'day-sep';
-      sep.textContent = dayLabel(d);
+      sep.className = 'time-sep';
+      sep.textContent = fmtTimeSep(m.created_at);
       box.appendChild(sep);
+      since = 0;
+    } else {
+      since += 1;
     }
-    box.appendChild(renderMsg(m.role, m.content, m.thinking, m.created_at, m.id));
+    prevAt = m.created_at;
+    box.appendChild(renderMsg(m.role, m.content, m.thinking, m.id));
   });
+  S.sinceLastSep = since;
 }
 
-function renderMsg(role, content, thinking, createdAt, id) {
+function renderMsg(role, content, thinking, id) {
   const el = document.createElement('div');
   el.className = 'msg ' + (role === 'user' ? 'me' : 'them');
   if (id) el.dataset.id = id;
@@ -978,12 +1054,6 @@ function renderMsg(role, content, thinking, createdAt, id) {
 
   if (thinking && S.showThinking) {
     el.appendChild(buildThinkBlock(thinking));
-  }
-  if (createdAt) {
-    const st = document.createElement('span');
-    st.className = 'stamp';
-    st.textContent = fmtTime(createdAt);
-    el.appendChild(st);
   }
   return el;
 }
@@ -1311,11 +1381,11 @@ function handleWs(m) {
       const box = $('chat');
       const empty = box.querySelector('.empty');
       if (empty) empty.remove();
-      const el = renderMsg('assistant', '', null, null, null);
+      const el = renderMsg('assistant', '', null, null);
       const cursor = document.createElement('span');
       cursor.className = 'cursor';
       el.firstChild.appendChild(cursor);
-      box.appendChild(el);
+      appendChatMsg(el, new Date().toISOString());
       S.streamEl = el;
       S.streamThinking = '';
       // 只有用户本来就在底部才自动跟到底，否则会把正在翻历史的人硬拽下去
@@ -1340,10 +1410,6 @@ function handleWs(m) {
       if (S.streamEl) {
         const cur = S.streamEl.querySelector('.cursor');
         if (cur) cur.remove();
-        const st = document.createElement('span');
-        st.className = 'stamp';
-        st.textContent = fmtTime(new Date().toISOString());
-        S.streamEl.appendChild(st);
         const think = S.streamThinking || null;
         // 思考过程：有就存进内存（开关打开时立刻能显示）
         if (think && S.showThinking) {
@@ -1404,8 +1470,8 @@ function send() {
   const empty = box.querySelector('.empty');
   if (empty) empty.remove();
   const now = new Date().toISOString();
-  const el = renderMsg('user', text, null, now, null);
-  box.appendChild(el);
+  const el = renderMsg('user', text, null, null);
+  appendChatMsg(el, now);
   S.messages.push({ id: Date.now(), role: 'user', content: text, created_at: now });
   input.value = '';
   input.style.height = 'auto';

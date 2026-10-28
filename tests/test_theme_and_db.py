@@ -37,7 +37,8 @@ def test_light_theme():
     assert bg.lower() in ("#f2f3f6", "#f3f4f6", "#f4f5f7"), f"底色应该柔和浅灰，现在是 {bg}"
     assert var("bg-soft").lower() == "#ffffff", "卡片应该是纯白（浮在浅灰底上）"
     assert var("accent").lower() == "#ff2442", "强调色应该是小红书红"
-    assert var("bubble-me").lower() == "#ff2442", "我的气泡应该是红的"
+    assert var("bubble-me").lower() == "#3a7dff", "我的气泡应该是蓝底白字（红底看久了刺眼）"
+    assert var("bubble-me-tx").lower() == "#ffffff", "我的气泡文字应该是白色"
     assert "color-scheme: light" in css, "没告诉浏览器用浅色渲染控件和滚动条"
     print("[OK] 亮色主题（柔和浅灰底 + 纯白卡片 + 红色强调）")
 
