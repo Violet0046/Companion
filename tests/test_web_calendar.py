@@ -71,7 +71,7 @@ def main() -> int:
     # --- 6. 后端要给出当天第一条消息的 id ---
     from companion_ever.api.schemas import DateEntry
     assert "first_id" in DateEntry.model_fields, "DateEntry 缺 first_id"
-    from companion_ever.infrastructure.persistence.conversation_repo import ConversationRepo
+    from companion_ever.storage.conversation_repo import ConversationRepo
     import inspect
     src = inspect.getsource(ConversationRepo.list_dates)
     assert "MIN(id)" in src and "MAX(id)" in src, "list_dates 没有取当天的首/末消息 id"

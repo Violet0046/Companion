@@ -21,14 +21,14 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from companion_ever.application.authz import Authorizer
-from companion_ever.application.memory.note_service import NoteService
-from companion_ever.application.persona.persona_service import PersonaService
+from companion_ever.services.authz import Authorizer
+from companion_ever.services.note_service import NoteService
+from companion_ever.services.persona_service import PersonaService
 from companion_ever.domain.enums import BlockType, NoteType
-from companion_ever.infrastructure.persistence.block_repo import BlockRepo
-from companion_ever.infrastructure.persistence.db import init_db
-from companion_ever.infrastructure.persistence.note_repo import NoteRepo
-from companion_ever.infrastructure.persistence.user_repo import UserRepo
+from companion_ever.storage.block_repo import BlockRepo
+from companion_ever.storage.db import init_db
+from companion_ever.storage.note_repo import NoteRepo
+from companion_ever.storage.user_repo import UserRepo
 
 
 def test_create_persona_writes_3_tables():

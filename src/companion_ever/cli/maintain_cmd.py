@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-from companion_ever.application.llm_json import THINK_PATTERN
+from companion_ever.services.llm_json import THINK_PATTERN
 from companion_ever.utils.text import strip_format_prefix, strip_invisible
 
 

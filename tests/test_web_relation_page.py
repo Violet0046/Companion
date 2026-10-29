@@ -218,7 +218,7 @@ def test_static() -> None:
 
     # --- 5. 后端：推送钩子 ---
     from companion_ever.api.routes import chat
-    from companion_ever.application.chat.session_close_service import SessionCloseService
+    from companion_ever.services.session_close_service import SessionCloseService
     from companion_ever.api.schemas import PersonaSummary
 
     assert hasattr(SessionCloseService, "close_session")
@@ -234,7 +234,7 @@ def test_static() -> None:
 def test_backend_push() -> None:
     """后端：抽取跑完后真的会把 record_done 推给在线连接。"""
     from companion_ever.api.routes import chat
-    from companion_ever.application.chat.session_close_service import (
+    from companion_ever.services.session_close_service import (
         ExtractionReport, SessionCloseReport,
     )
 
@@ -310,7 +310,7 @@ def test_record_hook_fires() -> None:
     from companion_ever.config import AppConfig
     from companion_ever.app import build_app
     import companion_ever.app as app_mod
-    from companion_ever.infrastructure.ai.traced_client import TracedLLMClient
+    from companion_ever.llm.traced_client import TracedLLMClient
 
     class FakeLLM:
         model = "fake-model"
@@ -356,7 +356,7 @@ def test_record_hook_fires() -> None:
     # 回调抛异常也不能影响记录本身
     import logging
     logging.getLogger(
-        "companion_ever.application.chat.session_close_service"
+        "companion_ever.services.session_close_service"
     ).setLevel(logging.CRITICAL)
     sc.on_record_done = lambda u, p, r: (_ for _ in ()).throw(RuntimeError("boom"))
     try:

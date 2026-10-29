@@ -19,26 +19,26 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 def _make_ctx(db_path: str, llm_response: str = "回复内容", *, check_same_thread: bool = True):
     """构造一个 mock 过的 ctx。"""
     from companion_ever.config import AppConfig, RetrievalConfig
-    from companion_ever.application.authz import Authorizer
-    from companion_ever.application.chat.chat_service import ChatService
-    from companion_ever.application.chat.conversation_service import ConversationService
-    from companion_ever.application.chat.extraction_service import ExtractionService
-    from companion_ever.application.chat.prompt_service import PromptService
-    from companion_ever.application.chat.retrieval_service import RetrievalService
-    from companion_ever.application.chat.session_close_service import (
+    from companion_ever.services.authz import Authorizer
+    from companion_ever.services.chat_service import ChatService
+    from companion_ever.services.conversation_service import ConversationService
+    from companion_ever.services.extraction_service import ExtractionService
+    from companion_ever.services.prompt_service import PromptService
+    from companion_ever.services.retrieval_service import RetrievalService
+    from companion_ever.services.session_close_service import (
         SessionCloseReport,
         SessionCloseService,
     )
-    from companion_ever.application.memory.note_service import NoteService
-    from companion_ever.application.persona.block_service import BlockService
-    from companion_ever.application.persona.persona_service import PersonaService
-    from companion_ever.application.setting_service import SettingService
-    from companion_ever.infrastructure.persistence.block_repo import BlockRepo
-    from companion_ever.infrastructure.persistence.conversation_repo import ConversationRepo
-    from companion_ever.infrastructure.persistence.db import init_db
-    from companion_ever.infrastructure.persistence.note_repo import NoteRepo
-    from companion_ever.infrastructure.persistence.setting_repo import SettingRepo
-    from companion_ever.infrastructure.persistence.user_repo import UserRepo
+    from companion_ever.services.note_service import NoteService
+    from companion_ever.services.block_service import BlockService
+    from companion_ever.services.persona_service import PersonaService
+    from companion_ever.services.setting_service import SettingService
+    from companion_ever.storage.block_repo import BlockRepo
+    from companion_ever.storage.conversation_repo import ConversationRepo
+    from companion_ever.storage.db import init_db
+    from companion_ever.storage.note_repo import NoteRepo
+    from companion_ever.storage.setting_repo import SettingRepo
+    from companion_ever.storage.user_repo import UserRepo
     from companion_ever.app import Repos, Services, Workflows, AppContext
     from companion_ever.workflows import build_chat_graph, build_extraction_graph
 
@@ -174,7 +174,7 @@ def test_graph_invoke_quit_triggers_close():
 
         # 验证 close_report 存在
         assert result.get("close_report") is not None, "close 节点应被触发"
-        from companion_ever.application.chat.session_close_service import SessionCloseReport
+        from companion_ever.services.session_close_service import SessionCloseReport
         assert isinstance(result["close_report"], SessionCloseReport)
         assert result["close_report"].marker_id > 0
 

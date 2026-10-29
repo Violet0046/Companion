@@ -42,8 +42,8 @@ def test_repo_groups_by_local_date():
 
     UTC 20:00 在东八区是第二天凌晨 0 点 —— 按 UTC 分组会算错一天。
     """
-    from companion_ever.infrastructure.persistence.conversation_repo import ConversationRepo
-    from companion_ever.infrastructure.persistence.db import init_db
+    from companion_ever.storage.conversation_repo import ConversationRepo
+    from companion_ever.storage.db import init_db
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
@@ -101,7 +101,7 @@ def test_close_session_is_async():
     )
     assert "close_session," not in src, "/api/session/close 还在同步调用 close_session"
 
-    from companion_ever.application.chat.session_close_service import SessionCloseService
+    from companion_ever.services.session_close_service import SessionCloseService
     svc_src = inspect.getsource(SessionCloseService)
     assert "def close_session_background" in svc_src
     assert "_closing" in svc_src, "缺少「正在记录」的守卫（会重复触发抽取）"

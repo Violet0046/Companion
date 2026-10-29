@@ -15,11 +15,14 @@ dependencies = [
     "pydantic>=2.0",
     "langgraph>=0.2",
     "python-dotenv>=1.0",
+    "fastapi",
+    "uvicorn[standard]",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "httpx",
 ]
 
 [project.scripts]
@@ -33,4 +36,4 @@ where = ["src"]
 
 # PWA 前端静态文件（web/）跟着包一起装
 [tool.setuptools.package-data]
-companion_ever = ["web/*", "web/**/*"]
+companion_ever = ["web/*", "web/**/*", "prompts/*.txt", "storage/*.sql"]

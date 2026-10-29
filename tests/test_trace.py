@@ -33,7 +33,7 @@ def _build(tmpdir: str):
     from companion_ever.app import build_app
     import companion_ever.app as app_mod
 
-    from companion_ever.infrastructure.ai.traced_client import TracedLLMClient
+    from companion_ever.llm.traced_client import TracedLLMClient
 
     # 与生产路径一致：create_llm_client 返回的是包了 trace 的客户端
     app_mod.create_llm_client = lambda cfg: TracedLLMClient(FakeLLM())
@@ -47,7 +47,7 @@ def _build(tmpdir: str):
 
 
 def main() -> int:
-    from companion_ever.infrastructure.trace import TraceStore, default_trace_dir
+    from companion_ever.trace import TraceStore, default_trace_dir
 
     tmpdir = tempfile.mkdtemp(prefix="trace_test_")
     ctx = _build(tmpdir)

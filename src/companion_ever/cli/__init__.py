@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from companion_ever.application.chat.session_close_service import SessionCloseReport
+from companion_ever.services.session_close_service import SessionCloseReport
 from companion_ever.config import AppConfig, LLMConfig
 from companion_ever.app import build_app
 from companion_ever.domain.enums import NoteType

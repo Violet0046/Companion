@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from companion_ever.infrastructure.trace import TraceStore, default_trace_dir
+from companion_ever.trace import TraceStore, default_trace_dir
 
 
 def _store(args) -> TraceStore:

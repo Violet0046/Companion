@@ -45,7 +45,7 @@ def test_light_theme():
 
 def test_thread_safe_db():
     """多线程同时用数据库不能报错。"""
-    from companion_ever.infrastructure.persistence.db import init_db
+    from companion_ever.storage.db import init_db
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
@@ -90,7 +90,7 @@ def test_thread_safe_db():
 
 
 def test_thread_local_conn_is_per_thread():
-    from companion_ever.infrastructure.persistence.db import ThreadLocalConnection, init_db
+    from companion_ever.storage.db import ThreadLocalConnection, init_db
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name

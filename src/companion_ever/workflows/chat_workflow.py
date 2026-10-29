@@ -13,18 +13,14 @@ LangGraph 设计：
 """
 from __future__ import annotations
 
-import time as _time
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from companion_ever.application.chat.conversation_service import ConversationService
-from companion_ever.application.chat.assistant_reply import split_assistant_reply
-from companion_ever.utils.text import strip_invisible
-from companion_ever.application.chat.prompt_service import PromptService
-from companion_ever.application.chat.session_close_service import SessionCloseService
-from companion_ever.infrastructure.ai.llm_client import LLMClient
-from companion_ever.infrastructure.trace import trace_scope
+from companion_ever.services.conversation_service import ConversationService
+from companion_ever.services.prompt_service import PromptService
+from companion_ever.services.session_close_service import SessionCloseService
+from companion_ever.llm.llm_client import LLMClient
 
 
 class ChatState(TypedDict, total=False):
@@ -46,72 +42,19 @@ def _make_chat_node(
     session_close_service: SessionCloseService | None = None,
     idle_session_minutes: int = 120,
 ):
-    """构造 chat 节点。"""
+    """图仅负责路由；聊天逻辑由 ChatService 维护。"""
+    from companion_ever.services.chat_service import ChatService
+    service = ChatService(prompt_service, conversation_service, llm_client,
+                          session_close_service, idle_session_minutes)
+
     def chat_node(state: ChatState) -> ChatState:
-        user_id = state["user_id"]
-        persona_id = state["persona_id"]
-        user_input = state["user_input"]
-
-        with trace_scope("chat", user_id, persona_id) as tr:
-            # 0. 空闲超时：先自动关上一个 session（不依赖用户按 /quit）
-            try:
-                session_close_service.close_if_stale(
-                    user_id, persona_id, idle_session_minutes,
-                )
-            except Exception:
-                pass
-
-            # 1. 拼 system prompt（自动只取当前 session 的对话历史——见 PromptService）
-            _t0 = _time.perf_counter()
-            prompt_result = prompt_service.build(
-                user_id=user_id, persona_id=persona_id, query=user_input,
-            )
-
-            # 2. 拼最终 messages：system + 当前 session 历史 + 当前用户输入
-            messages = list(prompt_result["messages"])
-            messages.append({"role": "user", "content": user_input})
-
-            # 3. 调 Chat LLM（仅生成回复，不做任何抽取/更新）
-            response = llm_client.chat(messages)
-
-            # 4. 写 conversation_log（user + assistant 各一行）
-            next_turn_index = state.get("next_turn_index", 1)
-            _t1 = _time.perf_counter()
-            conversation_service.log_turn(
-                user_id=user_id, persona_id=persona_id,
-                turn_index=next_turn_index, role="user",
-                content=strip_invisible(user_input),
-            )
-            # assistant 内容剥掉 <think> 块：推理模型的思考过程对后续对话
-            # 没有价值，却会占掉历史 token 的 90%+（还会污染模型上下文）。
-            body, think = split_assistant_reply(
-                response,
-                getattr(llm_client, "last_reasoning", None),
-            )
-            msg_id = conversation_service.log_turn(
-                user_id=user_id, persona_id=persona_id,
-                turn_index=next_turn_index, role="assistant",
-                content=body,
-            )
-            if think:
-                # 思考过程另存到 thinking_log（给用户看，不进 prompt）
-                conversation_service.log_thinking(
-                    message_id=msg_id,
-                    user_id=user_id, persona_id=persona_id,
-                    turn_index=next_turn_index, content=think,
-                )
-            tr.step(
-                "db.log_turn",
-                ms=(_time.perf_counter() - _t1) * 1000,
-                turn_index=next_turn_index,
-            )
-
-            return {
-                **state,
-                "response": response,
-                "next_turn_index": next_turn_index + 1,
-                "conversations_count": state.get("conversations_count", 0) + 1,
-            }
+        response = service.chat(state["user_id"], state["persona_id"], state["user_input"])
+        return {
+            **state,
+            "response": response,
+            "next_turn_index": service._next_turn_index(state["user_id"], state["persona_id"]),
+            "conversations_count": state.get("conversations_count", 0) + 1,
+        }
     return chat_node
 
 

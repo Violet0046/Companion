@@ -32,8 +32,6 @@
 ### 1. persona_runtime：助手运行时状态
 
 - current_topic：**用户带来的**当前话题（不是助手自己的关注点）
-- stable_mood_baseline：助手稳定的情绪基调
-- speech_style_reminder：说话风格提醒
 
 ⚠️ **禁止**从**助手自己说过的话**里总结出"应该怎么说话"的要求
 （例如"多用表情""语气要更亲昵""要多用拥抱"）。

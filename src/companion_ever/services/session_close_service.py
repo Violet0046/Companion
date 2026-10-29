@@ -1,0 +1,248 @@
+"""会话关闭的用例。"""
+from __future__ import annotations
+
+import logging
+import threading
+
+from dataclasses import dataclass
+from companion_ever.services.extraction_service import ExtractionReport, report_from_state
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Callable
+
+from companion_ever.services.authz import Authorizer
+from companion_ever.services.conversation_service import ConversationService
+from companion_ever.trace import trace_scope
+from companion_ever.utils.time import parse_sqlite_ts
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from langgraph.graph import CompiledGraph
+    from companion_ever.workflows.extraction_workflow import ExtractionState
+
+
+@dataclass
+class SessionCloseReport:
+    """会话关闭的合并报告。"""
+
+    marker_id: int
+    extraction: ExtractionReport
+
+
+
+
+class SessionCloseService:
+    """关闭会话 = 写 marker + 触发 extraction_workflow。"""
+
+    def __init__(
+        self,
+        authorizer: Authorizer,
+        conversation_service: ConversationService,
+        extraction_graph: "CompiledGraph",
+    ):
+        self.authorizer = authorizer
+        self.conversation_service = conversation_service
+        self.extraction_graph = extraction_graph
+        # 正在进行的记录任务（防止重复触发）
+        self._closing: set[tuple[str, str]] = set()
+        # 记录完成后的回调：(user_id, persona_id, report) -> None
+        #
+        # 为什么需要它：记录是**后台线程**跑的，前端是 WebSocket 连着的，
+        # 没有回调的话前端只能靠轮询 last_record_at 猜「记好了没」——
+        # 而 last_record_at 是 marker 的写入时间（= 开始记录的时刻），
+        # 不是「抽取完成」的时刻，轮询会提前误判。
+        # Web 层在这里挂一个广播函数，把 record_done 推给前端。
+        self.on_record_done: Callable[[str, str, "SessionCloseReport"], None] | None = None
+
+    # ============ 自动管理 session 边界 ============
+
+    def close_if_stale(
+        self,
+        user_id: str,
+        persona_id: str,
+        idle_minutes: int,
+    ) -> bool:
+        """如果上一个 session 已空闲超时，自动关闭它。
+
+        为什么要这个：
+        session 边界不能依赖用户记得按 /quit。用户可能直接关掉 App、
+        切后台、断网，边界就没了。边界没了，摘要、抽取、上下文的边界全乱。
+
+        三个触发点都调这个函数：
+        - 用户发下一条消息时（回来了 -> 先关上一个）
+        - 服务器定时任务（用户永远不回来也能关）
+        - 进程启动时（CLI / 服务器重启）
+
+        Args:
+            idle_minutes: 空闲阈值（分钟）。0 = 禁用自动判定。
+
+        Returns:
+            True = 已自动关闭（抽取在后台跑，不阻塞调用方）
+        """
+        if idle_minutes <= 0:
+            return False
+
+        active = self.conversation_service.get_active_session(
+            user_id=user_id, persona_id=persona_id,
+        )
+        if not active:
+            return False  # 没有未关闭的 session
+
+        last_at = parse_sqlite_ts(active["last_message_at"])
+        if last_at is None:
+            return False
+
+        gap = (datetime.now(timezone.utc) - last_at).total_seconds()
+        if gap < idle_minutes * 60:
+            return False
+
+        # 空闲超时 -> 自动关闭（抽取在后台跑，不阻塞当前消息）
+        self.close_session_background(user_id, persona_id)
+        return True
+
+    def is_closing(self, user_id: str, persona_id: str) -> bool:
+        """这个角色当前有没有正在进行的记录任务。"""
+        return (user_id, persona_id) in self._closing
+
+    def close_session_background(self, user_id: str, persona_id: str) -> bool:
+        """在后台线程里关闭 session（不阻塞调用方）。
+
+        用于自动边界管理：抽取是一次完整 LLM 调用（几十秒），
+        不能让用户等它。
+
+        Returns:
+            True = 已启动；False = 已经有任务在跑了（不重复启动）
+        """
+        key = (user_id, persona_id)
+        if key in self._closing:
+            return False
+        self.authorizer.require_persona(user_id, persona_id)
+        self._closing.add(key)
+        thread = threading.Thread(
+            target=self._close_worker,
+            args=(user_id, persona_id),
+            daemon=True,
+            name="session-close",
+        )
+        thread.start()
+        return True
+
+    def _close_worker(self, user_id: str, persona_id: str) -> None:
+        """后台线程的实现（异常不影响主流程）。"""
+        try:
+            self.close_session(user_id, persona_id)
+        except Exception:
+            logger.exception(
+                "自动关闭 session 失败: user=%s persona=%s",
+                user_id, persona_id,
+            )
+        finally:
+            self._closing.discard((user_id, persona_id))
+
+    def close_session(
+        self,
+        user_id: str,
+        persona_id: str,
+    ) -> SessionCloseReport:
+        """会话关闭（对外入口）：维护 running 状态 + 触发完成回调。
+
+        这里做两件事：
+        1. 把 (user_id, persona_id) 放进 _closing —— 这样 is_closing() 在
+           **任何**调用路径下都是准的（后台线程 / Web 直接调用）。
+           前端靠它显示「记录中…」。
+        2. 抽取结束后调用 on_record_done 回调（Web 层推送 record_done 事件），
+           让前端不用退出重进就能看到更新后的关系状态。
+        """
+        key = (user_id, persona_id)
+        self._closing.add(key)
+        try:
+            report = self._close_session_inner(user_id, persona_id)
+        finally:
+            self._closing.discard(key)
+        return report
+
+    def _close_session_inner(
+        self,
+        user_id: str,
+        persona_id: str,
+    ) -> SessionCloseReport:
+        """会话关闭：写 marker + 立即抽取（走 extraction_workflow）。
+
+        抽取返回失败状态时撤销本次 marker，让下一次关闭覆盖待重试消息。
+
+        Args:
+            user_id, persona_id: 用户 + 人设
+
+        Returns:
+            SessionCloseReport（marker_id + ExtractionReport）
+
+        Raises:
+            PermissionError: user 不拥有 persona
+        """
+        import time as _time
+
+        with trace_scope("extraction", user_id, persona_id) as tr:
+            _t0 = _time.perf_counter()
+            self.authorizer.require_persona(user_id, persona_id)
+
+            # 1. 写 sentinel marker
+            marker_id = self.conversation_service.log_session_close(
+                user_id=user_id, persona_id=persona_id,
+            )
+            tr.step(
+                "db.log_session_close",
+                ms=(_time.perf_counter() - _t0) * 1000,
+                marker_id=marker_id,
+            )
+
+            # 2. 触发 extraction_workflow
+            _t1 = _time.perf_counter()
+            try:
+                state: ExtractionState = self.extraction_graph.invoke({
+                    "user_id": user_id,
+                    "persona_id": persona_id,
+                })
+            except Exception:
+                # 存储异常也不能让 marker 跳过尚未成功处理的消息。
+                self.conversation_service.delete_session_close(marker_id)
+                raise
+            tr.step(
+                "extraction.workflow",
+                ms=(_time.perf_counter() - _t1) * 1000,
+                messages_loaded=len(state.get("messages") or []),
+                facts_created=state.get("facts_created", 0),
+                blocks_updated=state.get("blocks_updated", 0),
+                errors=list(state.get("errors") or []),
+            )
+            report = report_from_state(state)
+
+            # 抽取整体失败（LLM 调用就失败）时回滚 marker。
+            # 否则下次抽取的范围是 [本 marker, 下个 marker]，
+            # 这段内容将永远不会被抽取——记忆静默丢数据。
+            # 回滚后下次抽取的范围会自动包含它。
+            final_marker_id = marker_id
+            if state.get("extraction_failed"):
+                self.conversation_service.delete_session_close(marker_id)
+                tr.step("extraction.rolled_back", marker_id=marker_id,
+                        reason="; ".join(report.errors)[:200])
+                final_marker_id = 0  # 0 = 已回滚，本次未成功
+
+            result = SessionCloseReport(
+                marker_id=final_marker_id,
+                extraction=report,
+            )
+
+            # 通知外部：记录做完了（Web 层推 record_done 给前端）
+            if self.on_record_done is not None:
+                try:
+                    self.on_record_done(user_id, persona_id, result)
+                except Exception:  # noqa: BLE001 —— 回调失败不能影响记录本身
+                    logger.exception(
+                        "record_done 回调失败: user=%s persona=%s",
+                        user_id, persona_id,
+                    )
+
+            return result
+
+
+__all__ = ["SessionCloseReport", "ExtractionReport", "SessionCloseService"]

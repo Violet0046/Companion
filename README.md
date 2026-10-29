@@ -1,159 +1,63 @@
 # Companion Ever Memory
 
-> **刚回来？先看 [START_HERE.md](START_HERE.md)** —— 有当前进度盘点、启动命令、以及"下一步该做什么"。
-> 也可直接看 [PROJECT_KB.md](PROJECT_KB.md)（项目知识库 / 架构决策）。
+一个带长期记忆的 AI 伴侣原型。当前可通过命令行或 Web/PWA 聊天；目标是 **iPhone 本地保存数据和执行业务逻辑，联网调用模型 API**，并考虑 Android。
 
-基于 SQLite + LangGraph 的对话式长期记忆系统。
+**先读 [开发盘点与路线图](docs/PROJECT.md)，再按 [代码阅读指南](docs/ARCHITECTURE.md) review。**
+旧开发日志已从工作目录移除，可在 Git 历史中查看，不代表当前状态。
 
-## 特性
+## 当前能做什么
 
-- **两个 LLM 职责分离**：Chat LLM 只生成对话回复；Extraction LLM 在 session 关闭时抽取 facts + 更新 blocks
-- **Sentinel session 边界**：每次 `session_close` 在 `conversation_log` 写一行 `role='session_close'` 作为 session 边界
-- **prompt 干净**：Chat LLM 只看到当前 session 的对话历史；历史 session 的信息通过 retrieval 从 notes 取回
-- **LangGraph 工作流**：`chat_workflow` + `extraction_workflow` 用 LangGraph StateGraph 编排
-- **集中授权**：`Authorizer` 单一入口，消除 6 处重复的 `_check_permission`
-- **配置层**：`.env` 文件 + `python-dotenv` 自动加载
+- 单用户、多角色的私聊；WebSocket 流式回复与聊天历史查询。
+- 角色设定、用户画像、关系摘要、记忆浏览和历史日期检索。
+- 手动或空闲后抽取长期事实；精确重复事实幂等写入。
+- SQLite FTS5 + 中文短词检索；召回去重与关键词相关候选优先。
+- 模型返回的思考字段与正文分开保存；trace 可检查实际模型请求。
 
-## 目录结构
+尚未实现：独立手机 App、群聊、连续多条助手消息、后台主动聊天、语义去重、自动记忆关联。
+当前 Web/PWA 仍依赖运行 Python 服务的电脑或服务器。
 
-```
-src/companion_ever/
-├── __init__.py
-├── app.py                       # 组合根（build_app）
-├── config.py                    # 配置层（.env / 环境变量）
-│
-├── domain/                      # 纯数据 + 类型 + 模板
-│   ├── enums.py                 # NoteType / BlockType
-│   ├── entities.py              # @dataclass User / Note / Block / ...
-│   ├── errors.py
-│   └── persona_templates.py
-│
-├── infrastructure/              # 外部关注点
-│   ├── persistence/             # SQLite + repos
-│   └── ai/                      # LLM 客户端
-│
-├── application/                 # 用例服务（按子域）
-│   ├── authz.py                 # Authorizer（集中授权）
-│   ├── llm_json.py              # LLM 响应清理
-│   ├── persona/                 # 人设子域
-│   ├── memory/                  # 记忆子域
-│   └── chat/                    # 对话子域
-│
-├── workflows/                   # LangGraph 工作流
-│   ├── chat_workflow.py         # chat + close 节点
-│   └── extraction_workflow.py   # load + extract + persist
-│
-├── prompts/                     # LLM 提示词（.txt）
-│
-├── utils/                       # 横切工具
-│
-└── cli/                         # 命令行工具
-    └── __init__.py              # setup / chat / show 子命令
-```
+## 启动（Windows PowerShell）
 
-## 安装
-
-### 一键 setup（推荐）
-
-```bash
-# Linux / macOS
-chmod +x setup.sh
-./setup.sh
-
-# Windows (PowerShell)
-.\setup.ps1
-
-# Windows (cmd)
-setup.bat
-```
-
-> **Windows 三种启动方式**：
-> | 命令 | 适用 |
-> |---|---|
-> | `.\setup.ps1` | **PowerShell（最可靠）** |
-> | `setup.bat` | cmd.exe |
-> | `cmd /c setup.bat` | PowerShell 中转 cmd |
->
-> **PowerShell 中跑 `setup.bat` 会乱码**，因为 PS 会尝试解析 .bat。直接用 `.\setup.ps1`。
-
-会自动：
-- 创建 `.venv/` 虚拟环境
-- 安装 `requirements.txt` 中的依赖
-- 把 `.env.example` 复制为 `.env`（如果还没有）
-
-### 手动 setup
-
-```bash
+```powershell
 python -m venv .venv
-source .venv/bin/activate            # Linux/macOS
-# .venv\Scripts\activate            # Windows
-pip install -r requirements.txt
-cp .env.example .env
-# 编辑 .env 填入 OPENAI_API_KEY / OPENAI_BASE_URL / COMPANION_LLM_MODEL
+.\.venv\Scripts\python.exe -m pip install -e .
+# 首次配置；已有 .env 时不要覆盖
+Copy-Item .env.example .env
+# 编辑 .env 中的模型 API 配置
+.\.venv\Scripts\python.exe -m companion_ever setup --user alice --persona shushu --template hot_girlfriend
+.\.venv\Scripts\python.exe -m companion_ever serve
 ```
 
-`.venv/` 已经在 `.gitignore` 里——每个人各自创建。
+也可使用现有 `setup.ps1` / `setup.bat` / `setup.sh`。依赖统一声明在 `pyproject.toml`。
+CLI 私聊：`companion-cli chat --user alice --persona shushu`；查看记忆：`companion-cli show --user alice --persona shushu`。
 
-## 快速上手
+## 目录
 
-```bash
-# 1. 创建用户 + 角色
-PYTHONPATH=src python -m companion_ever.cli setup \
-    --user alice --persona 柳如烟 --template hot_girlfriend
-
-# 2. 启动对话
-PYTHONPATH=src python -m companion_ever.cli chat \
-    --user alice --persona 柳如烟
-#   > 你好，我叫周艺科
-#   > /quit   ← 触发 session close + extraction
-
-# 3. 查看抽取结果
-PYTHONPATH=src python -m companion_ever.cli show \
-    --user alice --persona 柳如烟
+```text
+src/companion_ever/
+  app.py / config.py    装配与配置
+  services/            聊天、抽取、召回、角色等业务规则（平铺）
+  storage/             SQLite 表、查询与写入
+  llm/                 模型协议、客户端与 trace 包装
+  domain/              实体、枚举与角色模板
+  api/                 HTTP / WebSocket 适配
+  cli/                 命令行与维护命令
+  web/                 现有网页界面
+  prompts/             提示词
+  workflows/           现有 LangGraph 调用接口的薄适配层
+  utils/ / trace.py    文本、时间与诊断
 ```
 
-详见 [TESTING.md](TESTING.md)。
+`tests/` 是回归验证；`tools/` 是开发工具；`design/mockup/` 是设计参考，不参与运行。
+`memory/` 是本地数据与备份，`.env` 是私有配置，不要当作过程文件删除。
 
-## 手机上聊（PWA）
+## 验证与维护
 
-```bash
-# 启动 Web 服务（终端会打印可用的地址）
-companion-cli serve
-
-# 手机连同一个 WiFi，浏览器打开 http://<计算机 IP>:8000
-# 浏览器菜单选「添加到主屏幕」即可当 App 使用
+```powershell
+.\.venv\Scripts\python.exe tools/check.py
+companion-cli maintain backup
+companion-cli trace list --user alice --persona shushu --last 10
 ```
 
-要完整 PWA 能力（离线缓存 / 推送）需要 HTTPS，建议用 Tailscale Serve。
-
-## 诊断：trace（看模型究竟看到了什么）
-
-```bash
-# 列出最近的 trace
-companion-cli trace list --user yike --persona 柳如烟 --last 10
-
-# 看某一轮的完整链路
-companion-cli trace show <trace_id>
-
-# 看模型实际收到的完整请求（system prompt + 历史 + 召回的记忆）
-companion-cli trace show <trace_id> --request
-```
-
-trace 落盘在 `memory/traces/<日期>/`，包含元数据（链路步骤 + 耗时 + token）
-和产物（实际发出的请求 / 实际收到的回复）。
-内置的廉价不变量会自动检查 prompt 组装是否正常（历史重复 / 历史取错 /
-超预算 / 召回失效等），违规会在 `trace show` 里高亮。
-
-详见 [START_HERE.md](START_HERE.md)。
-
-## 测试
-
-```bash
-PYTHONPATH=src python tests/test_persona_service.py
-PYTHONPATH=src python tests/test_sentinel_flow.py
-PYTHONPATH=src python tests/test_chat_workflow.py
-```
-
-## License
-
-Internal project.
+测试逐个运行脚本、使用临时数据库和假模型，不调用收费 API。部分旧测试是脚本 `main()`，只运行 pytest 不能覆盖全部验证。
+备份使用维护命令读取 SQLite 的完整状态，不能仅复制 WAL 模式下的主数据库文件。

@@ -14,12 +14,12 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, WebSocket,
 from starlette.concurrency import run_in_threadpool
 
 from companion_ever.app import AppContext
-from companion_ever.application.chat.assistant_reply import split_assistant_reply
-from companion_ever.application.llm_json import strip_thinking
+from companion_ever.services.assistant_reply import split_assistant_reply
+from companion_ever.services.llm_json import strip_thinking
 from companion_ever.api.deps import check_pin, resolve_target
 from companion_ever.api.schemas import ChatIn, CloseSessionIn, CloseSessionOut
 from companion_ever.api.think_filter import ThinkFilter
-from companion_ever.application.chat.session_close_service import SessionCloseReport
+from companion_ever.services.session_close_service import SessionCloseReport
 
 router = APIRouter()
 
