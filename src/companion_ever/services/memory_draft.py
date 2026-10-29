@@ -134,7 +134,7 @@ def generate_draft(case: dict, llm) -> Draft:
 
 def render_review(cases: list[dict], drafts: dict | None = None) -> str:
     lines = ['# 记忆设计审阅稿', '',
-             '本地私人样本。以下人工建议由编码助手整理，尚未获用户确认，不是标准答案。',
+             '本地私人样本。原始人工建议供对照；有用户审阅意见的，以该意见为准，其余仍待确认。',
              '数据库时间为 UTC；显示时间为 UTC+8。整理工具不修改正式记忆。', '',
              '审阅时只需标注：接受 / 修改 / 不保存，以及需要改成什么。', '']
     for case in cases:
@@ -144,7 +144,7 @@ def render_review(cases: list[dict], drafts: dict | None = None) -> str:
             marker = '新消息' if m['id'] in case['new_message_ids'] else '参考前文'
             lines.append(f"- #{m['id']} · {m['local_time']} · {m['role']} · {marker}")
             lines.append('  > ' + m['content'].replace('\n', '\n  > '))
-        lines.extend(['', '### 人工建议（待你审阅）', '', case['recommendation'], '',
+        lines.extend(['', '### 原始人工建议（供对照）', '', case['recommendation'], '',
                       '**不能据此推断：** ' + case['do_not_infer'], '',
                       '**召回验收：** ' + case['retrieval_check'], '',
                       '**关联依据：** ' + case['link_reason'], ''])
@@ -177,5 +177,12 @@ def render_review(cases: list[dict], drafts: dict | None = None) -> str:
                 for uncertainty in result['uncertainties']:
                     lines.append('- 待确认：' + uncertainty)
             lines.append('')
-        lines.extend(['**你的意见：** 待审阅', '', '---', ''])
+        review = case.get('user_review')
+        if review:
+            lines.extend(['### 用户审阅意见', '', review['feedback'], '',
+                          '**落实规则：** ' + review['rule'], '',
+                          '**确认范围：** ' + review['scope'], ''])
+        else:
+            lines.extend(['**你的意见：** 待审阅', ''])
+        lines.extend(['---', ''])
     return '\n'.join(lines)

@@ -14,7 +14,8 @@ def main():
                 {'id': 2, 'role': 'user', 'content': '我不喜欢喝咖啡', 'local_time': '2026-10-29 09:00+08:00'}],
             'new_message_ids': [2], 'existing_notes': [],
             'recommendation': 'PRIVATE_EXPECTATION', 'do_not_infer': '',
-            'retrieval_check': '', 'link_reason': ''}
+            'retrieval_check': '', 'link_reason': '',
+            'user_review': {'feedback': 'PRIVATE_REVIEW', 'rule': 'review rule', 'scope': 'only this case'}}
     data = {'proposals': [{'id': 'p1', 'kind': 'fact', 'action': 'create', 'target_id': None,
                           'content': '用户不喜欢喝咖啡', 'event_time': None,
                           'time_basis': '未声明偏好开始时间', 'reality': 'user_report',
@@ -24,9 +25,11 @@ def main():
     class FakeLLM:
         def chat(self, messages):
             assert 'PRIVATE_EXPECTATION' not in json.dumps(messages)
+            assert 'PRIVATE_REVIEW' not in json.dumps(messages)
             return json.dumps(data)
     assert generate_draft(case, FakeLLM()).proposals[0].kind == 'fact'
     assert 'PRIVATE_EXPECTATION' in render_review([case])
+    assert 'PRIVATE_REVIEW' in render_review([case])
     def reject(modify):
         broken = copy.deepcopy(data)
         modify(broken)

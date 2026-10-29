@@ -6,7 +6,8 @@
 
 真实样本及报告保存在本地 `memory/reviews/2026-10-29/`，被 Git 忽略。
 `REVIEW.md` 包含 18 个真实案例的原话、人工建议、禁止推断项及召回验收问题。
-这些建议由编码助手整理，待用户确认，不能当作已标注的标准答案。
+原始建议由编码助手整理；C03/C04/C07/C08/C13/C15 已收到用户反馈，逐例保留确认范围，不能视为用户认可整份原始建议。其余仍待审阅。
+当前通用规则见 [保存与使用规则](MEMORY_POLICY.md)。
 `cases.json` 是固定输入快照。`MODEL_REVIEW.md` / `.json` 是指定样本的独立模型输出。
 其中 existing_notes 是明确标注的实验候选笔记，不是正式记忆库的直接导出。
 
@@ -36,6 +37,7 @@
 - new_message_ids：本批新消息。其他消息仅供上下文参考，不能单独成为新记忆的依据。
 - existing_notes：候选 id、kind（episode/fact）、content，以及可选来源/情境说明。
 - recommendation、do_not_infer、retrieval_check、link_reason：人工审阅基线；不发送给模型。
+- user_review（可选）：用户反馈、落实规则、确认范围；只用于审阅呈现，不发送给模型。
 
 输出是可验证的 Draft：建议、关系、跳过原因、不确定项。
 建议支持 create / append / confirm / revise，必须引用新消息中的证据，非新增操作要指明已有目标。
