@@ -28,6 +28,7 @@ env/
 *.db-wal
 *.db-shm
 memory/traces/
+memory/reviews/
 *.db.bak*
 memory/*.bak*
 .commit_msg.txt

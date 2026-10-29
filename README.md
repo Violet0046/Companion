@@ -5,6 +5,8 @@
 **先读 [开发盘点与路线图](docs/PROJECT.md)，再按 [代码阅读指南](docs/ARCHITECTURE.md) review。**
 旧开发日志已从工作目录移除，可在 Git 历史中查看，不代表当前状态。
 
+正在进行的[两层记忆审阅实验](docs/MEMORY_REVIEW.md)只生成建议，不修改正式记忆。真实样本的本地入口是 `memory/reviews/2026-10-29/START_HERE.md`。
+
 ## 当前能做什么
 
 - 单用户、多角色的私聊；WebSocket 流式回复与聊天历史查询。
