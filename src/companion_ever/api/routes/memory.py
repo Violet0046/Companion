@@ -107,6 +107,10 @@ def persona_summary(
         user_id=user_id, persona_id=persona_id, n=1000,
     )
     last_at = ctx.services.conversation.get_last_conversation_at(user_id, persona_id)
+    completed = ctx.conn.execute(
+        "SELECT max(j.completed_at) FROM memory_job j JOIN conversation c ON c.id=j.conversation_id "
+        "WHERE c.user_id=? AND c.persona_id=? AND j.status='succeeded'", (user_id,persona_id)
+    ).fetchone()[0]
 
     return PersonaSummary(
         user_id=user_id,
@@ -118,7 +122,7 @@ def persona_summary(
         session_count=len(markers),
         last_conversation_at=_s(last_at, tz),
         # markers 是时间升序，最后一个就是最近一次记录
-        last_record_at=_s(markers[-1].created_at, tz) if markers else None,
+        last_record_at=_s(completed, tz),
         # 现在正在记录吗？（前端用来显示「记录中…」）
         recording=ctx.services.session_close.is_closing(user_id, persona_id),
     )

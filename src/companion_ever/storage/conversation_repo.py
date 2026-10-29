@@ -16,6 +16,12 @@ class ConversationRepo:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
+    def ensure_conversation(self, user_id: str, persona_id: str) -> int:
+        self.conn.execute("INSERT OR IGNORE INTO conversation(user_id,persona_id) VALUES (?,?)",
+                          (user_id, persona_id))
+        return self.conn.execute("SELECT id FROM conversation WHERE user_id=? AND persona_id=?",
+                                 (user_id, persona_id)).fetchone()[0]
+
     def log_turn(
         self,
         *,
@@ -48,9 +54,11 @@ class ConversationRepo:
 
         cur = self.conn.execute(
             "INSERT INTO conversation_log "
-            "(user_id, persona_id, turn_index, role, content) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, persona_id, turn_index, role, content.strip()),
+            "(user_id, persona_id, turn_index, role, content,conversation_id,sender_kind,sender_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, persona_id, turn_index, role, content.strip(),
+             self.ensure_conversation(user_id,persona_id),
+             "user" if role == "user" else "persona", user_id if role == "user" else persona_id),
         )
         return cur.lastrowid
 
@@ -82,9 +90,9 @@ class ConversationRepo:
         """
         cur = self.conn.execute(
             "INSERT INTO conversation_log "
-            "(user_id, persona_id, turn_index, role, content) "
-            "VALUES (?, ?, ?, 'session_close', '[session_close]')",
-            (user_id, persona_id, turn_index),
+            "(user_id, persona_id, turn_index, role, content,conversation_id,sender_kind,sender_id) "
+            "VALUES (?, ?, ?, 'session_close', '[session_close]', ?, 'system', ?)",
+            (user_id, persona_id, turn_index, self.ensure_conversation(user_id,persona_id), persona_id),
         )
         return cur.lastrowid
 

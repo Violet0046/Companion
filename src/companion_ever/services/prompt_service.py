@@ -61,6 +61,7 @@ class PromptService:
         user_id: str,
         persona_id: str,
         query: str = "",
+        current_message_id: int | None = None,
     ) -> dict:
         """拼装完整上下文，返回 LLM 调用所需的结构。
 
@@ -91,12 +92,15 @@ class PromptService:
         blocks = self.block_service.get_blocks(user_id, persona_id)
         # 用 history_max_messages（不是 recent_message_limit）——
         # 防止 context 无限增长，同时保留足够历史给 LLM
-        recent_messages = self._get_recent_messages(
-            user_id, persona_id, limit=self.history_max_messages,
-        )
-        last_conv_at = self.conversation_service.get_last_conversation_at(
-            user_id, persona_id
-        )
+        if current_message_id is not None:
+            recent_messages = self.conversation_service.get_messages_between(
+                user_id=user_id, persona_id=persona_id, until_id=current_message_id,
+                limit=self.history_max_messages + 1)
+            earlier = [m for m in recent_messages if m.id != current_message_id]
+            last_conv_at = earlier[-1].created_at if earlier else None
+        else:
+            recent_messages = self._get_recent_messages(user_id, persona_id, limit=self.history_max_messages)
+            last_conv_at = self.conversation_service.get_last_conversation_at(user_id, persona_id)
 
         # 2. 拼装 system_prompt
         related_notes = []
@@ -120,7 +124,7 @@ class PromptService:
         for msg in recent_messages:
             messages.append({
                 "role": msg.role,
-                "content": self._render_message(msg),
+                "content": msg.content if msg.id == current_message_id else self._render_message(msg),
             })
 
         self._record_trace(

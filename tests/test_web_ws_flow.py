@@ -152,6 +152,24 @@ assert(S.typing === false, '断线后不再显示"正在输入"');
 // --- 6. 顶栏不应该出现"在线" ---
 assert((topName.textContent || '').indexOf('在线') < 0, '顶栏没有"在线"字样');
 
+// Continuous input and generation fencing.
+WebSocket.OPEN = 1;
+const sent = [];
+S.ws = {readyState: 1, send(x) {sent.push(JSON.parse(x));}};
+S.connected = true;
+S.messages = [];
+document.getElementById('input').value = 'first'; send();
+document.getElementById('input').value = 'second'; send();
+assert(sent.length === 2, 'waiting for reply still allows consecutive sends');
+assert(sent[0].client_message_id !== sent[1].client_message_id, 'each input has an idempotency key');
+assert(btnSend.disabled === false, 'send remains enabled');
+handleWs({type:'received', client_message_id:sent[1].client_message_id, message_id:12, generation_id:'new'});
+handleWs({type:'delta',generation_id:'old',content:'stale'});
+assert(S.streamEl === null, 'late old-generation delta ignored');
+handleWs({type:'message_done',generation_id:'new',message:{id:901,role:'assistant',content:'saved',thinking:null,created_at:'2026-10-29T10:00:00Z'}});
+handleWs({type:'message_done',generation_id:'new',message:{id:901,role:'assistant',content:'saved',thinking:null,created_at:'2026-10-29T10:00:00Z'}});
+assert(S.messages.filter(x=>x.id===901).length===1, 'canonical saved message replay is deduplicated');
+
 if (process.exitCode) { console.error('有断言失败'); process.exit(1); }
 console.log('[OK] WS 消息流全流程正常');
 """

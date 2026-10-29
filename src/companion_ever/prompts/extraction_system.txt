@@ -5,7 +5,7 @@
 每条 fact 必须满足：
 1. 是明确表达的内容，不要过度推断
 2. content 应"独立成句"——脱离对话也能被理解
-3. importance 在 [0, 1] 范围内
+3. importance 在 [0, 1] 范围内；source_quote 必须逐字引用用户原话，并用 source_message_ids 数组列出本批对应用户消息 ID
 4. type 必属于以下枚举之一：
    - profile_fact（用户客观事实，如姓名、城市、工作）
    - event（发生过的事件）

@@ -9,6 +9,7 @@ from companion_ever.domain.entities import Note
 from companion_ever.utils.text import extract_keywords
 from companion_ever.domain.enums import NoteType
 from .mappers import row_to_note
+from .db import transaction
 
 
 def _new_note_id() -> str:
@@ -191,8 +192,7 @@ class NoteRepo:
         if not isinstance(content, str) or not content.strip():
             raise ValueError("content 必须是非空字符串")
         content = content.strip()
-        self.conn.execute("BEGIN IMMEDIATE")
-        try:
+        with transaction(self.conn):
             row = self.conn.execute(
                 "SELECT id FROM note WHERE user_id=? AND persona_id=? AND type=? "
                 "AND trim(content)=? AND is_archived=0 ORDER BY created_at, id LIMIT 1",
@@ -204,11 +204,7 @@ class NoteRepo:
                 result = (self.create(user_id=user_id, persona_id=persona_id, type=type,
                                       content=content, source_quote=source_quote,
                                       importance=importance), True)
-            self.conn.commit()
             return result
-        except Exception:
-            self.conn.rollback()
-            raise
 
     def create(
         self,

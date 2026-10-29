@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import uuid
+from contextlib import contextmanager
 from importlib import resources
 from pathlib import Path
 
@@ -48,6 +50,26 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     多次执行是幂等的（所有 DDL 都用 IF NOT EXISTS）。
     """
     conn.executescript(_read_schema())
+    from .migrations import migrate
+    migrate(conn)
+
+
+@contextmanager
+def transaction(conn):
+    """Nest with savepoints; only the outer unit commits."""
+    nested = conn.in_transaction
+    name = 'sp_' + uuid.uuid4().hex
+    conn.execute(f'SAVEPOINT {name}' if nested else 'BEGIN IMMEDIATE')
+    try:
+        yield
+        conn.execute(f'RELEASE {name}' if nested else 'COMMIT')
+    except BaseException:
+        if nested:
+            conn.execute(f'ROLLBACK TO {name}')
+            conn.execute(f'RELEASE {name}')
+        else:
+            conn.rollback()
+        raise
 
 
 class ThreadLocalConnection:
@@ -123,6 +145,16 @@ class ThreadLocalConnection:
                 except Exception:  # noqa: BLE001
                     pass
             self._all.clear()
+
+    def close_current(self):
+        """Release a short-lived worker's connection in its owning thread."""
+        conn = getattr(self._local, 'conn', None)
+        if conn is not None:
+            conn.close()
+            del self._local.conn
+            with self._lock:
+                if conn in self._all:
+                    self._all.remove(conn)
 
     def __getattr__(self, name: str):
         # 其余属性（row_factory 等）转发到当前线程的连接

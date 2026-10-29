@@ -50,19 +50,20 @@ def main() -> int:
 
     # 造 120 条历史消息（跨越两天）
     conn = ctx.conn
+    cid = ctx.repos.conversation.ensure_conversation("alice", "苏苏")
     for i in range(60):
         conn.execute(
-            "INSERT INTO conversation_log (user_id, persona_id, turn_index, role, content, created_at) "
-            "VALUES ('alice','苏苏',?,?,?,?)",
+            "INSERT INTO conversation_log (user_id, persona_id, turn_index, role, content, created_at, conversation_id, sender_kind, sender_id) "
+            "VALUES ('alice','苏苏',?,?,?,?,?,'user','alice')",
             (i + 1, "user" if i % 2 == 0 else "assistant",
-             f"消息内容 第{i}条 广联达 面试", "2026-10-27 10:00:00"),
+             f"消息内容 第{i}条 广联达 面试", "2026-10-27 10:00:00", cid),
         )
     for i in range(60):
         conn.execute(
-            "INSERT INTO conversation_log (user_id, persona_id, turn_index, role, content, created_at) "
-            "VALUES ('alice','苏苏',?,?,?,?)",
+            "INSERT INTO conversation_log (user_id, persona_id, turn_index, role, content, created_at, conversation_id, sender_kind, sender_id) "
+            "VALUES ('alice','苏苏',?,?,?,?,?,'user','alice')",
             (100 + i, "user" if i % 2 == 0 else "assistant",
-             f"第二天消息 第{i}条 姐姐", "2026-10-28 10:00:00"),
+             f"第二天消息 第{i}条 姐姐", "2026-10-28 10:00:00", cid),
         )
     conn.execute(
         "INSERT INTO note (id, user_id, persona_id, type, content, importance) "

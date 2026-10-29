@@ -53,6 +53,7 @@ def test_thread_safe_db():
         conn = init_db(db_path)
         conn.execute("INSERT INTO user (id) VALUES ('u1')")
 
+        conn.execute("INSERT INTO conversation(id,user_id,persona_id) VALUES (1,'u1','p1')")
         errors: list[str] = []
         barrier = threading.Barrier(8)
 
@@ -63,8 +64,8 @@ def test_thread_safe_db():
                     conn.execute("SELECT 1").fetchone()
                     conn.execute(
                         "INSERT INTO conversation_log "
-                        "(user_id, persona_id, turn_index, role, content) "
-                        "VALUES ('u1', 'p1', ?, 'user', 'x')",
+                        "(user_id, persona_id, turn_index, role, content,conversation_id,sender_kind,sender_id) "
+                        "VALUES ('u1', 'p1', ?, 'user', 'x',1,'user','u1')",
                         (idx * 1000 + j,),
                     )
             except Exception as e:  # noqa: BLE001

@@ -1553,9 +1553,48 @@ function connect() {
   };
 }
 
+function outboxKey() { return `companion-outbox:${S.user}:${S.persona}`; }
+function readOutbox() {
+  try { return JSON.parse(localStorage.getItem(outboxKey()) || '{}'); } catch (_) { return {}; }
+}
+function writeOutbox(value) { localStorage.setItem(outboxKey(), JSON.stringify(value)); }
+
 function handleWs(m) {
+  if (m.generation_id && ['start', 'delta', 'thinking', 'message_done', 'done', 'cancelled', 'error'].includes(m.type)
+      && m.generation_id !== S.generationId) return;
   switch (m.type) {
+    case 'received': {
+      const saved = S.messages.find(x => x.client_message_id === m.client_message_id);
+      if (saved) saved.id = m.message_id;
+      const pending = readOutbox();
+      delete pending[m.client_message_id];
+      writeOutbox(pending);
+      if (!S.latestClientMessageId || m.client_message_id === S.latestClientMessageId) S.generationId = m.generation_id;
+      break;
+    }
+    case 'message_done': {
+      if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
+      const saved = m.message;
+      if (!S.messages.some(x => x.id === saved.id)) {
+        const el = renderMsg('assistant', saved.content, S.showThinking ? saved.thinking : null, saved.id);
+        appendChatMsg(el, saved.created_at);
+        S.messages.push(saved);
+        if (wasAtBottom) scrollBottom();
+      }
+      S.streamThinking = '';
+      break;
+    }
+    case 'cancelled': {
+      if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
+      resetSending();
+      break;
+    }
     case 'ready':
+      // Retry only unacknowledged input, with its original idempotency key.
+      for (const [id, content] of Object.entries(readOutbox())) {
+        S.latestClientMessageId = id;
+        S.ws.send(JSON.stringify({type: 'chat', content, client_message_id: id}));
+      }
       setStatus('', 'online')  // 不显示"在线"（对 AI 来说它一直都在）;
       // 连上了说明服务器活着了 → 刷新聊天列表（服务器重启后自动恢复）
       loadConvs();
@@ -1628,6 +1667,7 @@ function handleWs(m) {
       setTyping(false);
       updateJumpButton();
       refreshConv(S.user, S.persona);
+      if (m.generation_id) loadHistory(true);
       break;
     }
     case 'error': {
@@ -1661,6 +1701,7 @@ function handleWs(m) {
         if (isCurrent) loadConvs();
       }).catch(() => { /* ignore */ });
       if (!isCurrent) break;   // 不是当前角色的记录 → 静默刷新就行，不打扰
+      if (m.errors && m.errors.length) { toast('记忆整理未完成，可重试：' + m.errors[0], 5000); break; }
       const bits = [];
       if (m.facts_created) bits.push(`记住了 ${m.facts_created} 件事`);
       if (m.blocks_updated) bits.push(`关系状态更新了 ${m.blocks_updated} 项`);
@@ -1690,7 +1731,11 @@ function send() {
   const text = input.value.trim();
   if (!text) return;
   if (!S.connected || !S.ws || S.ws.readyState !== WebSocket.OPEN) { toast('还没连上，等一下'); return; }
-  if (S.sending) return;
+  // A new user message interrupts only the unfinished assistant draft.
+  if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
+  S.generationId = null;
+  const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  S.latestClientMessageId = requestId;
 
   const box = $('chat');
   const empty = box.querySelector('.empty');
@@ -1698,13 +1743,16 @@ function send() {
   const now = new Date().toISOString();
   const el = renderMsg('user', text, null, null);
   appendChatMsg(el, now);
-  S.messages.push({ id: Date.now(), role: 'user', content: text, created_at: now });
+  S.messages.push({ id: Date.now(), role: 'user', content: text, created_at: now, client_message_id: requestId });
   input.value = '';
   input.style.height = 'auto';
 
-  S.ws.send(JSON.stringify({ type: 'chat', content: text }));
+  const pending = readOutbox();
+  pending[requestId] = text;
+  writeOutbox(pending);
+  S.ws.send(JSON.stringify({ type: 'chat', content: text, client_message_id: requestId }));
   S.sending = true;
-  $('btn-send').disabled = true;
+  $('btn-send').disabled = false;
   scrollBottom();
   // 键盘弹起时视口会变小，待底部重新滚动，避免新消息被掩住
   setTimeout(() => {

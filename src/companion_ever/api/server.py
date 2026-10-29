@@ -36,12 +36,11 @@ async def _session_sweeper(app: FastAPI, interval: int = 60) -> None:
     抽取在后台线程里跑，不阻塞任何请求。
     """
     while True:
-        await asyncio.sleep(interval)
         try:
             ctx = app.state.ctx
+            ctx.services.chat.generations.recover()
+            ctx.services.session_close.resume_pending()
             idle = int(getattr(ctx.cfg, "idle_session_minutes", 120) or 0)
-            if idle <= 0:
-                continue
             for s in ctx.services.conversation.list_active_sessions():
                 ctx.services.session_close.close_if_stale(
                     s["user_id"], s["persona_id"], idle,
@@ -49,7 +48,9 @@ async def _session_sweeper(app: FastAPI, interval: int = 60) -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).exception("后台任务恢复失败")
+        await asyncio.sleep(interval)
 
 
 @contextlib.asynccontextmanager

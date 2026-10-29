@@ -13,6 +13,8 @@ class ExtractionState(TypedDict, total=False):
     blocks_updated: int
     errors: list[str]
     extraction_failed: bool
+    job_id: str
+    job_status: str
 
 
 def build_extraction_graph(conversation_service, note_service, block_service, llm_client):

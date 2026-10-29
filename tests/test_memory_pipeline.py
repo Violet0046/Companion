@@ -28,7 +28,8 @@ def main():
             ctx.services.conversation.log_turn(user_id='alice', persona_id='one', turn_index=1, role='user', content='我在准备面试')
             ctx.llm.chat.return_value = 'invalid JSON'
             report = ctx.services.session_close.close_session('alice', 'one')
-            assert report.marker_id == 0 and report.extraction.errors
+            assert report.marker_id > 0 and report.extraction.errors
+            ctx.services.session_close.jobs.retry(report.extraction.job_id)
             ctx.llm.chat.return_value = json.dumps({'facts': [
                 {'type': 'event', 'content': '用户正在准备面试', 'importance': .1}
             ], 'blocks': []})
@@ -73,7 +74,7 @@ def main():
                     pass
             assert ctx.conn.execute(
                 "SELECT count(*) FROM conversation_log WHERE role='session_close'"
-            ).fetchone()[0] == markers_before
+            ).fetchone()[0] == markers_before + 1
             print('[OK] memory pipeline regression')
         finally:
             ctx.conn.close()

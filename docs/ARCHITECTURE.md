@@ -9,7 +9,7 @@
 3. `services/prompt_service.py`：人设、画像、关系、近期历史、召回记忆如何进入 prompt。近期历史跨抽取边界保留。
 4. `services/retrieval_service.py` 与 `storage/note_repo.py`：候选如何产生、排序和去重。
 5. `services/session_close_service.py` → `services/extraction_service.py`：抽取边界、模型 JSON、事实写入、失败处理。
-6. `storage/schema.sql`：核对数据约束，尤其是当前单轮单助手消息的限制。
+6. `storage/schema.sql` 与 `storage/migrations.py`：基础表及版本化迁移；新消息约束由迁移建立。
 7. 最后看 `api/`、`cli/` 和 `web/`，它们是使用这些业务规则的入口。
 
 上述路径除第一项外都相对 `src/companion_ever/`。
@@ -44,7 +44,7 @@ LangGraph 目前没有承担持久化任务队列或复杂 agent 决策；保留
 - 精确去重不做标点删除、同义改写合并，不更新原有证据或时间；归档事实不阻止重新写入。
 - 关键词命中的候选排在不命中的常驻候选前，再按现有权重排序。此规则不等价于语义理解。
 - FTS 用稳定的 `note_id` 连接笔记，不假设两个表的 rowid 始终相同；LIKE 将用户的 `%`、`_` 视为字面字符。
-- 无效抽取 JSON 和部分条目校验失败会标记失败，关闭服务撤销本次 marker，供下一次重试。
+- 无效抽取 JSON 和条目失败使整个批次回滚，memory_job 保留原范围等待重试，marker 保留。
 - `history_max_messages` 配置实际传入 PromptService。
 
 ## 保留与移除
@@ -55,11 +55,18 @@ LangGraph 目前没有承担持久化任务队列或复杂 agent 决策；保留
 
 旧 Python 导入路径 `application.*` / `infrastructure.*` 已改为 `services.*` / `storage.*` / `llm.*` / `trace`，仓库内调用方和测试同步更新；外部个人脚本需同步修改。CLI 命令与 HTTP 路径保持原接口。
 
-## 暂未解决的边界
+## 消息与任务的新链路
 
-- 会话关闭仍使用 marker，后台任务不是持久化队列；并发关闭和进程退出恢复需要下一阶段处理。
-- 回复仍在模型完成后保存，缺少消息 pending/failed 状态和重试幂等 ID。
-- 部分抽取写入成功后再失败，旧事实可安全重试；整个批次和画像更新尚不是原子提交。
-- `last_reasoning` / `last_usage` 仍是共享客户端可变状态，多角色并发需改为每次调用的返回对象。
-- 1000 条抽取窗口上限可能截掉超长会话的早期消息，需要按稳定范围分批和记录进度。
-- 前端 `app.js` 仍较大。本轮集中重构后端，移动端选型前不做一次无用的前端框架迁移。
+详情见 [消息与记忆任务](MESSAGE_JOBS.md)。优先读 storage/generation_repo.py、storage/memory_job_repo.py，再读 chat_service.py 和 extraction_service.py。
+
+- 用户输入和生成任务一起落库，client_message_id 防重，完整助手消息独立保存。
+- WebSocket 接收不等待旧回复完成，新输入可取消未完成输出。
+- 记忆任务固定每批范围，租约和重试状态持久化；记忆变更与任务成功原子提交。
+- 迁移保留历史数据及 ID，新任务从迁移后的新消息开始，历史重建需单独安排。
+
+## 后续工作
+
+- 两层记忆草稿、语义去重、事件更新和自动关系尚未接入生产抽取。
+- 短期状态仍是设计方案，尚未接入 prompt。
+- 群聊与后台主动触达待实现。
+- 前端仍是单文件；后续手机端选型后再决定如何迁移界面。

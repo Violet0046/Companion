@@ -53,16 +53,17 @@ def test_repo_groups_by_local_date():
         conn.execute(
             "INSERT INTO user (id) VALUES ('u1')"
         )
+        repo.ensure_conversation("u1", "p1")
         # 这条消息 UTC 是 10-28 20:00 -> 东八区是 10-29 04:00
         conn.execute(
             "INSERT INTO conversation_log "
-            "(user_id, persona_id, turn_index, role, content, created_at) "
-            "VALUES ('u1', 'p1', 1, 'user', 'hi', '2026-10-28 20:00:00')"
+            "(user_id, persona_id, turn_index, role, content, created_at,conversation_id,sender_kind,sender_id) "
+            "VALUES ('u1', 'p1', 1, 'user', 'hi', '2026-10-28 20:00:00',1,'user','u1')"
         )
         conn.execute(
             "INSERT INTO conversation_log "
-            "(user_id, persona_id, turn_index, role, content, created_at) "
-            "VALUES ('u1', 'p1', 1, 'assistant', 'yo', '2026-10-28 20:00:01')"
+            "(user_id, persona_id, turn_index, role, content, created_at,conversation_id,sender_kind,sender_id) "
+            "VALUES ('u1', 'p1', 1, 'assistant', 'yo', '2026-10-28 20:00:01',1,'persona','p1')"
         )
 
         utc_days = repo.list_dates(user_id="u1", persona_id="p1", tz_offset_hours=0)

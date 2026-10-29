@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import threading
 
 
 
@@ -20,11 +21,28 @@ class OpenAICompatibleClient:
         self.base_url = base_url
         self.model = model
         self.timeout = timeout
+        self._local = threading.local()
         self._client = None  # lazy load
         self.last_usage = None  # 最近一次调用的 token 用量（给 trace 包装层读）
         # 模型单独返回的思考字段（如 DeepSeek/MiniMax 的 reasoning_content）。
         # 没有这个字段的模型就是 None，说明它把思考写在正文里了。
         self.last_reasoning = None
+
+    @property
+    def last_reasoning(self):
+        return getattr(self._local, 'reasoning', None)
+
+    @last_reasoning.setter
+    def last_reasoning(self, value):
+        self._local.reasoning = value
+
+    @property
+    def last_usage(self):
+        return getattr(self._local, 'usage', None)
+
+    @last_usage.setter
+    def last_usage(self, value):
+        self._local.usage = value
 
     @property
     def client(self):
@@ -61,6 +79,7 @@ class OpenAICompatibleClient:
 
     def stream_chat(self, messages: list[dict], **kwargs) -> Iterator[str]:
         """流式调用。"""
+        self.last_reasoning = None
         stream = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
@@ -69,16 +88,20 @@ class OpenAICompatibleClient:
         )
         parts: list[str] = []
         reasoning_parts: list[str] = []
-        for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            rc = getattr(delta, "reasoning_content", None)
-            if rc:
-                reasoning_parts.append(rc)
-            if delta.content:
-                parts.append(delta.content)
-                yield delta.content
+        try:
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:
+                    reasoning_parts.append(rc)
+                    self.last_reasoning = "".join(reasoning_parts)
+                if delta.content:
+                    parts.append(delta.content)
+                    yield delta.content
+        finally:
+            stream.close()
 
         self.last_usage = None
         self.last_reasoning = "".join(reasoning_parts) or None

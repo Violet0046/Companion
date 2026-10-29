@@ -1,148 +1,144 @@
-"""对话主流程。"""
-from __future__ import annotations
-
+"""Durable user receipt and cancellable, independently persisted assistant messages."""
 import logging
-from collections.abc import Iterator
-
-from companion_ever.services.conversation_service import ConversationService
+import uuid
 from companion_ever.services.assistant_reply import split_assistant_reply
+from companion_ever.storage.generation_repo import GenerationRepo
+from companion_ever.trace import trace_scope
 from companion_ever.utils.text import strip_invisible
-from companion_ever.services.prompt_service import PromptService
 
-from companion_ever.llm.llm_client import LLMClient
-from companion_ever.trace import trace_scope, current_trace
+MESSAGE_BREAK = "\n<message_break>\n"
+MULTI_MESSAGE_PROMPT = (
+    "你可以视情况连续发送1至3条简短消息，不必凑数量。若分多条，只在完整消息之间插入"
+    "换行、<message_break>、换行；不要在思考块中使用该分隔符。普通回复视为一条消息。"
+)
 
 
 class ChatService:
-    """对话主流程（单一职责：拼 prompt + 调 LLM + log）。"""
-
-    def __init__(
-        self,
-        prompt_service: PromptService,
-        conversation_service: ConversationService,
-        llm_client: LLMClient,
-        session_close_service=None,
-        idle_session_minutes: int = 120,
-    ):
+    def __init__(self, prompt_service, conversation_service, llm_client,
+                 session_close_service=None, idle_session_minutes=120):
         self.prompt_service = prompt_service
         self.conversation_service = conversation_service
         self.llm_client = llm_client
-        # 自动管理 session 边界（可选，为不提供时保持兼容）
         self.session_close_service = session_close_service
         self.idle_session_minutes = idle_session_minutes
+        self.generations = GenerationRepo(conversation_service.conv_repo.conn)
 
-    def chat(self, user_id: str, persona_id: str, user_input: str) -> str:
-        """单轮对话：拼 prompt + 调 LLM + log。
+    def receive(self, user_id, persona_id, user_input, client_message_id=None):
+        self.conversation_service.authorizer.require_persona(user_id,persona_id)
+        self._maybe_close_stale(user_id,persona_id)
+        return self.generations.receive(user_id,persona_id,strip_invisible(user_input),client_message_id or uuid.uuid4().hex)
 
-        Args:
-            user_id: 用户 id
-            persona_id: persona id
-            user_input: 用户当前输入
+    def _maybe_close_stale(self, user_id, persona_id):
+        if self.session_close_service:
+            try:
+                self.session_close_service.close_if_stale(user_id,persona_id,self.idle_session_minutes)
+            except Exception:
+                logging.getLogger(__name__).exception('自动整理触发失败')
 
-        Returns:
-            LLM 的回复文本（原始，包含 <think> 块）
-            — 想看干净版用 services.llm_json.strip_thinking
+    def _next_turn_index(self, user_id, persona_id):
+        return self.conversation_service.get_max_turn_index(user_id,persona_id)+1
 
-        Raises:
-            PermissionError: user 不拥有 persona（由 prompt_service.build 触发）
-        """
-        with trace_scope("chat", user_id, persona_id) as tr:
-            # 0. 空闲超时：先自动关上一个 session（不依赖用户按 /quit）
-            self._maybe_close_stale(user_id, persona_id)
-
-            # 1. 拼 prompt + 历史（把 user_input 作为 query 触发检索）
-            result = self.prompt_service.build(user_id, persona_id, query=user_input)
-            messages = list(result["messages"])  # 复制
-
-            # 2. 算新的 turn_index（现有最大 + 1）
-            next_turn = self._next_turn_index(user_id, persona_id)
-
-            # 3. 加上用户当前输入
-            messages.append({"role": "user", "content": user_input})
-
-            # 4. 调 LLM
-            response_text = self.llm_client.chat(messages)
-
-            self._save_reply(user_id, persona_id, user_input, response_text, next_turn)
-            return response_text
-
-    def _save_reply(self, user_id: str, persona_id: str, user_input: str,
-                    response_text: str, next_turn: int) -> None:
-        """同步与流式回复共用同一个写入入口。"""
-        self.conversation_service.log_turn(
-            user_id=user_id,
-            persona_id=persona_id,
-            turn_index=next_turn,
-            role="user",
-            content=strip_invisible(user_input),
-        )
-        body, think = split_assistant_reply(
-            response_text,
-            getattr(self.llm_client, "last_reasoning", None),
-        )
-        msg_id = self.conversation_service.log_turn(
-            user_id=user_id,
-            persona_id=persona_id,
-            turn_index=next_turn,
-            role="assistant",
-            content=body,
-        )
-        if think:
-            # 思考过程另存到 thinking_log（给用户看，不进 prompt）
-            self.conversation_service.log_thinking(
-                message_id=msg_id,
-                user_id=user_id,
-                persona_id=persona_id,
-                turn_index=next_turn,
-                content=think,
-            )
-        tr = current_trace()
-        if tr is not None:
-            tr.step("db.log_turn", turn_index=next_turn)
-
-    def _maybe_close_stale(self, user_id: str, persona_id: str) -> None:
-        """空闲超时就自动关上一个 session。"""
-        if self.session_close_service is None:
+    def reply_events(self, generation, *, stream=True):
+        gid=generation['id']
+        if not self.generations.claim(gid):
+            for saved in self.generations.outputs(gid):
+                yield {'type':'message_done','message':saved,'generation_id':gid,'replayed':True}
+            status=self.generations.get(gid)['status']
+            yield {'type':'done' if status=='completed' else status,'generation_id':gid}
             return
-        try:
-            self.session_close_service.close_if_stale(
-                user_id, persona_id, self.idle_session_minutes,
-            )
-        except Exception:
-            logging.getLogger(__name__).exception("自动关闭旧会话失败")
+        completed=False
+        chunks=None
+        with trace_scope('chat',generation['user_id'],generation['persona_id']) as trace:
+            try:
+                trigger=self.generations.conn.execute('SELECT content FROM conversation_log WHERE id=?',
+                                                       (generation['trigger_message_id'],)).fetchone()[0]
+                result=self.prompt_service.build(generation['user_id'],generation['persona_id'],query=trigger,
+                                                 current_message_id=generation['trigger_message_id'])
+                messages=list(result['messages'])
+                messages[0]={**messages[0],'content':messages[0]['content']+'\n'+MULTI_MESSAGE_PROMPT}
+                if not self.generations.active(gid):
+                    yield {'type':'cancelled','generation_id':gid}
+                    return
+                yield {'type':'start','generation_id':gid}
+                chunks=self.llm_client.stream_chat(messages) if stream else iter([self.llm_client.chat(messages)])
+                pending=''
+                body_parts=[]
+                index=0
+                for chunk in chunks:
+                    if not self.generations.active(gid):
+                        yield {'type':'cancelled','generation_id':gid}
+                        return
+                    pending+=chunk
+                    while MESSAGE_BREAK in pending:
+                        part,pending=pending.split(MESSAGE_BREAK,1)
+                        body_parts.append(part)
+                        if part:
+                            yield {'type':'delta','content':part,'generation_id':gid}
+                        raw=''.join(body_parts)
+                        body,thinking=split_assistant_reply(raw,getattr(self.llm_client,'last_reasoning',None))
+                        saved=self.generations.save_message(gid,index,body,thinking)
+                        if saved is None:
+                            yield {'type':'cancelled','generation_id':gid}
+                            return
+                        yield {'type':'message_done','message':saved,'raw':raw,'generation_id':gid}
+                        trace.step('db.log_turn',message_id=saved['id'],generation_id=gid)
+                        index+=1
+                        body_parts=[]
+                        if index>=3:
+                            pending=''
+                            break
+                    if index>=3:
+                        break
+                    # Keep only a possible separator prefix; do not display protocol tokens.
+                    keep=0
+                    for n in range(1,min(len(pending),len(MESSAGE_BREAK)-1)+1):
+                        if pending.endswith(MESSAGE_BREAK[:n]):
+                            keep=n
+                    emit=pending[:-keep] if keep else pending
+                    pending=pending[-keep:] if keep else ''
+                    if emit:
+                        body_parts.append(emit)
+                        yield {'type':'delta','content':emit,'generation_id':gid}
+                raw=''.join(body_parts)+pending
+                if raw.strip() and index<3:
+                    if not self.generations.active(gid):
+                        yield {'type':'cancelled','generation_id':gid}
+                        return
+                    if pending:
+                        yield {'type':'delta','content':pending,'generation_id':gid}
+                    body,thinking=split_assistant_reply(raw,getattr(self.llm_client,'last_reasoning',None))
+                    saved=self.generations.save_message(gid,index,body,thinking)
+                    if saved is None:
+                        yield {'type':'cancelled','generation_id':gid}
+                        return
+                    yield {'type':'message_done','message':saved,'raw':raw,'generation_id':gid}
+                    trace.step('db.log_turn',message_id=saved['id'],generation_id=gid)
+                elif index==0:
+                    raise ValueError('模型返回了空回复')
+                self.generations.finish(gid)
+                completed=True
+                yield {'type':'done','generation_id':gid}
+            except GeneratorExit:
+                raise
+            except Exception as exc:
+                self.generations.finish(gid,'failed',f'{type(exc).__name__}: {exc}')
+                raise
+            finally:
+                if chunks is not None and hasattr(chunks,'close'):
+                    chunks.close()
+                if not completed:
+                    self.generations.finish(gid,'cancelled')
 
-    def _next_turn_index(self, user_id: str, persona_id: str) -> int:
-        """算下一个 turn_index（现有最大 + 1）。
+    def chat(self,user_id,persona_id,user_input,client_message_id=None):
+        generation,_=self.receive(user_id,persona_id,user_input,client_message_id)
+        replies=[]
+        for event in self.reply_events(generation,stream=False):
+            if event['type']=='message_done':
+                replies.append(event.get('raw',event['message']['content']))
+        return '\n\n'.join(replies)
 
-        用 SQL 的 MAX(turn_index) 而不是"拉全部消息再取 max"——
-        对话几千条之后后者会明显拖慢每一轮。
-        """
-        return self.conversation_service.get_max_turn_index(user_id, persona_id) + 1
-
-    def stream_chat(
-        self,
-        user_id: str,
-        persona_id: str,
-        user_input: str,
-    ) -> Iterator[str]:
-        """流式对话：返回 LLM 的增量输出（含 <think> 块，用户可见）。"""
-        with trace_scope("chat", user_id, persona_id) as tr:
-            self._maybe_close_stale(user_id, persona_id)
-            result = self.prompt_service.build(user_id, persona_id, query=user_input)
-            messages = list(result["messages"])
-            messages.append({"role": "user", "content": user_input})
-
-            next_turn = self._next_turn_index(user_id, persona_id)
-
-            # 流式收集（包含 <think> 块）
-            response_parts = []
-            for chunk in self.llm_client.stream_chat(messages):
-                response_parts.append(chunk)
-                yield chunk
-
-            # 流结束后 log 对话
-            response_text = "".join(response_parts)
-            self._save_reply(user_id, persona_id, user_input, response_text, next_turn)
-
-
-__all__ = ["ChatService"]
+    def stream_chat(self,user_id,persona_id,user_input,client_message_id=None):
+        generation,_=self.receive(user_id,persona_id,user_input,client_message_id)
+        for event in self.reply_events(generation):
+            if event['type']=='delta':
+                yield event['content']

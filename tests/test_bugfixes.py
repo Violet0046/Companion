@@ -182,12 +182,12 @@ def main() -> int:
     markers_after = ctx2.conn.execute(
         "select count(*) from conversation_log where role='session_close'"
     ).fetchone()[0]
-    assert markers_after == markers_before, (
-        f"抽取失败后 marker 没回滚（{markers_before} -> {markers_after}），"
-        "下次抽取将跳过这段内容，记忆会静默丢数据"
-    )
-    assert report.marker_id == 0, "回滚后 marker_id 应标记为 0（表示未成功）"
-    print("[OK] Bug4: 抽取失败记录错误 + 回滚 marker（不静默丢记忆）")
+    assert markers_after == markers_before + 1, "聊天边界保留，不能用它代表抽取进度"
+    job = ctx2.services.session_close.jobs.get(report.extraction.job_id)
+    assert job['status'] == 'failed' and job['after_message_id'] == 0
+    assert job['through_message_id'] < report.marker_id
+    assert job['attempt_count'] == 1 and job['retry_at'] is not None
+    print("[OK] Bug4: 抽取失败保留固定区间任务，不静默推进进度")
 
     ctx2.conn.close()
     ctx.conn.close()
