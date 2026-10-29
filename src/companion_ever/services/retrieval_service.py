@@ -10,6 +10,9 @@ from companion_ever.domain.enums import NoteType
 from companion_ever.storage.note_repo import NoteRepo
 from companion_ever.utils.text import all_keywords, keyword_hits
 from companion_ever.trace import current_trace
+from companion_ever.services.memory_search import MemorySearch, MemorySearchResult
+from companion_ever.domain.memory import memory_kind, valid_relation
+from companion_ever.storage.note_link_repo import NoteLinkRepo
 
 
 class RetrievalService:
@@ -24,114 +27,152 @@ class RetrievalService:
         self.note_repo = note_repo
         self.authorizer = authorizer
         self.cfg = cfg
+        self.links = NoteLinkRepo(note_repo.conn)
 
-    def retrieve(
-        self,
-        user_id: str,
-        persona_id: str,
-        query: str,
-        top_k: int | None = None,
-    ) -> list[Note]:
-        """召回与 query 相关的 notes（按 score 排序）。
-
-        Args:
-            user_id, persona_id: 限定范围
-            query: 当前用户输入（用于 FTS5 检索）
-            top_k: 最多返回多少条（默认用 cfg.top_k）
-
-        Returns:
-            按 score 降序排列的 notes 列表
-        """
-        import time as _time
-        _t0 = _time.perf_counter()
-
-        # 权限校验
-        self.authorizer.require_persona(user_id, persona_id)
-
-        if top_k is None:
-            top_k = self.cfg.top_k
-
-        if top_k <= 0:
+    def retrieve(self, user_id, persona_id, query, top_k=None):
+        """Compatibility entry for prompts; all selection happens in search()."""
+        limit = self.cfg.top_k if top_k is None else top_k
+        if limit <= 0:
+            self.authorizer.require_persona(user_id, persona_id)
             return []
+        return self.search(user_id, persona_id, MemorySearch(query=query,limit=min(limit,50))).notes
 
-        # 1. 永远包含的核心类型
-        always_notes = self.note_repo.find(
-            user_id=user_id,
-            persona_id=persona_id,
-            types=list(self.cfg.always_include_types),
-            is_archived=False,
-            limit=100,
-        )
-
-        # 2. 关键词召回（FTS5 + LIKE 兜底）
-        fts_hits: list[Note] = []
-        keywords: list[str] = []
-        if query and query.strip():
-            keywords = all_keywords(query)
-            fts_hits = self.note_repo.search(
-                query=query,
-                user_id=user_id,
-                persona_id=persona_id,
-                limit=max(top_k * 3, 20),
-            )
-
-        # 3. 合并去重（保持顺序：先 always，再 fts）
-        seen_ids: set[str] = set()
-        candidates: list[Note] = []
-        for note in always_notes + fts_hits:
-            if note.id in seen_ids:
-                continue
-            seen_ids.add(note.id)
-            candidates.append(note)
-
-        # 4. 评分排序
+    def search(self, user_id, persona_id, request):
+        """Retrieve seeds, expand at most two hops, then select scoped evidence."""
+        import time
+        started = time.perf_counter()
+        self.authorizer.require_persona(user_id,persona_id)
+        request = MemorySearch.model_validate(request)
+        if request.purpose == 'chat' and request.recent_limit:
+            raise ValueError('近期兜底仅可用于记忆整理；聊天不自动填充无关记忆')
+        warnings = []
+        nodes, paths, scores, reasons = {}, {}, {}, {}
+        edges = {}
+        truncated = False
         now = datetime.now(timezone.utc)
-        scored = [(self._score(n, query, keywords, now), n) for n in candidates]
-        # 有关键词匹配的候选优先，避免无关的高重要性画像挤掉相关事件。
-        def relevant(note):
-            content = note.content if isinstance(note.content, str) else ""
-            return bool(keyword_hits(content, keywords) or (query.strip() and query.strip() in content))
-        scored.sort(key=lambda item: (relevant(item[1]), item[0]), reverse=True)
-        # 存量重复不删除，但不能重复占用 prompt 名额。
-        unique = []
-        seen_content = set()
-        for score, note in scored:
-            key = (note.type, str(note.content).strip())
-            if key not in seen_content:
-                seen_content.add(key)
-                unique.append((score, note))
-        scored = unique
-
-        # 5. 取 top_k
-        result = [n for _, n in scored[:top_k]]
-
-        # --- trace：记下召回了什么、为什么 ---
-        tr = current_trace()
-        if tr is not None:
-            tr.step(
-                "retrieval.retrieve",
-                ms=(_time.perf_counter() - _t0) * 1000,
-                query=query[:120],
-                top_k=top_k,
-                always_included=len(always_notes),
-                fts_hits=len(fts_hits),
-                candidates=len(candidates),
-                returned=len(result),
-                notes=[
-                    {
-                        "id": n.id,
-                        "type": n.type.value,
-                        "score": round(sc, 3),
-                        "importance": n.importance,
-                        "content": (
-                            n.content if isinstance(n.content, str)
-                            else str(n.content)
-                        )[:80],
-                    }
-                    for sc, n in scored[:top_k]
-                ],
-            )
-
+        def allowed(note):
+            return note is not None and note.user_id==user_id and note.persona_id==persona_id and not note.is_persona_basics
+        def offer(note, reason, score, path):
+            if not allowed(note):
+                return
+            if note.id not in nodes:
+                nodes[note.id]=note
+                paths[note.id]=path
+                scores[note.id]=score
+                reasons[note.id]=[reason]
+            else:
+                if reason not in reasons[note.id]:
+                    reasons[note.id].append(reason)
+                scores[note.id]=max(scores[note.id],score)
+        for note_id in request.seed_ids:
+            note=self.note_repo.get(note_id)
+            if allowed(note):
+                offer(note,'explicit_seed',2.0,[])
+        for label,query in [('query',request.query),('context',request.context_query)]:
+            if not query.strip():
+                continue
+            keywords=all_keywords(query)
+            found=self.note_repo.search(query,user_id=user_id,persona_id=persona_id,limit=60,include_archived=True)
+            ranked=[]
+            for note in found:
+                content=note.content if isinstance(note.content,str) else ''
+                if allowed(note) and (keyword_hits(content.casefold(),[k.casefold() for k in keywords]) or query.strip().casefold() in content.casefold()):
+                    ranked.append((self._score(note,query,keywords,now),note))
+            ranked.sort(key=lambda item:(-item[0],item[1].id))
+            truncated |= len(ranked)>20
+            for score,note in ranked[:20]:
+                offer(note,label,score,[])
+        if request.purpose=='consolidation' and request.recent_limit:
+            recent=[n for n in self.note_repo.find(user_id=user_id,persona_id=persona_id,limit=request.recent_limit+1) if allowed(n)]
+            for note in recent[:request.recent_limit]:
+                offer(note,'recent_context',0.05,[])
+        # Scope the traversal itself, not just the final output. Visited nodes bound cycles.
+        frontier=list(nodes)
+        for depth in range(request.max_hops):
+            rows=self.links.neighbours(frontier,user_id,persona_id,limit=101)
+            truncated |= len(rows)>100
+            following=[]
+            for edge in rows[:100]:
+                source=self.note_repo.get(edge['from_id'])
+                target=self.note_repo.get(edge['to_id'])
+                if not allowed(source) or not allowed(target) or not valid_relation(source,target,edge['link_type']):
+                    continue
+                edges[edge['id']]=edge
+                for parent,child in [(source,target),(target,source)]:
+                    if parent.id not in frontier or child.id in nodes:
+                        continue
+                    if len(nodes)>=64:
+                        truncated=True
+                        continue
+                    score=scores[parent.id]*0.8
+                    if edge['link_type']=='continues' and child.id==edge['from_id']:
+                        score=scores[parent.id]+0.01
+                    offer(child,'relation:'+edge['link_type'],score,
+                          paths[parent.id]+[edge['id']])
+                    following.append(child.id)
+            frontier=following
+            if not frontier:
+                break
+        if frontier and request.max_hops:
+            boundary=self.links.neighbours(frontier,user_id,persona_id,limit=101)
+            if any(e['from_id'] not in nodes or e['to_id'] not in nodes for e in boundary):
+                truncated=True
+                warnings.append('关系扩展已达跳数或节点上限，结果不是完整事件图')
+        # Supersession is directional: newer -> old. Preserve both for consolidation.
+        superseded=set()
+        successors={}
+        for edge in edges.values():
+            if edge['link_type']=='supersedes':
+                successors.setdefault(edge['to_id'],set()).add(edge['from_id'])
+        def terminals(start, seen):
+            if start in seen:
+                return set(),True
+            next_ids=successors.get(start,set())
+            if not next_ids:
+                return {start},False
+            final=set(); cycle=False
+            for nxt in next_ids:
+                ids,cyclic=terminals(nxt,seen|{start})
+                final |= ids; cycle |= cyclic
+            return final,cycle
+        for old in successors:
+            final,cycle=terminals(old,set())
+            if cycle:
+                warnings.append('supersedes 关系存在循环，不能确定最新事实')
+                continue
+            active=[i for i in final if i in nodes and not nodes[i].is_archived]
+            if active:
+                superseded.add(old)
+                for new in active:
+                    scores[new]=max(scores[new],scores[old]+0.01)
+                    reasons[new].append('supersedes:'+old)
+                if len(active)>1:
+                    warnings.append('同一旧事实有多个有效后继，不能自动判定唯一结果')
+        ranked=sorted(nodes.values(),key=lambda note:(-scores[note.id],note.id))
+        hits=[]; seen=set()
+        for note in ranked:
+            if note.is_archived or memory_kind(note) not in request.kinds:
+                continue
+            if request.purpose=='chat' and note.id in superseded:
+                continue
+            key=(memory_kind(note),str(note.content).strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            evidence=[dict(row) for row in self.note_repo.conn.execute(
+                'SELECT e.message_id,e.quote FROM note_evidence e JOIN conversation_log m ON m.id=e.message_id '
+                'WHERE e.note_id=? AND m.user_id=? AND m.persona_id=? ORDER BY e.message_id DESC LIMIT 3',
+                (note.id,user_id,persona_id))]
+            hits.append({'note':note,'score':round(scores[note.id],4),'reasons':reasons[note.id],
+                         'path':paths[note.id],'superseded':note.id in superseded,'evidence':evidence})
+        truncated |= len(hits)>request.limit
+        result=MemorySearchResult(hits[:request.limit],list(edges.values()),list(dict.fromkeys(warnings)),truncated)
+        trace=current_trace()
+        if trace:
+            trace.step('retrieval.retrieve',ms=(time.perf_counter()-started)*1000,purpose=request.purpose,
+                       query=request.query[:120],candidates=len(nodes),returned=len(result.hits),
+                       notes=[{'id':h['note'].id,'score':h['score'],'reasons':h['reasons'],'path':h['path']} for h in result.hits],
+                       warnings=result.warnings,truncated=truncated)
         return result
 
     def _score(
@@ -169,14 +210,14 @@ class RetrievalService:
                 else ""
             )
             if content:
-                hits = keyword_hits(content, keywords)
+                hits = keyword_hits(content.casefold(), [k.casefold() for k in keywords])
                 if hits:
                     # 命中越多越相关（封顶 1.0）
                     ratio = min(hits / max(len(keywords), 1) * 2.0, 1.0)
                     score += w["fts"] * ratio
                 # 整句原样包含是最强的相关信号
-                exact = query.strip()
-                if exact and exact in content:
+                exact = query.strip().casefold()
+                if exact and exact in content.casefold():
                     score += w["fts"]
 
         # 4. 类型加权

@@ -29,8 +29,16 @@ from companion_ever.api.schemas import (
 )
 from companion_ever.domain.enums import NoteType
 from companion_ever.utils.timeutil import utc_ts_to_local
+from companion_ever.services.memory_search import MemorySearch
 
 router = APIRouter()
+
+@router.post('/api/persona/{user_id}/{persona_id}/memories/search')
+def search_memories(request: Request, user_id: str, persona_id: str,
+                    payload: MemorySearch, x_pin: str = Header(default='')):
+    """Shared read-only search. This is not an LLM tool-call endpoint."""
+    ctx, _ = _ctx_and_cfg(request, x_pin)
+    return ctx.services.retrieval.search(user_id, persona_id, payload).to_dict()
 
 
 def _ctx_and_cfg(request: Request, x_pin: str) -> tuple[AppContext, Any]:

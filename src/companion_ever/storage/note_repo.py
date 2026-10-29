@@ -95,6 +95,7 @@ class NoteRepo:
         user_id: str,
         persona_id: str,
         limit: int = 20,
+        include_archived: bool = False,
     ) -> list[Note]:
         """关键词检索（FTS5 trigram + LIKE 兜底）。
 
@@ -135,7 +136,7 @@ class NoteRepo:
                     "JOIN note n ON n.id = f.note_id "
                     "WHERE note_fts MATCH ? "
                     "  AND n.user_id = ? AND n.persona_id = ? "
-                    "  AND n.is_archived = 0 "
+                    f"  AND (n.is_archived = 0 OR {int(include_archived)}) "
                     "ORDER BY f.rank LIMIT ?",
                     (fts_query, user_id, persona_id, max(limit * 2, limit)),
                 ).fetchall()
@@ -154,7 +155,7 @@ class NoteRepo:
             rows = self.conn.execute(
                 f"SELECT * FROM note "
                 f"WHERE user_id = ? AND persona_id = ? "
-                f"  AND is_archived = 0 "
+                f"  AND (is_archived = 0 OR {int(include_archived)}) "
                 f"  AND ({where}) "
                 f"ORDER BY updated_at DESC LIMIT ?",
                 (

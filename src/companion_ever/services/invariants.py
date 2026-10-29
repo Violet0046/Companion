@@ -91,13 +91,7 @@ def check_prompt_invariants(
                 ),
             ))
 
-    # 4. 有 query 时不应该一条都召不到（静默失效）
-    if retrieved_count == 0 and total_notes > 0:
-        violations.append(Violation(
-            rule="retrieval_not_empty",
-            message="本轮召回结果为空（检索静默失效？）",
-        ))
-
+    # Empty recall is valid for unrelated queries; retrieval errors must be reported explicitly.
     return violations
 
 
