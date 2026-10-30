@@ -68,7 +68,7 @@ def evolution(path):
         ctx.repos.note.bump_access(a)
         assert svc.repo.latest_change('alice','one')==original_cursor
         ctx.repos.note.update(a,content='用户现在住在苏州')
-        assert not svc.status('alice','one')['current'] and not svc.prompt_text('alice','one')
+        assert not svc.status('alice','one')['current'] and '用户住在杭州' in svc.prompt_text('alice','one')
         status=drain(svc)
         assert status['current']
         assert {f['id'] for f in seen[-1]['current_facts']}=={a}  # No full-fact resubmission.
@@ -78,20 +78,23 @@ def evolution(path):
         assert '基于事实演化的摘要' in prompt and '用户现在住在苏州' in prompt
         mid=ctx.services.conversation.log_turn(user_id='alice',persona_id='one',turn_index=1,role='user',content='用户现在住在苏州')
         ctx.conn.execute('INSERT INTO note_evidence(note_id,message_id,quote) VALUES (?,?,?)',(a,mid,'用户现在住在苏州'))
+        assert '用户现在住在苏州' in svc.prompt_text('alice','one')
         evidence_calls=ctx.llm.chat.call_count
         drain(svc)
         assert ctx.llm.chat.call_count==evidence_calls  # Confirmation evidence alone does not require a new summary.
         ctx.repos.note.archive(a)
         calls=ctx.llm.chat.call_count
-        assert not svc.prompt_text('alice','one')
+        assert '用户现在住在苏州' in svc.prompt_text('alice','one')
         status=drain(svc)
         assert ctx.llm.chat.call_count==calls and not status['document']['user_profile']['identity']
+        assert not svc.prompt_text('alice','one')
         ctx.repos.note.unarchive(a);drain(svc)
         assert svc.status('alice','one')['document']['user_profile']['identity']
         ctx.conn.execute('DELETE FROM note WHERE id=?',(a,))
-        assert not svc.prompt_text('alice','one')
+        assert '用户现在住在苏州' in svc.prompt_text('alice','one')
         status=drain(svc)
         assert not status['document']['user_profile']['identity']
+        assert not svc.prompt_text('alice','one')
         removed=ctx.conn.execute("SELECT * FROM fact_change WHERE note_id=? AND operation='delete'",(a,)).fetchone()
         assert json.loads(removed['before_json'])['content']=='用户现在住在苏州'
         assert svc.repo.latest_change('alice','one')==status['last_change_id']
@@ -129,8 +132,76 @@ def atomic_and_retry(path):
         assert out['status']=='failed' and svc.repo.checkpoint('alice','one')['last_change_id']==previous
         assert svc.repo.blocks('alice','one')==saved_blocks
         assert not svc.status('alice','one')['current']
+        assert '用户喜欢茶' in svc.prompt_text('alice','one')
         generate(ctx);drain(svc)
         assert '不喜欢' in svc.prompt_text('alice','one')
+    finally:
+        ctx.conn.close()
+
+
+def continuous_prompt_context(path):
+    ctx=context(path)
+    try:
+        svc=service(ctx)
+        preference=ctx.services.note.create_note('alice','one',MemoryKind.FACT,'用户长期喜欢茶')
+        agreement=ctx.services.note.create_note('alice','one',MemoryKind.FACT,'用户与角色约定周末一起读书')
+        def document(messages,**kwargs):
+            payload=json.loads(messages[1]['content'])
+            facts={f['id']:f for f in payload['current_facts']}
+            result=empty()
+            result['user_profile']['preferences']=[item(facts[preference])]
+            result['relationship_state']['agreements']=[item(facts[agreement])]
+            return json.dumps(result)
+        ctx.llm.chat.side_effect=document
+        drain(svc)
+        previous=svc.prompt_text('alice','one')
+        assert '用户长期喜欢茶' in previous and '周末一起读书' in previous
+
+        def chat_context():
+            prompt=ctx.services.prompt.build('alice','one',query='你好')
+            system=prompt['messages'][0]['content']
+            assert '用户画像' in system and '关系概况' in system
+            assert '周末一起读书' in system
+            assert '以最新陈述和当前有效事实为准' in system
+            return prompt
+
+        ctx.services.note.create_note('alice','one',MemoryKind.FACT,'用户家里养了一只猫')
+        assert not svc.status('alice','one')['current']
+        assert svc.prompt_text('alice','one')==previous
+        chat_context()  # Pending operations alone do not remove either summary.
+        job=svc.request('alice','one',background=False)
+        assert svc.repo.get(job['job_id'])['status']=='queued'
+        assert svc.prompt_text('alice','one')==previous
+        def timeout(messages,**kwargs):
+            assert svc.repo.get(job['job_id'])['status']=='running'
+            assert svc.prompt_text('alice','one')==previous
+            chat_context()
+            raise TimeoutError('temporary summary outage')
+        ctx.llm.chat.side_effect=timeout
+        assert svc.run(job['job_id'])['status']=='failed'
+        assert svc.prompt_text('alice','one')==previous
+        chat_context()  # Failed updates keep the committed summaries too.
+
+        correction='更正，我现在长期喜欢咖啡，不喜欢茶了'
+        ctx.services.conversation.log_turn(user_id='alice',persona_id='one',turn_index=1,role='user',content=correction)
+        ctx.repos.note.update(preference,content='用户现在长期喜欢咖啡，不喜欢茶')
+        prompt=chat_context()
+        assert '用户长期喜欢茶' in prompt['messages'][0]['content']
+        assert any(m['role']=='user' and correction in m['content'] for m in prompt['messages'])
+        seen=[]
+        def updated(messages,**kwargs):
+            seen.append(svc.prompt_text('alice','one'))
+            chat_context()
+            return document(messages,**kwargs)
+        ctx.llm.chat.side_effect=updated
+        drain(svc)
+        # The original job ends before the later correction event. After its
+        # successful commit, the next batch sees the new summary despite backlog.
+        assert len(seen)==2 and seen[0]==previous
+        assert '用户现在长期喜欢咖啡' in seen[1] and '周末一起读书' in seen[1]
+        final=chat_context()['messages'][0]['content']
+        assert '用户现在长期喜欢咖啡' in final and '用户长期喜欢茶' not in final
+        assert svc.status('alice','one')['current']
     finally:
         ctx.conn.close()
 
@@ -139,13 +210,13 @@ def batches_and_reactivation(path):
     ctx=context(path)
     try:
         svc=service(ctx)
-        for i in range(65):
-            ctx.services.note.create_note('alice','one',MemoryKind.FACT,f'事实{i}')
+        expected={ctx.services.note.create_note('alice','one',MemoryKind.FACT,f'事实{i}') for i in range(65)}
         seen=generate(ctx)
         status=drain(svc)
-        assert status['current'] and len(seen)==6
-        assert max(len(p['changes']) for p in seen)<=12
-        assert max(len(p['current_facts']) for p in seen)<=38
+        assert status['current'] and len(seen)==3
+        assert max(len(p['changes']) for p in seen)<=24
+        assert max(len(p['current_facts']) for p in seen)<=32
+        assert {change['note_id'] for payload in seen for change in payload['changes']}==expected
         old=ctx.services.note.create_note('alice','one',MemoryKind.FACT,'旧地址杭州')
         new=ctx.services.note.create_note('alice','one',MemoryKind.FACT,'新地址苏州')
         from companion_ever.storage.note_link_repo import NoteLinkRepo
@@ -279,6 +350,6 @@ def note_job_evidence(path):
 if __name__=='__main__':
     with tempfile.TemporaryDirectory() as tmp:
         for name,test in [('evolution',evolution),('atomic',atomic_and_retry),('batches',batches_and_reactivation),('migration',migration),
-                          ('stale',stale_and_fenced),('api',api_scope),('note-job',note_job_evidence)]:
+                          ('stale',stale_and_fenced),('api',api_scope),('note-job',note_job_evidence),('continuous',continuous_prompt_context)]:
             test(Path(tmp)/(name+'.db'))
-    print('[OK] incremental operation evidence, deletion retraction, atomic cursor, retries, bounded batches and migration')
+    print('[OK] incremental evidence, continuous chat context, deletion retraction, atomic cursor, retries and migration')

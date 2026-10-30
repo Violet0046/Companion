@@ -17,7 +17,7 @@
 | 文件后缀 | 内容 |
 |---|---|
 | `.json` | 状态、任务/执行/父 trace ID、阶段时间、`llm_calls`、产物索引 |
-| `.input_case.txt` | 实际选中的新消息、参考前文、候选笔记；摘要则是旧摘要、操作流水和当前有效 fact |
+| `.input_case.txt` | 实际选中的新消息、参考前文、候选笔记；摘要则是旧摘要、合并后的实质变化和当前有效 fact |
 | `.llm-01.request.txt` | 第一次调用的完整 system/user 消息与参数，可直接阅读 |
 | `.llm-01.payload.txt` | 协议请求体快照，包括模型、消息、实际映射后的模型参数；客户端超时/重试预算单独列出 |
 | `.llm-01.response.txt` | 模型原始正文；保留 JSON/思考标签等原样内容 |
@@ -25,12 +25,18 @@
 | `.llm-01.error.txt` | 调用异常，隐去密钥与服务地址 |
 | `.validation-01.parsed.txt` | 从原始回复解析出的 JSON；解析失败是 `null`，原始内容仍在 response 中 |
 | `.validation-01.error.txt` | 结构、逐字引用、覆盖、kind/关系等校验的完整错误路径与原因 |
-| `.llm-02.*` / `.validation-02.*` | 定向纠错时的独立请求、原始回复、解析与校验结果；请求包含实际反馈的错误 |
+| `.llm-02.*` / `.validation-02.*` 等 | 工具交互或定向纠错后的独立请求、原始回复与校验结果；序号对应实际模型调用 |
+| `.tool-01.request.txt` / `.tool-01.result.txt` 等 | 每次只读工具的名称、参数及实际返回给模型的结果；容量错误也保留 |
+| `.input_case.final.txt` | 写入时使用的来源与完整候选集合，包含工具补查后加入的笔记 |
 | `.write_result.txt` | 记忆成功写入的计数与建议 ID→正式 note ID 映射 |
 
 无模型调用时不会编造 request/response。摘要仅调整证据或最后一个事实被删除时，可能直接校验/清空摘要而不调用模型。`.request.txt` / `.response.txt` 兼容旧查看方式，始终表示最后一次调用；分析多次纠错应使用带 `llm-01` / `llm-02` 的文件。
 
 `task.input_ready` 说明来源数量与字符数，`llm.request`/`llm.result` 说明调用，`validation.failed`/`validation.passed` 说明校验，`db.commit` 说明已完成原子提交。`detail.at_ms` 表示距本次执行开始的时间，`llm_calls.elapsed_ms` 是该次调用耗时。模型调用成功不等于证据校验成功，也不等于已写库。
+
+记忆图另记录 graph.node 和 tool.result，沿 load_input/prefetch/model/validate/tools/repair/commit 对照实际分支。ToolRequest 的 validation.passed 只表示只读请求结构合法，不能当作最终 Draft 通过或写入成功。初始 input_case 与最终 input_case.final 的候选集合可能不同，补查材料同时出现在下一次模型请求中。
+
+摘要 task.input_ready 的 journal_events 是原始范围内操作数，changes 是合并后的实质变化数。原始逐条流水通过 fact-changes 或数据库核对，不再把所有证据和重复快照发送给模型。零净变化复用仍有任务/提交记录，但没有模型请求文件。
 
 请求在调用模型前落盘。接收正文或独立思考字段时，约每 0.5 秒保存一次快照；正常结束和异常退出时补存最后内容。`response_state=partial` 表示异常前收到的部分输出，`none` 表示没有正文，`complete` 表示完整返回；进行中的调用使用 `waiting`/`streaming`。进程硬退出时文件可能仍标 `running`，需结合执行表后续的中断/接管记录判断，不能当作成功，也不能恢复尚未落盘的最后分片。
 

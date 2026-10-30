@@ -113,9 +113,7 @@ with trace_scope('memory_attempt','u','p',store=TraceStore(sys.argv[1])):
         from test_summary_evolution import service
         ctx=context(root/'tasks.db');set_default_store(store)
         try:
-            from companion_ever.workflows.extraction_workflow import build_extraction_graph
-            ctx.services.session_close.extraction_graph=build_extraction_graph(
-                ctx.services.conversation,ctx.services.note,ctx.services.block,TracedLLMClient(Correction()))
+            ctx.services.extraction.llm_client=TracedLLMClient(Correction())
             ctx.services.conversation.log_turn(user_id='alice',persona_id='one',turn_index=1,role='user',content='I prefer tea.')
             report=ctx.services.session_close.close_session('alice','one')
             assert report.extraction.job_status=='failed'

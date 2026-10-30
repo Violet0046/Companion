@@ -41,7 +41,6 @@ from companion_ever.storage.db import init_db
 from companion_ever.storage.note_repo import NoteRepo
 from companion_ever.storage.user_repo import UserRepo
 from companion_ever.domain.persona_templates import template_to_json
-from companion_ever.workflows import build_extraction_graph
 
 
 def _make_stack(db_path: str, llm=None):
@@ -75,13 +74,7 @@ def _make_stack(db_path: str, llm=None):
             return json.dumps(result)
         llm.chat.side_effect = reply
     extraction_svc = ExtractionService(conv_svc, note_svc, block_svc, llm)
-    extraction_graph = build_extraction_graph(
-        conversation_service=conv_svc,
-        note_service=note_svc,
-        block_service=block_svc,
-        llm_client=llm,
-    )
-    session_close_svc = SessionCloseService(authorizer, conv_svc, extraction_graph)
+    session_close_svc = SessionCloseService(authorizer, conv_svc, extraction_svc)
     return {
         "conn": conn,
         "user_repo": user_repo,

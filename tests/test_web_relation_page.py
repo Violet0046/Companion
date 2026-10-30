@@ -119,7 +119,6 @@ function assert(cond, msg) {
 }
 
 S.user = 'u1'; S.persona = '小柳'; S.personaTitle = '小柳';
-S.idleMinutes = 120;
 S.debug = true;
 
 // --- 1. relationHtml 是纯函数：阶段 / 进展 / 关键时刻 ---

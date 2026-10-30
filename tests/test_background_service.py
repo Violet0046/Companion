@@ -17,6 +17,7 @@ from companion_ever.domain.enums import MemoryKind
 def configure(ctx,**options):
     ctx.cfg.background=BackgroundConfig(**options)
     svc=service(ctx);bg=BackgroundService(ctx);ctx.services.background=bg
+    ctx.services.session_close.on_memory_settled=bg.memory_settled
     active=0;maximum=0;lock=threading.Lock()
     def model(messages,**kwargs):
         nonlocal active,maximum
@@ -86,7 +87,8 @@ def automatic(path):
 def idle_and_age(path):
     ctx=context(path)
     try:
-        bg,svc,_=configure(ctx,memory_message_threshold=6,memory_idle_seconds=60,summary_fact_threshold=5)
+        bg,svc,_=configure(ctx,memory_message_threshold=6,memory_idle_seconds=60,memory_idle_min_messages=1,
+                           summary_fact_threshold=5,summary_interval_seconds=900)
         g,_=ctx.services.chat.receive('alice','one','a durable preference','request')
         ctx.conn.execute("UPDATE conversation_log SET created_at=datetime('now','-2 minutes')")
         bg.tick();assert ctx.llm.chat.call_count==0,'do not extract while the reply is generating'

@@ -16,6 +16,7 @@ from companion_ever.services.structured_generation import checked_json
 from companion_ever.services.task_runtime import runtime_for, checkpoint as task_checkpoint, TaskInterrupted
 from companion_ever.storage.task_repo import TaskRepo
 from companion_ever.trace import trace_scope,current_trace
+from companion_ever.services.summary_changes import coalesce_changes
 
 
 class Citation(BaseModel):
@@ -147,12 +148,13 @@ class SummaryService:
         if expected_cursor!=job['after_change_id']:
             raise ValueError('摘要进度已被其他任务推进')
         previous=json.loads(checkpoint['document_json']) if checkpoint else SummaryDocument(user_profile=Profile(),relationship_state=Relationship()).model_dump()
-        events=self.repo.changes(job)
+        raw_events=self.repo.changes(job)
+        events=coalesce_changes(raw_events)
         referenced={c['note_id'] for item in claims(previous) for c in item['citations']}
         impacted=self.repo.affected({e['note_id'] for e in events},user,persona)
         available={nid:fact for nid in referenced|impacted if (fact:=self.repo.fact(nid,user,persona)) is not None}
         payload={'previous_summaries':previous,
-                 'changes':[{k:e[k] for k in ('id','note_id','operation','before','after','source_job_id')} for e in events],
+                 'changes':[{k:e[k] for k in ('id','first_change_id','note_id','operation','before','after','relation_changes','source_job_id')} for e in events],
                  # Original chat evidence stays in storage/the operation journal.
                  # This projection has one unambiguous citation text: fact.content.
                  'current_facts':[{k:v for k,v in fact.items() if k!='evidence'} for fact in available.values()],
@@ -164,10 +166,10 @@ class SummaryService:
         trace=current_trace()
         if trace:
             trace.artifact('input_case',json.dumps(payload,ensure_ascii=False,indent=2))
-        task_checkpoint('input_ready',changes=len(events),current_facts=len(available),input_chars=len(json.dumps(payload,ensure_ascii=False)))
+        task_checkpoint('input_ready',changes=len(events),journal_events=len(raw_events),current_facts=len(available),input_chars=len(json.dumps(payload,ensure_ascii=False)))
         if len(json.dumps(payload,ensure_ascii=False))>60000:
             raise ValueError('本批摘要输入超过预算，未截断或跳过操作；请精简过长事实后重试')
-        reuse=bool(checkpoint and events and all(e['operation'] in ('evidence_added','evidence_removed') for e in events))
+        reuse=bool(checkpoint and not events)
         if reuse:
             try:
                 self._validate(previous,available)
@@ -262,15 +264,23 @@ class SummaryService:
             raise ValueError('; '.join(errors))
 
     def prompt_text(self,user,persona):
-        status=self.status(user,persona)
-        if not status['current']:
+        self.authorizer.require_persona(user,persona)
+        checkpoint=self.repo.checkpoint(user,persona)
+        # Sync progress is diagnostic; pending work must not remove the last
+        # successfully committed profile and relationship context from chat.
+        if checkpoint is None:
             return ''
+        document=json.loads(checkpoint['document_json'])
         lines=[]
         for block,label in (('user_profile','用户画像'),('relationship_state','关系概况')):
-            entries=[f"- [{i['reality']}] {i['text']}" for values in status['document'][block].values() for i in values]
+            entries=[f"- [{i['reality']}] {i['text']}" for values in document[block].values() for i in values]
             if entries:
-                lines.append(label+'（由有效事实整理，原始事实优先）：\n'+'\n'.join(entries))
-        return '\n\n'.join(lines)
+                lines.append(label+'（上次成功整理）：\n'+'\n'.join(entries))
+        if not lines:
+            return ''
+        return ('以下摘要用于维持长期背景，可能尚未包含近期变化。'
+                '若与用户最新明确陈述或当前有效事实冲突，以最新陈述和当前有效事实为准，'
+                '不要用旧摘要否定用户的更正。\n\n'+'\n\n'.join(lines))
 
     def _launch(self,user,persona):
         if self._memory_busy(user,persona):
@@ -280,20 +290,21 @@ class SummaryService:
             if key in self._active:
                 return
             self._active.add(key)
+        drain_through=self.repo.latest_change(user,persona)
         def worker():
             try:
                 while not self.runtime.closing.is_set() and not self._memory_busy(user,persona) and (job:=self.repo.pending(user,persona)) is not None:
                     out=self.run(job['id'])
                     if out['status']!='succeeded':
                         break
-                    if self.repo.enqueue(user,persona) is None:
+                    if self.repo.enqueue(user,persona,until_id=drain_through) is None:
                         break
             except Exception:
                 logging.getLogger(__name__).exception('摘要任务失败')
             finally:
+                self.conn.close_current()
                 with self._lock:
                     self._active.discard(key)
-                self.conn.close_current()
         threading.Thread(target=worker,daemon=True,name='summary-worker').start()
 
     def _memory_busy(self,user,persona):

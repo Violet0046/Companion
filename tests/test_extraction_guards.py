@@ -74,10 +74,9 @@ def batching(path):
         assert svc.close_session_background('alice', 'one')
         assert finished.wait(10), 'backlog worker did not finish'
         rows = ctx.conn.execute('SELECT * FROM memory_job ORDER BY through_message_id').fetchall()
-        assert len(rows) == 8 and all(r['status'] == 'succeeded' for r in rows)
-        assert [r['through_message_id'] for r in rows] == [12,24,36,48,60,72,84,85]
-        assert [r['after_message_id'] for r in rows] == [0,12,24,36,48,60,72,84]
-        assert ctx.llm.chat.call_count == 8
+        assert len(rows) == 1 and rows[0]['status'] == 'succeeded'
+        assert rows[0]['through_message_id'] == 85 and rows[0]['after_message_id'] == 0
+        assert ctx.llm.chat.call_count == 1, 'short messages should share the source-text budget'
 
         for i in range(3):
             conv.log_turn(user_id='alice', persona_id='one', turn_index=100+i, role='user', content='长' * 9000)

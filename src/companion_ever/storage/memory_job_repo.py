@@ -16,7 +16,11 @@ class MemoryJobRepo:
                                 'JOIN conversation c ON c.id=j.conversation_id WHERE j.id=?', (jid,)).fetchone()
         return dict(row) if row else None
 
-    def enqueue(self, user_id, persona_id, batch_size=12, max_chars=4000):
+    def latest_message_id(self,user_id,persona_id):
+        return self.conn.execute("SELECT coalesce(max(id),0) FROM conversation_log WHERE user_id=? AND persona_id=? "
+                                 "AND role IN ('user','assistant')",(user_id,persona_id)).fetchone()[0]
+
+    def enqueue(self, user_id, persona_id, batch_size=200, max_chars=8000, *, until_id=None):
         if not 1 <= batch_size <= 200 or max_chars < 1:
             raise ValueError('记忆批次必须为 1～200 条且文本预算为正数')
         with transaction(self.conn):
@@ -28,7 +32,8 @@ class MemoryJobRepo:
                 '(SELECT max(through_message_id) FROM memory_job WHERE conversation_id=? AND status=\'succeeded\'),0)) '
                 'FROM conversation WHERE id=?',(cid,cid)).fetchone()[0]
             rows = self.conn.execute("SELECT id,length(content) AS chars FROM conversation_log WHERE conversation_id=? AND id>? "
-                                     "AND role IN ('user','assistant') ORDER BY id LIMIT ?",(cid,start,batch_size)).fetchall()
+                                     "AND (? IS NULL OR id<=?) AND role IN ('user','assistant') ORDER BY id LIMIT ?",
+                                     (cid,start,until_id,until_id,batch_size)).fetchall()
             if not rows:
                 return None
             through, chars = rows[0]['id'], 0

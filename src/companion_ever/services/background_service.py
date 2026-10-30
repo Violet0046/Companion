@@ -1,6 +1,7 @@
 """Persisted work is recovered first; new note and summary triggers stay independent."""
 import logging
 import time
+import json
 from companion_ever.utils.time import parse_sqlite_ts
 from companion_ever.storage.task_repo import TaskRepo
 
@@ -60,27 +61,42 @@ class BackgroundService:
             return
         cursor=self.conn.execute("SELECT max(?,coalesce(max(through_message_id),0)) FROM memory_job WHERE conversation_id=? AND status='succeeded'",
             (conversation['memory_start_message_id'],cid)).fetchone()[0]
-        count,last=self.conn.execute("SELECT sum(role='user'),max(created_at) FROM conversation_log WHERE conversation_id=? AND id>? "
+        count,last,oldest=self.conn.execute("SELECT sum(role='user'),max(created_at),min(CASE WHEN role='user' THEN created_at END) "
+                                    "FROM conversation_log WHERE conversation_id=? AND id>? "
                                     "AND role IN ('user','assistant')",(cid,cursor)).fetchone()
         if not count:
             return
         timestamp=parse_sqlite_ts(last)
         idle=timestamp is not None and time.time()-timestamp.timestamp()>=self.cfg.memory_idle_seconds
-        if count>=self.cfg.memory_message_threshold or idle:
+        first=parse_sqlite_ts(oldest)
+        aged=first is not None and time.time()-first.timestamp()>=self.cfg.memory_max_wait_seconds
+        if count>=self.cfg.memory_message_threshold or (idle and count>=self.cfg.memory_idle_min_messages) or aged:
             self.ctx.services.session_close.close_session_background(user,persona,boundary=False)
+
+    def memory_settled(self,user,persona):
+        """Reconsider summaries after a successful drain, independently of UI hooks."""
+        if self.cfg.enabled and self.ctx.services.summary is not None:
+            self._summary(user,persona)
 
     def _summary(self,user,persona):
         svc=self.ctx.services.summary;svc.authorizer.require_persona(user,persona)
         if self.memory_busy(user,persona) or svc.repo.pending(user,persona):
             return
         checkpoint=svc.repo.checkpoint(user,persona);cursor=checkpoint['last_change_id'] if checkpoint else 0
-        count,oldest,invalidating=self.conn.execute("SELECT count(DISTINCT note_id),min(created_at),"
-            "sum(operation IN ('archive','delete','update','supersedes_added','supersedes_removed')) FROM fact_change "
-            "WHERE user_id=? AND persona_id=? AND id>?",(user,persona,cursor)).fetchone()
-        if not count:
+        window=svc.repo.change_window(user,persona,cursor)
+        if not window['raw_count']:
             return
+        changes=window['changes']
+        document=json.loads(checkpoint['document_json']) if checkpoint else {}
+        referenced={citation['note_id'] for block in ('user_profile','relationship_state')
+                    for items in document.get(block,{}).values() for claim in items for citation in claim['citations']}
+        invalidating=any(change['note_id'] in referenced for change in changes)
+        oldest=min((change['created_at'] for change in changes),default=None)
         timestamp=parse_sqlite_ts(oldest)
         aged=timestamp is not None and time.time()-timestamp.timestamp()>=self.cfg.summary_interval_seconds
-        if checkpoint is None or invalidating or count>=self.cfg.summary_fact_threshold or aged:
+        # Zero net changes still consume the journal, but reuse the summary
+        # without a model. Unreferenced changes wait for the normal cadence.
+        if (not changes or checkpoint is None or invalidating or len(changes)>=self.cfg.summary_fact_threshold
+                or aged or window['has_more']):
             if svc.repo.enqueue(user,persona):
                 svc._launch(user,persona)

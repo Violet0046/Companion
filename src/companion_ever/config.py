@@ -110,15 +110,18 @@ class WebConfig:
 @dataclass(frozen=True)
 class BackgroundConfig:
     enabled: bool = True
-    memory_message_threshold: int = 6
-    memory_idle_seconds: int = 180
-    summary_fact_threshold: int = 5
-    summary_interval_seconds: int = 900
+    memory_message_threshold: int = 12
+    memory_idle_seconds: int = 600
+    memory_idle_min_messages: int = 3
+    memory_max_wait_seconds: int = 86400
+    summary_fact_threshold: int = 8
+    summary_interval_seconds: int = 21600
     failure_cooldown_seconds: int = 900
     model_thinking: bool = False
 
     def __post_init__(self):
-        if min(self.memory_message_threshold,self.memory_idle_seconds,self.summary_fact_threshold,self.summary_interval_seconds,self.failure_cooldown_seconds)<1:
+        if min(self.memory_message_threshold,self.memory_idle_seconds,self.memory_idle_min_messages,
+               self.memory_max_wait_seconds,self.summary_fact_threshold,self.summary_interval_seconds,self.failure_cooldown_seconds)<1:
             raise ValueError('后台触发阈值必须为正数')
 
 
@@ -210,10 +213,12 @@ class AppConfig:
             extraction_timeout=float(env_source.get("COMPANION_EXTRACTION_TIMEOUT", "120")),
             background=BackgroundConfig(
                 enabled=env_source.get('COMPANION_AUTO_MEMORY','1').lower() not in ('0','false','off'),
-                memory_message_threshold=int(env_source.get('COMPANION_MEMORY_TRIGGER_MESSAGES','6')),
-                memory_idle_seconds=int(env_source.get('COMPANION_MEMORY_IDLE_SECONDS','180')),
-                summary_fact_threshold=int(env_source.get('COMPANION_SUMMARY_TRIGGER_FACTS','5')),
-                summary_interval_seconds=int(env_source.get('COMPANION_SUMMARY_INTERVAL_SECONDS','900')),
+                memory_message_threshold=int(env_source.get('COMPANION_MEMORY_TRIGGER_MESSAGES','12')),
+                memory_idle_seconds=int(env_source.get('COMPANION_MEMORY_IDLE_SECONDS','600')),
+                memory_idle_min_messages=int(env_source.get('COMPANION_MEMORY_IDLE_MIN_MESSAGES','3')),
+                memory_max_wait_seconds=int(env_source.get('COMPANION_MEMORY_MAX_WAIT_SECONDS','86400')),
+                summary_fact_threshold=int(env_source.get('COMPANION_SUMMARY_TRIGGER_FACTS','8')),
+                summary_interval_seconds=int(env_source.get('COMPANION_SUMMARY_INTERVAL_SECONDS','21600')),
                 failure_cooldown_seconds=int(env_source.get('COMPANION_TASK_RETRY_COOLDOWN_SECONDS','900')),
                 model_thinking=env_source.get('COMPANION_BACKGROUND_THINKING','0').lower() in ('1','true','on')),
             llm=LLMConfig(

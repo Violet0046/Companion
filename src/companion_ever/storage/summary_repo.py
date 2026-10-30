@@ -8,6 +8,7 @@ from .note_repo import NoteRepo
 from companion_ever.domain.enums import MemoryKind
 from .task_repo import TaskRepo
 from companion_ever.services.task_errors import LeaseLostError
+from companion_ever.services.summary_changes import coalesce_changes
 
 
 def digest(value):
@@ -37,7 +38,22 @@ class SummaryRepo:
         row=self.conn.execute("SELECT * FROM summary_job WHERE user_id=? AND persona_id=? AND status!='succeeded'",(user,persona)).fetchone()
         return dict(row) if row else None
 
-    def enqueue(self,user,persona,manual=False):
+    def change_window(self,user,persona,start,*,until_id=None):
+        rows=self.conn.execute('SELECT * FROM fact_change WHERE user_id=? AND persona_id=? AND id>? '
+            'AND (? IS NULL OR id<=?) ORDER BY id LIMIT 200',(user,persona,start,until_id,until_id)).fetchall()
+        events=[];changes=[];through=start
+        for row in rows:
+            event={**dict(row),'before':json.loads(row['before_json']) if row['before_json'] else None,
+                   'after':json.loads(row['after_json']) if row['after_json'] else None}
+            candidate=coalesce_changes(events+[event])
+            if events and (len(candidate)>24 or len(json.dumps(candidate,ensure_ascii=False))>12000):
+                break
+            events.append(event);changes=candidate;through=row['id']
+        has_more=bool(self.conn.execute('SELECT 1 FROM fact_change WHERE user_id=? AND persona_id=? AND id>? '
+            'AND (? IS NULL OR id<=?) LIMIT 1',(user,persona,through,until_id,until_id)).fetchone())
+        return {'through_change_id':through,'raw_count':len(events),'changes':changes,'has_more':has_more}
+
+    def enqueue(self,user,persona,manual=False,*,until_id=None):
         with transaction(self.conn):
             pending=self.pending(user,persona)
             if pending:
@@ -49,14 +65,12 @@ class SummaryRepo:
             latest=self.latest_change(user,persona)
             if checkpoint and latest==start and digest(self.blocks(user,persona))==checkpoint['blocks_hash']:
                 return None
-            # Keep ordered, bounded batches; no event is skipped when the history is large.
-            rows=self.conn.execute('SELECT id,length(coalesce(before_json,\'\'))+length(coalesce(after_json,\'\')) AS chars '
-                'FROM fact_change WHERE user_id=? AND persona_id=? AND id>? ORDER BY id LIMIT 12',(user,persona,start)).fetchall()
-            through,chars=start,0
-            for row in rows:
-                if chars and chars+row['chars']>4000:
-                    break
-                through=row['id'];chars+=row['chars']
+            # Budget the compacted changes, while retaining an ordered fixed
+            # raw-event range for recovery and atomic cursor advancement.
+            window=self.change_window(user,persona,start,until_id=until_id)
+            through=window['through_change_id']
+            if checkpoint and through==start and (until_id is not None or digest(self.blocks(user,persona))==checkpoint['blocks_hash']):
+                return None
             jid=uuid.uuid4().hex
             self.conn.execute("INSERT INTO summary_job(id,user_id,persona_id,after_change_id,through_change_id,status) VALUES (?,?,?,?,?,'queued')",
                               (jid,user,persona,start,through))

@@ -119,6 +119,13 @@ def main() -> int:
     )
     print(f"[OK] list_active_sessions 列出 {len(actives)} 个未关闭 session")
 
+    # The session marker is written before extraction starts; wait for the
+    # worker itself before closing connections it may still be using.
+    deadline=time.monotonic()+5
+    while sc.is_closing('alice','苏苏') and time.monotonic()<deadline:
+        time.sleep(.01)
+    assert not sc.is_closing('alice','苏苏'), 'session worker did not finish'
+    sc.runtime.shutdown()
     ctx.conn.close()
     print("[ALL] 自动 session 边界管理测试通过")
     return 0

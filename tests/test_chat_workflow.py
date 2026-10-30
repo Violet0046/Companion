@@ -40,7 +40,7 @@ def _make_ctx(db_path: str, llm_response: str = "回复内容", *, check_same_th
     from companion_ever.storage.setting_repo import SettingRepo
     from companion_ever.storage.user_repo import UserRepo
     from companion_ever.app import Repos, Services, Workflows, AppContext
-    from companion_ever.workflows import build_chat_graph, build_extraction_graph
+    from companion_ever.workflows import build_chat_graph
 
     cfg = AppConfig(
         db_path=db_path,
@@ -75,13 +75,7 @@ def _make_ctx(db_path: str, llm_response: str = "回复内容", *, check_same_th
 
     chat_svc = ChatService(prompt_svc, conv_svc, llm)
     extraction_svc = ExtractionService(conv_svc, note_svc, block_svc, llm)
-    extraction_graph = build_extraction_graph(
-        conversation_service=conv_svc,
-        note_service=note_svc,
-        block_service=block_svc,
-        llm_client=llm,
-    )
-    close_svc = SessionCloseService(authorizer, conv_svc, extraction_graph)
+    close_svc = SessionCloseService(authorizer, conv_svc, extraction_svc)
     chat_graph = build_chat_graph(
         prompt_service=prompt_svc,
         conversation_service=conv_svc,
@@ -97,7 +91,7 @@ def _make_ctx(db_path: str, llm_response: str = "回复内容", *, check_same_th
         session_close=close_svc,
         settings=settings_svc,
     )
-    workflows = Workflows(chat=chat_graph, extraction=extraction_graph)
+    workflows = Workflows(chat=chat_graph, extraction=extraction_svc.graph)
     return AppContext(
         cfg=cfg, conn=conn, llm=llm,
         repos=repos, services=services, workflows=workflows,

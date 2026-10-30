@@ -20,14 +20,15 @@ class SessionCloseReport:
 
 
 class SessionCloseService:
-    def __init__(self, authorizer, conversation_service, extraction_graph):
+    def __init__(self, authorizer, conversation_service, extraction_service):
         self.authorizer = authorizer
         self.conversation_service = conversation_service
-        self.extraction_graph = extraction_graph
+        self.extraction_service = extraction_service
         self.jobs = MemoryJobRepo(conversation_service.conv_repo.conn)
         self._closing = set()
         self._lock = threading.Lock()
         self.on_record_done = None
+        self.on_memory_settled = None
         self.runtime=runtime_for(self.jobs.conn)
         self.automatic=True
 
@@ -52,7 +53,8 @@ class SessionCloseService:
                 return False
             self._closing.add(key)
         try:
-            job = self.jobs.enqueue(user_id,persona_id)
+            drain_through=self.jobs.latest_message_id(user_id,persona_id)
+            job = self.jobs.enqueue(user_id,persona_id,until_id=drain_through)
             if retry_failed and job and job['status'] == 'failed':
                 self.jobs.retry(job['id'])
             marker=self.conversation_service.log_session_close(user_id,persona_id) if boundary else 0
@@ -62,18 +64,25 @@ class SessionCloseService:
             raise
         def worker():
             current_marker = marker
+            succeeded=False
             try:
                 while not self.runtime.closing.is_set():
-                    report = self._run(user_id,persona_id,current_marker)
-                    if report.extraction.job_status != 'succeeded' or not self.jobs.enqueue(user_id,persona_id):
+                    report = self._run(user_id,persona_id,current_marker,drain_through=drain_through)
+                    succeeded=report.extraction.job_status=='succeeded'
+                    if not succeeded or not report.more_pending:
                         break
                     current_marker = 0
             except Exception:
                 logging.getLogger(__name__).exception('记忆任务执行失败')
             finally:
+                if succeeded and self.on_memory_settled and not self.runtime.closing.is_set():
+                    try:
+                        self.on_memory_settled(user_id,persona_id)
+                    except Exception:
+                        logging.getLogger(__name__).exception('记忆完成后的摘要调度失败')
+                self.jobs.conn.close_current()
                 with self._lock:
                     self._closing.discard(key)
-                self.jobs.conn.close_current()
         threading.Thread(target=worker,daemon=True,name='memory-job').start()
         return True
 
@@ -83,15 +92,15 @@ class SessionCloseService:
         marker=self.conversation_service.log_session_close(user_id,persona_id)
         return self._run(user_id,persona_id,marker)
 
-    def _run(self, user_id, persona_id, marker):
+    def _run(self, user_id, persona_id, marker, *, drain_through=None):
         with trace_scope('extraction',user_id,persona_id) as trace:
             if marker:
                 trace.step('db.log_session_close',marker_id=marker)
-            state=self.extraction_graph.invoke({'user_id':user_id,'persona_id':persona_id,'parent_trace_id':trace.trace_id})
+            state=self.extraction_service.run({'user_id':user_id,'persona_id':persona_id,'parent_trace_id':trace.trace_id})
             report=report_from_state(state)
             next_job = None
             if report.job_status == 'succeeded':
-                next_job = self.jobs.enqueue(user_id,persona_id)
+                next_job = self.jobs.enqueue(user_id,persona_id,until_id=drain_through)
             trace.step('extraction.workflow',job_id=report.job_id,status=report.job_status,
                        facts_created=report.facts_created,errors=report.errors,attempt_trace_id=state.get('attempt_trace_id'))
             trace.context.update(job_id=report.job_id,attempt_trace_id=state.get('attempt_trace_id'))

@@ -52,8 +52,6 @@ const S = {
   memoryFilter: 'all',
   convQuery: '',
   contactQuery: '',
-  /* 服务端的自动记录间隔（分钟） */
-  idleMinutes: 3,
   automaticMemory: true,
   /* 日历 */
   calUser: null,
@@ -254,13 +252,6 @@ function fmtAgo(iso) {
   if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
   if (s < 86400 * 30) return `${Math.floor(s / 86400)} 天前`;
   return `${d.getMonth() + 1}月${d.getDate()}日`;
-}
-
-function intervalText() {
-  if (!S.automaticMemory) return '已关闭';
-  return S.idleMinutes >= 60
-    ? `空闲约 ${Math.round(S.idleMinutes / 60)} 小时后`
-    : `空闲约 ${S.idleMinutes} 分钟后`;
 }
 
 /** 只刷新一个角色的会话摘要（收到新消息时用） */
@@ -492,7 +483,7 @@ function renderMe() {
   $('me-name').textContent = S.user || '我';
   $('me-sub').textContent = `${S.convs.length} 个角色 · 共 ${notes} 条记忆 · ${msgs} 条消息`;
   $('me-server').textContent = location.host;
-  $('me-interval').textContent = intervalText();
+  $('me-interval').textContent = S.automaticMemory ? '已开启' : '已关闭';
   $('me-version').textContent = 'v0.3.0';
   $('me-hint').textContent = `共 ${sessions} 次记录。切换角色请到「通讯录」。`;
 }
@@ -801,7 +792,7 @@ function renderRelationPage(user, persona, info) {
     <div class="rel-card">${relationHtml(info)}</div>
     ${summaryEvidenceHtml(meta)}
     ${S.debug ? `
-    <div class="hint">${meta.current ? '摘要已与事实操作同步，可查看每项结论的依据。' : '当前摘要尚未与最新事实同步，不会送入对话。'}${meta.pending_changes ? ` 尚有 ${meta.pending_changes} 条事实操作待处理。` : ''}</div>
+    <div class="hint">${meta.current ? '摘要已与事实操作同步，可查看每项结论的依据。' : meta.document ? '摘要尚未与最新事实同步，对话继续沿用上次成功摘要，近期明确纠正优先。' : '尚未生成独立摘要，后台将从事实建立。'}${meta.pending_changes ? ` 尚有 ${meta.pending_changes} 条事实操作待处理。` : ''}</div>
     <div class="group">
       <div class="row"><span>摘要更新</span><span class="row-val"><button class="btn-mini" id="btn-summary-refresh" ${summaryBusy ? 'disabled' : ''}>${summaryBusy ? '更新中…' : meta.job_status === 'failed' ? '重试更新' : meta.legacy ? '从事实生成' : '更新摘要'}</button></span></div>
       ${meta.generated_at ? `<div class="row"><span>摘要更新时间</span><span class="row-val">${esc(fmtTime(meta.generated_at))}</span></div>` : ''}
@@ -817,7 +808,7 @@ function renderRelationPage(user, persona, info) {
         <span class="row-val"><span class="btn-mini${recording ? ' is-busy' : ''}" id="btn-record-now">${recording ? '记录中…' : '记一次'}</span></span></div>
     </div>
     ${info && info.memory_meta && info.memory_meta.last_error ? `<div class="hint">记一次未完成：${esc(taskFailureText(info.memory_meta.last_error))}${info.memory_meta.retry_at ? '（已安排重试）' : '（当前快速重试已暂停）'}</div>` : ''}
-    <div class="hint">对话${esc(intervalText())}自动记录一次，记录后她会记住聊过的事。<br/>想现在记也可以手动触发，记录完这里会自动刷新。</div>
+    <div class="hint">${S.automaticMemory ? '对话积累一定内容或满足空闲条件后，会自动记下值得保留的事。' : '自动记录已关闭。'}<br/>想现在记也可以手动触发，记录完这里会自动刷新。</div>
     <button class="btn-mini" id="btn-task-attempts">查看后台执行记录</button><pre id="task-attempts"></pre>
     ` : ''}
   `;
@@ -1176,7 +1167,6 @@ async function boot() {
   try {
     const health = await api('/api/health');
     S.automaticMemory=health.auto_memory !== false;
-    if (health.memory_idle_seconds) S.idleMinutes=Math.ceil(health.memory_idle_seconds/60);
     if (health.auth_required && !S.pin) { showGate(); return; }
   } catch (e) { showGate(true); return; }
   $('gate').classList.add('hidden');

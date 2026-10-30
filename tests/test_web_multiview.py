@@ -44,7 +44,7 @@ def main() -> int:
     for bad in ("在一起", "已经在一起"):
         assert bad not in me_seg, f"「我」页出现了单伴侣文案: {bad}"
     assert "显示思考过程" in me_seg, "开关文案应该是中立的「显示思考过程」"
-    assert "自动记录间隔" in me_seg, "缺少「自动记录间隔」设置项"
+    assert "自动记录" in me_seg, "缺少「自动记录」状态"
     print("[OK] 「我」页文案多伴侣中立")
 
     # --- 4. 角色资料页：没有「结束这次对话」，改成「上次记录 + 手动记一次」 ---

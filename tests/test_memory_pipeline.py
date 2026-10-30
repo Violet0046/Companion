@@ -55,7 +55,7 @@ def main():
             markers_before = ctx.conn.execute(
                 "SELECT count(*) FROM conversation_log WHERE role='session_close'"
             ).fetchone()[0]
-            with patch.object(ctx.services.session_close.extraction_graph, 'invoke',
+            with patch.object(ctx.services.session_close.extraction_service, 'run',
                               side_effect=RuntimeError('storage failed')):
                 try:
                     ctx.services.session_close.close_session('alice', 'one')

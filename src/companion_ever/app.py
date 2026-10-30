@@ -31,7 +31,7 @@ from companion_ever.storage.note_repo import NoteRepo
 from companion_ever.storage.setting_repo import SettingRepo
 from companion_ever.storage.user_repo import UserRepo
 from companion_ever.trace import TraceStore, default_trace_dir, set_default_store
-from companion_ever.workflows import build_chat_graph, build_extraction_graph
+from companion_ever.workflows import build_chat_graph
 
 
 @dataclass
@@ -136,18 +136,8 @@ def build_app(cfg: AppConfig) -> AppContext:
     )
 
     # 6. LangGraph workflows
-    # extraction_graph 在 session_close 之前建好
-    extraction_graph = build_extraction_graph(
-        conversation_service=conversation_svc,
-        note_service=note_svc,
-        block_service=block_svc,
-        llm_client=llm,
-        timeout=cfg.extraction_timeout,
-        tz_offset_hours=cfg.tz_offset_hours,
-        thinking=cfg.background.model_thinking,
-    )
     session_close_svc = SessionCloseService(
-        authorizer, conversation_svc, extraction_graph,
+        authorizer, conversation_svc, extraction_svc,
     )
     session_close_svc.automatic=cfg.background.enabled
     # 回填：chat 路径也要能自动关 session
@@ -174,13 +164,14 @@ def build_app(cfg: AppConfig) -> AppContext:
         session_close=session_close_svc,
         summary=summary_svc,
     )
-    workflows = Workflows(chat=chat_graph, extraction=extraction_graph)
+    workflows = Workflows(chat=chat_graph, extraction=extraction_svc.graph)
 
     ctx=AppContext(
         cfg=cfg, conn=conn, llm=llm,
         repos=repos, services=services, workflows=workflows,
     )
     services.background=BackgroundService(ctx)
+    session_close_svc.on_memory_settled=services.background.memory_settled
     return ctx
 
 
