@@ -23,7 +23,7 @@ class FakeLLM:
     model = "fake"
 
     def chat(self, messages, **kwargs) -> str:
-        return json.dumps({"facts": [], "blocks": [], "reasoning": "t"}, ensure_ascii=False)
+        return __import__("fake_memory").no_memory(messages)
 
     def stream_chat(self, messages, **kwargs):
         yield "ok"
@@ -42,7 +42,8 @@ def main() -> int:
     cfg = AppConfig(
         db_path=os.path.join(tmpdir, "test.db"),
         llm={"api_key": "x", "base_url": "https://x", "model": "fake"},
-        retrieval={"always_include_types": ["profile_fact"], "top_k": 10},
+        retrieval={"top_k": 10},
+        background={'enabled':False},
     )
     ctx = build_app(cfg)
     ctx.repos.user.create("alice")
@@ -66,8 +67,8 @@ def main() -> int:
              f"第二天消息 第{i}条 姐姐", "2026-10-28 10:00:00", cid),
         )
     conn.execute(
-        "INSERT INTO note (id, user_id, persona_id, type, content, importance) "
-        "VALUES ('n1','alice','苏苏','event','用户收到了广联达录用意向', 0.9)"
+        "INSERT INTO note (id, user_id, persona_id, kind, content, importance) "
+        "VALUES ('n1','alice','苏苏','episode','用户收到了广联达录用意向', 0.9)"
     )
 
     # 起服务

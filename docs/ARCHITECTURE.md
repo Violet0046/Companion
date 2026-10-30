@@ -1,72 +1,56 @@
-# 代码阅读指南
+# 架构与代码阅读
 
-本轮的目的：业务规则只写一份，按功能名能找到代码，不通过增加抽象层准备未来功能。
+当前数据库 schema v5。应用通过 `build_app(AppConfig)` 装配，业务在 `services/`，SQLite 访问在 `storage/`，HTTP/WebSocket、CLI、网页负责输入输出。LangGraph 仅保留调用适配，不承担持久任务调度。
 
 ## 建议阅读顺序
 
-1. `src/companion_ever/app.py`：查看全部依赖如何装配。
-2. `services/chat_service.py`：一轮聊天，先组装上下文、调用模型，再保存回复。同步和流式共用 `_save_reply`。
-3. `services/prompt_service.py`：人设、画像、关系、近期历史、召回记忆如何进入 prompt。近期历史跨抽取边界保留。
-4. `services/retrieval_service.py` 与 `storage/note_repo.py`：候选如何产生、排序和去重。
-5. `services/session_close_service.py` → `services/extraction_service.py`：抽取边界、模型 JSON、事实写入、失败处理。
-6. `storage/schema.sql` 与 `storage/migrations.py`：基础表及版本化迁移；新消息约束由迁移建立。
-7. 最后看 `api/`、`cli/` 和 `web/`，它们是使用这些业务规则的入口。
+以下代码路径相对 `src/companion_ever/`：
 
-上述路径除第一项外都相对 `src/companion_ever/`。
+| 顺序 | 文件 | 看什么 |
+|---|---|---|
+| 1 | `app.py`、`config.py` | 依赖装配与配置 |
+| 2 | `storage/schema.sql`、`summary_schema.sql`、`task_schema.sql` | 数据模型与约束 |
+| 3 | `services/chat_service.py`、`storage/generation_repo.py` | 接收、取消、保存与恢复回复 |
+| 4 | `services/prompt_service.py`、`retrieval_service.py` | 模型实际读取哪些内容 |
+| 5 | `services/background_service.py`、`session_close_service.py` | 自动触发与积压处理 |
+| 6 | `services/extraction_service.py`、`memory_draft.py`、`memory_writer.py` | 抽取、严格校验与原子写入 |
+| 7 | `services/summary_service.py`、`storage/summary_repo.py` | fact 操作如何演化两个摘要 |
+| 8 | `services/task_runtime.py`、`storage/task_repo.py` | 执行名额、心跳、中断和逐次记录 |
+| 9 | `llm/openai_client.py`、`traced_client.py`、`trace.py` | 模型通信与完整诊断 |
+| 10 | `api/routes/`、`cli/`、`web/app.js` | 入口、推送、恢复与已读状态 |
 
-## 两条主要调用链
+提示词集中在 `prompts/`。回归入口为 `tools/check.py`；仍需讨论的问题见 [REVIEW_NOTES](../REVIEW_NOTES.md)。
 
-```text
-WebSocket / HTTP → ChatService → PromptService → RetrievalService → NoteRepo
-                            → LLM → 共用回复保存入口 → ConversationService
-CLI → chat_workflow（路由） → 同一个 ChatService
+## 三条业务链
 
-手动 / 空闲关闭 → SessionCloseService → extraction_workflow（适配）
-                                   → ExtractionService
-                                   → NoteService.remember / BlockService
-```
+**聊天：** HTTP/WebSocket → ChatService 接收用户消息和 generation → PromptService 组装设定、有效摘要、近期聊天和检索记忆 → 模型 → 逐条保存完整助手消息 → 页面推送或 HTTP 恢复。
 
-LangGraph 目前没有承担持久化任务队列或复杂 agent 决策；保留现有 invoke 接口，图内不再复制业务代码。直接调用抽取服务与图入口使用相同规则。未来手机实现不要求复刻 LangGraph。
+**长期笔记：** BackgroundService → SessionCloseService → ExtractionService 读取固定范围和候选 → Draft 生成/校验 → MemoryWriter 同事务提交 note、证据、版本、关系及任务成功。
 
-## 职责边界
+**派生摘要：** fact 写入触发操作流水 → 独立 summary_job → 上次摘要、操作差量及相关有效 fact → 模型整理/校验 → 两个摘要、引用、checkpoint 和任务成功同事务提交。
 
-- `services`：业务规则与用例。现在直接依赖具体仓库，不提前增加接口工厂、事件总线或通用插件层。
-- `storage`：SQL 和数据映射；`remember` 的查重与插入在同一事务中，防并发重复。
-- `llm`：模型通信。聊天和抽取是两种任务，目前共享一个配置和客户端，并非两个独立模型实例。
-- `domain`：数据结构与类型。
-- `api` / `cli`：传输和用户输入；不能各自维护抽取或回复保存规则。
-- `workflows`：现有调用方的适配，不是第二套业务层。
+模型调用在事务外。两种后台任务共用一个模型执行名额，取得名额后才领取租约；聊天独立执行。摘要不反写 note，避免摘要自证循环。
 
-## 本轮改变的行为
+## 数据职责
 
-- 相同用户、角色、类型、去首尾空白后完全相同的活跃事实，抽取时返回已有 ID，新增计数为零。
-- 手动 `create_note` 仍是明确的新增操作。既有重复未自动删除，召回时相同类型和正文只占一个位置。
-- 精确去重不做标点删除、同义改写合并，不更新原有证据或时间；归档事实不阻止重新写入。
-- 关键词命中的候选排在不命中的常驻候选前，再按现有权重排序。此规则不等价于语义理解。
-- FTS 用稳定的 `note_id` 连接笔记，不假设两个表的 rowid 始终相同；LIKE 将用户的 `%`、`_` 视为字面字符。
-- 无效抽取 JSON 和条目失败使整个批次回滚，memory_job 保留原范围等待重试，marker 保留。
-- `history_max_messages` 配置实际传入 PromptService。
+| 数据 | 职责 |
+|---|---|
+| `user`、`persona_definition` | 用户归属与角色基础设定；基础设定只由显式创建/编辑修改 |
+| `conversation`、`conversation_log` | 私聊范围、迁移起点与原始消息 |
+| `generation`、`thinking_log` | 一次回复生成及独立思考内容 |
+| `note`、`note_evidence`、`note_revision` | 两层长期笔记、逐字原话证据及修改前版本 |
+| `note_link` | supports、continues、supersedes 与依据 |
+| `memory_job` | 记忆处理固定范围及持久状态 |
+| `fact_change` | 事实增删改、归档、替代、证据变化的事务内流水 |
+| `memory_block`、`summary_checkpoint`、`summary_job` | 用户画像/关系概况、来源、操作游标及独立任务 |
+| `task_attempt`、`task_event` | 每次后台执行、阶段、心跳和结果；详细内容通过 trace ID 关联文件 |
 
-## 保留与移除
+`persona_runtime` 和笔记旧 `type` 已删除。短期场景直接使用近期聊天。`kind` 与 `reality` 是两个独立维度，具体规则见 [记忆规则](MEMORY_POLICY.md)。
 
-保留权限归属校验、输入校验、失败可见性、SQLite 事务、思考与正文分离、trace，以及有具体事故依据的回归测试。
+## Review 时注意的边界
 
-移除重复抽取实现、图内重复聊天实现、同步/流式重复保存代码、重复的抽取报告模型；压缩文件开头的历史过程说明。抽取写入只捕获预期的输入错误，数据库异常向上报告，不伪装成成功。
-
-旧 Python 导入路径 `application.*` / `infrastructure.*` 已改为 `services.*` / `storage.*` / `llm.*` / `trace`，仓库内调用方和测试同步更新；外部个人脚本需同步修改。CLI 命令与 HTTP 路径保持原接口。
-
-## 消息与任务的新链路
-
-详情见 [消息与记忆任务](MESSAGE_JOBS.md)。优先读 storage/generation_repo.py、storage/memory_job_repo.py，再读 chat_service.py 和 extraction_service.py。
-
-- 用户输入和生成任务一起落库，client_message_id 防重，完整助手消息独立保存。
-- WebSocket 接收不等待旧回复完成，新输入可取消未完成输出。
-- 记忆任务固定每批范围，租约和重试状态持久化；记忆变更与任务成功原子提交。
-- 迁移保留历史数据及 ID，新任务从迁移后的新消息开始，历史重建需单独安排。
-
-## 后续工作
-
-- 两层记忆草稿、语义去重、事件更新和自动关系尚未接入生产抽取。
-- 短期状态仍是设计方案，尚未接入 prompt。
-- 群聊与后台主动触达待实现。
-- 前端仍是单文件；后续手机端选型后再决定如何迁移界面。
+- API 校验 PIN，服务和写入器检查用户/角色归属；关系遍历、来源和重连结果都受范围限制。
+- 新用户输入取消旧生成的未完成输出，已保存消息保留。断线本身不取消生成。
+- 数据一致性依赖 SQLite 事务、SAVEPOINT 和执行 token；旧执行者不能提交。
+- 页面已读状态属于本机：可见会话滚到最新才推进游标，后台消息保持未读。
+- 迁移保留旧消息和笔记，不会自动重抽全部历史。迁移与故障恢复见 [后台任务](BACKGROUND_TASKS.md)。

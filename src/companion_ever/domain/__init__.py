@@ -1,7 +1,7 @@
 """domain — 域层（纯数据 + 类型 + 异常）。
 
 包含：
-- enums: NoteType, BlockType
+- enums: MemoryKind, BlockType
 - entities: User, Note, Block, ConversationMessage, PersonaBasics
 - persona_templates: 内置人设模板
 - errors: 异常（占位）
@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from .entities import Block, ConversationMessage, Note, PersonaBasics, User
-from .enums import BlockType, NoteType
+from .enums import BlockType, MemoryKind
 from .persona_templates import (
     PERSONA_TEMPLATES,
     get_template,
@@ -20,7 +20,7 @@ from .persona_templates import (
 
 __all__ = [
     # enums
-    "NoteType",
+    "MemoryKind",
     "BlockType",
     # entities
     "User",

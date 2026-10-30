@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from companion_ever.services.authz import Authorizer
 from companion_ever.services.note_service import NoteService
 from companion_ever.services.persona_service import PersonaService
-from companion_ever.domain.enums import BlockType, NoteType
+from companion_ever.domain.enums import BlockType, MemoryKind
 from companion_ever.storage.block_repo import BlockRepo
 from companion_ever.storage.db import init_db
 from companion_ever.storage.note_repo import NoteRepo
@@ -60,21 +60,16 @@ def test_create_persona_writes_3_tables():
         assert personas == ["舒舒"], f"user.persona_ids 应是 ['舒舒'], 实际 {personas}"
 
         # 4. 验证 note 表：persona_basics 笔记
-        notes = note_repo.find(
-            user_id="alice",
-            persona_id="舒舒",
-            types=[NoteType.PERSONA_BASICS],
-        )
-        assert len(notes) == 1, f"应有 1 条 persona_basics 笔记, 实际 {len(notes)}"
-        assert notes[0].content == "舒舒是 27 岁的温柔倾听者。"
-        assert notes[0].importance == 0.9
+        from companion_ever.storage.persona_repo import PersonaRepo
+        definition = PersonaRepo(conn).get('alice','舒舒')
+        assert definition['content'] == '舒舒是 27 岁的温柔倾听者。'
+        assert note_repo.find(user_id='alice',persona_id='舒舒') == []
 
-        # 5. 验证 memory_block 表：3 个 Block
+        # 5. 验证只创建画像与关系摘要
         blocks = block_repo.get_all("alice", "舒舒")
-        assert len(blocks) == 3, f"应有 3 个 Block, 实际 {len(blocks)}"
+        assert len(blocks) == 2, f"应有 2 个 Block, 实际 {len(blocks)}"
         block_types = {b.block_type for b in blocks}
         expected_types = {
-            BlockType.PERSONA_RUNTIME,
             BlockType.USER_PROFILE,
             BlockType.RELATIONSHIP_STATE,
         }

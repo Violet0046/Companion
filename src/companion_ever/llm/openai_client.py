@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 import threading
+import time
 
 
 
@@ -61,9 +62,31 @@ class OpenAICompatibleClient:
                 ) from e
         return self._client
 
+    def _background_options(self,kwargs):
+        thinking=kwargs.pop('background_thinking',None)
+        # Only the documented M3 capability is adapted. Other providers retain
+        # their configured defaults; chat never passes this internal option.
+        if thinking is not None and self.model.lower()=='minimax-m3':
+            kwargs['extra_body']={**kwargs.get('extra_body',{}),'thinking':{'type':'adaptive' if thinking else 'disabled'}}
+        return kwargs
+
+    def request_description(self,messages,kwargs):
+        options=self._background_options(dict(kwargs))
+        client={k:options.pop(k) for k in ('timeout','max_retries','total_timeout','extra_headers','extra_query') if k in options}
+        extra=options.pop('extra_body',{})
+        return {'body':{'model':self.model,'messages':messages,**options,**extra},'client_options':client}
+
     def chat(self, messages: list[dict], **kwargs) -> str:
         """同步调用。"""
-        response = self.client.chat.completions.create(
+        if kwargs.pop('stream',False):
+            return ''.join(self.stream_chat(messages,**kwargs))
+        self.last_reasoning = None
+        self.last_usage = None
+        kwargs=self._background_options(kwargs)
+        client = self.client
+        if 'max_retries' in kwargs:
+            client = client.with_options(max_retries=kwargs.pop('max_retries'))
+        response = client.chat.completions.create(
             model=self.model,
             messages=messages,
             **kwargs,
@@ -80,7 +103,16 @@ class OpenAICompatibleClient:
     def stream_chat(self, messages: list[dict], **kwargs) -> Iterator[str]:
         """流式调用。"""
         self.last_reasoning = None
-        stream = self.client.chat.completions.create(
+        self.last_usage = None
+        kwargs=self._background_options(kwargs)
+        client=self.client
+        if 'max_retries' in kwargs:
+            client=client.with_options(max_retries=kwargs.pop('max_retries'))
+        total_timeout=kwargs.pop('total_timeout',None)
+        started=time.monotonic()
+        from companion_ever.services.task_runtime import checkpoint
+        checkpoint()
+        stream = client.chat.completions.create(
             model=self.model,
             messages=messages,
             stream=True,
@@ -88,22 +120,42 @@ class OpenAICompatibleClient:
         )
         parts: list[str] = []
         reasoning_parts: list[str] = []
+        finish_reason=None
+        first_frame=True;first_content=True
         try:
             for chunk in stream:
+                checkpoint('model_first_frame' if first_frame else None)
+                first_frame=False
+                if total_timeout is not None and time.monotonic()-started>total_timeout:
+                    raise TimeoutError('模型持续生成超过本次任务的总时限')
+                if getattr(chunk,'usage',None) is not None:
+                    self.last_usage=chunk.usage
                 if not chunk.choices:
                     continue
+                if chunk.choices[0].finish_reason:
+                    finish_reason=chunk.choices[0].finish_reason
                 delta = chunk.choices[0].delta
                 rc = getattr(delta, "reasoning_content", None)
                 if rc:
                     reasoning_parts.append(rc)
                     self.last_reasoning = "".join(reasoning_parts)
+                    from companion_ever.trace import current_trace
+                    trace=current_trace()
+                    if trace is not None:
+                        trace.model_reasoning(self.last_reasoning)
                 if delta.content:
+                    if first_content:
+                        checkpoint('model_first_content');first_content=False
                     parts.append(delta.content)
                     yield delta.content
         finally:
             stream.close()
-
-        self.last_usage = None
+        if finish_reason=='length':
+            raise ValueError('模型输出达到长度上限，未保存不完整结果')
+        if finish_reason is None:
+            raise ConnectionError('模型响应流提前中断，未收到完成标记')
+        if finish_reason not in ('stop','tool_calls'):
+            raise ValueError('模型未正常完成回复：'+str(finish_reason))
         self.last_reasoning = "".join(reasoning_parts) or None
 
 

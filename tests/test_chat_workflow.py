@@ -48,7 +48,8 @@ def _make_ctx(db_path: str, llm_response: str = "回复内容", *, check_same_th
              "base_url": "https://x", "model": "test"},
         tz_offset_hours=8,
         recent_message_limit=20,
-        retrieval={"always_include_types": ["profile_fact"], "top_k": 10},
+        retrieval={"top_k": 10},
+        background={'enabled':False},
     )
 
     conn = init_db(db_path, check_same_thread=check_same_thread)

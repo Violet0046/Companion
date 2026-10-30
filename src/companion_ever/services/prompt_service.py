@@ -14,7 +14,6 @@ from companion_ever.services.invariants import (
 )
 from companion_ever.services.note_service import NoteService
 from companion_ever.services.block_service import BlockService
-from companion_ever.domain.enums import NoteType
 from companion_ever.trace import current_trace
 from companion_ever.prompts import CHAT_FOOTER
 from companion_ever.utils.time import describe_gap, format_now, parse_sqlite_ts
@@ -55,6 +54,7 @@ class PromptService:
         self.tz_offset_hours = tz_offset_hours
         self.recent_message_limit = recent_message_limit
         self.history_max_messages = history_max_messages
+        self.summary_service = None
 
     def build(
         self,
@@ -89,7 +89,6 @@ class PromptService:
 
         # 1. 读所有需要的数据
         persona_basics = self._get_persona_basics(user_id, persona_id)
-        blocks = self.block_service.get_blocks(user_id, persona_id)
         # 用 history_max_messages（不是 recent_message_limit）——
         # 防止 context 无限增长，同时保留足够历史给 LLM
         if current_message_id is not None:
@@ -110,12 +109,17 @@ class PromptService:
                 persona_id=persona_id,
                 query=query,
             )
+        pinned = self.note_service.pinned_notes(user_id,persona_id)
+        related_notes = pinned + [n for n in related_notes if n.id not in {p.id for p in pinned}]
         system_prompt = self._render_system_prompt(
             persona_basics=persona_basics,
-            blocks=blocks,
             last_conv_at=last_conv_at,
             related_notes=related_notes,
         )
+        if self.summary_service is not None:
+            derived=self.summary_service.prompt_text(user_id,persona_id)
+            if derived:
+                system_prompt+='\n\n## 基于事实演化的摘要\n'+derived
 
         # 3. 拼装 messages 列表
         #    历史对话只在这里出现一次（作为原生 role 消息）——
@@ -184,12 +188,9 @@ class PromptService:
         # 只数"用户/角色记忆"，persona_basics 是人设定义不算
         total_notes = 0
         try:
-            memory_types = [
-                t for t in NoteType if t != NoteType.PERSONA_BASICS
-            ]
             total_notes = len(self.note_service.find_notes(
                 user_id=user_id, persona_id=persona_id,
-                types=memory_types, limit=1000,
+                limit=1000,
             ))
         except Exception:
             total_notes = 0
@@ -255,20 +256,13 @@ class PromptService:
         Returns:
             dict (parsed JSON) or None (无 persona_basics)
         """
-        notes = self.note_service.find_notes(
-            user_id=user_id,
-            persona_id=persona_id,
-            types=[NoteType.PERSONA_BASICS],
-        )
-        if not notes:
+        row = self.note_service.get_persona_definition(user_id,persona_id)
+        if row is None:
             return None
-        content = notes[0].content
-        if isinstance(content, dict):
-            return content
         try:
-            return json.loads(content)
-        except (json.JSONDecodeError, TypeError):
-            return {"_raw": content}
+            return json.loads(row['content'])
+        except (ValueError,TypeError):
+            return {'_raw':row['content']}
 
     def _render_message(self, msg) -> str:
         """渲染单条对话消息（仅时间戳 + 内容，不重复 role tag）。
@@ -295,18 +289,16 @@ class PromptService:
     def _render_system_prompt(
         self,
         persona_basics: dict | None,
-        blocks: list,
         last_conv_at: str | None,
         related_notes: list | None = None,
     ) -> str:
         """渲染完整 system prompt 文本。
 
-        包含 5 个段落：
+        包含 4 个段落：
         1. 当前时间 + 上次对话
         2. persona_basics JSON
-        3. 3 个 Block（persona_runtime / user_profile / relationship_state）
-        4. 相关记忆（retrieval from notes）
-        5. 结尾指令
+        3. 相关与固定记忆
+        4. 结尾指令
 
         注意：**对话历史不在这里**。
         历史以原生 role 消息的形式放在 messages 列表里（见 build()），
@@ -320,14 +312,11 @@ class PromptService:
         # 段落 2：persona_basics
         sections.append(self._render_persona_basics(persona_basics))
 
-        # 段落 3：3 个 Block
-        sections.append(self._render_blocks(blocks))
-
-        # 段落 4：相关记忆（如果有）
+        # 段落 3：相关与固定记忆（如果有）
         if related_notes:
             sections.append(self._render_related_notes(related_notes))
 
-        # 段落 5：结尾指令
+        # 段落 4：结尾指令
         sections.append(self._render_footer())
 
         return "\n\n".join(sections)
@@ -412,35 +401,6 @@ class PromptService:
             persona_basics, ensure_ascii=False, indent=2
         ) + "\n```"
 
-    # 不注入对话 prompt 的 Block。
-    # persona_runtime 是会话级的状态（上次在聊什么、违开多久），
-    # 它只在 /quit 时刷新，必然滞后。注入会让模型被过时的主题带跑。
-    # 它的用途是「主动打招呼」（推送时去知道上次聊了什么）。
-    _PROMPT_BLOCK_TYPES = ("user_profile", "relationship_state")
-
-    def _render_blocks(self, blocks: list) -> str:
-        """注入 prompt 的 Block（只有长期累积型的那两个）。"""
-        usable = [
-            b for b in blocks if b.block_type.value in self._PROMPT_BLOCK_TYPES
-        ]
-        if not usable:
-            return "## 你对用户的了解\n（暂无）"
-
-        sections = ["## 你对用户的了解"]
-        block_labels = {
-            "user_profile": "用户画像",
-            "relationship_state": "关系进展",
-        }
-        for b in usable:
-            label = block_labels.get(b.block_type.value, b.block_type.value)
-            sections.append(
-                f"### {label}\n```json\n"
-                + json.dumps(b.fields, ensure_ascii=False, indent=2)
-                + "\n```"
-            )
-
-        return "\n\n".join(sections)
-
     def _render_related_notes(self, notes: list) -> str:
         """相关记忆（query 召回，来自历史 session 抽取的 notes）。"""
         if not notes:
@@ -453,7 +413,7 @@ class PromptService:
                 else json.dumps(n.content, ensure_ascii=False)
             )
             lines.append(
-                f"- ({n.type.value}, importance={n.importance:.2f}) {content}"
+                f"- ({n.kind.value}, reality={n.reality}, event_time={n.event_time or '未知/不适用'}, importance={n.importance:.2f}) {content}"
             )
         return "\n".join(lines)
 

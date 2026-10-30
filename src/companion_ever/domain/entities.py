@@ -2,10 +2,10 @@
 
 四个核心实体 + 一个 PersonBasics 包装：
 - User: 用户 + 拥有的 persona_ids 列表
-- Note: 笔记（14 种类型之一；PERSONA_BASICS 类型的 content 是 dict）
+- Note: 经历或事实，正文与情境元信息独立保存
 - Block: memory block（fields 已 JSON 解析）
 - ConversationMessage: 对话原文消息
-- PersonaBasics: PERSONA_BASICS 笔记的内容包装
+- PersonaBasics: 角色基础配置的内容包装
 
 每个实体都有 to_llm_dict() 方法——只把 LLM 需要的字段送出去。
 """
@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
-from .enums import BlockType, NoteType
+from .enums import BlockType, MemoryKind
 
 
 @dataclass(frozen=True)
@@ -32,16 +32,15 @@ class Note:
     """一条笔记（domain 核心实体）。
 
     注：
-    - PERSONA_BASICS 类型的 content 是 dict[str, Any]；其他类型是 str。
-    - 读时由 mapper 自动 json.loads 解析；写时用 content_as_text() 反序列化。
+    - content 是独立可理解的文本，角色配置单独存储。
     - 实体内部保留所有 DB 字段；LLM 边界用 to_llm_dict() 过滤。
     """
 
     id: str
     user_id: str
     persona_id: str
-    type: NoteType
-    content: str | dict[str, Any]
+    kind: MemoryKind
+    content: str
     source_quote: Optional[str]
     importance: float
     decay_score: float
@@ -50,9 +49,11 @@ class Note:
     updated_at: Optional[datetime]
     last_accessed_at: Optional[datetime]
 
-    @property
-    def is_persona_basics(self) -> bool:
-        return self.type == NoteType.PERSONA_BASICS
+    reality: str = 'uncertain'
+    event_time: Optional[str] = None
+    time_basis: str = ''
+    revision: int = 1
+    pinned: bool = False
 
     def content_as_text(self) -> str:
         """把 content 序列化为字符串（用于写入 DB）。"""
@@ -69,7 +70,8 @@ class Note:
         )
         return {
             "id": self.id,
-            "type": self.type.value,
+            "kind": self.kind.value,
+            "reality": self.reality, "event_time": self.event_time, "time_basis": self.time_basis,
             "content": content,
             "source_quote": self.source_quote,
             "importance": self.importance,
@@ -78,7 +80,7 @@ class Note:
 
 @dataclass
 class Block:
-    """memory block（运行时状态块）。
+    """用户画像或关系进展摘要。
 
     fields 是已 JSON 解析的 dict（不是字符串），由 repo 负责序列化。
     """
@@ -108,6 +110,7 @@ class ConversationMessage:
     role: str  # "user" | "assistant"
     content: str
     created_at: Optional[datetime] = None
+    client_message_id: Optional[str] = None
 
     def to_llm_dict(self) -> dict:
         return {"role": self.role, "content": self.content}
@@ -115,7 +118,7 @@ class ConversationMessage:
 
 @dataclass
 class PersonaBasics:
-    """PERSONA_BASICS 笔记的内容包装（dict[str, Any]）。"""
+    """角色基础配置的内容包装（dict[str, Any]）。"""
 
     fields: dict[str, Any] = field(default_factory=dict)
 

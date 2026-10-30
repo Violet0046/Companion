@@ -5,6 +5,7 @@ from companion_ever.services.assistant_reply import split_assistant_reply
 from companion_ever.storage.generation_repo import GenerationRepo
 from companion_ever.trace import trace_scope
 from companion_ever.utils.text import strip_invisible
+from companion_ever.services.task_errors import describe_error
 
 MESSAGE_BREAK = "\n<message_break>\n"
 MULTI_MESSAGE_PROMPT = (
@@ -121,7 +122,7 @@ class ChatService:
             except GeneratorExit:
                 raise
             except Exception as exc:
-                self.generations.finish(gid,'failed',f'{type(exc).__name__}: {exc}')
+                self.generations.finish(gid,'failed',describe_error(exc))
                 raise
             finally:
                 if chunks is not None and hasattr(chunks,'close'):

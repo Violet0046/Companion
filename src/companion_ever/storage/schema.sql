@@ -10,39 +10,22 @@ CREATE TABLE IF NOT EXISTS user (
 );
 
 -- === Wiki 笔记表（核心）===
--- 用途：所有抽取的事实，14 种类型（9 用户侧 + 5 人设侧）
+-- 用途：所有抽取的事实，经历与事实，角色设定独立存储
 CREATE TABLE IF NOT EXISTS note (
-    id               TEXT PRIMARY KEY,
-    user_id          TEXT NOT NULL REFERENCES user(id),
-    persona_id       TEXT NOT NULL,
-
-    type             TEXT NOT NULL,
-    content          TEXT NOT NULL,
-
-    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_accessed_at TIMESTAMP,
-
-    importance       REAL NOT NULL DEFAULT 0.5,
-    decay_score      REAL NOT NULL DEFAULT 1.0,
-    is_archived      INTEGER NOT NULL DEFAULT 0,
-
-    source_quote     TEXT,
-
-    CHECK (type IN (
-        -- 用户侧（9 种）：关于用户的观察/事实
-        'profile_fact', 'event', 'preference', 'promise',
-        'milestone', 'inside_joke', 'callback', 'sensitive',
-        'observation',
-        -- 人设侧（5 种）：关于助手人设的演化
-        'persona_fact', 'persona_basics', 'persona_preference',
-        'persona_memory', 'persona_arc'
-    ))
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES user(id), persona_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('episode','fact')), content TEXT NOT NULL CHECK(length(trim(content))>0),
+    source_quote TEXT, importance REAL NOT NULL DEFAULT 0.5 CHECK(importance>=0 AND importance<=1),
+    decay_score REAL NOT NULL DEFAULT 1.0, is_archived INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_accessed_at TEXT, reality TEXT NOT NULL DEFAULT 'uncertain'
+      CHECK(reality IN ('user_report','shared_fiction','uncertain')),
+    event_time TEXT, time_basis TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1,
+    pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1))
 );
 
 -- 索引：用户×persona×类型 是最常用的过滤组合
-CREATE INDEX IF NOT EXISTS idx_note_user_persona_type
-    ON note(user_id, persona_id, type, is_archived);
+CREATE INDEX IF NOT EXISTS idx_note_user_persona_kind
+    ON note(user_id, persona_id, kind, is_archived);
 
 -- 索引：按衰减分排序时用
 CREATE INDEX IF NOT EXISTS idx_note_decay
@@ -58,17 +41,18 @@ CREATE TABLE IF NOT EXISTS note_link (
     id          TEXT PRIMARY KEY,
     from_id     TEXT NOT NULL REFERENCES note(id) ON DELETE CASCADE,
     to_id       TEXT NOT NULL REFERENCES note(id) ON DELETE CASCADE,
-    link_type   TEXT NOT NULL,
-    strength    REAL NOT NULL DEFAULT 0.5,
+    link_type   TEXT NOT NULL CHECK(link_type IN ('supports','continues','supersedes')),
+    strength    REAL NOT NULL DEFAULT 0.5 CHECK(strength>=0 AND strength<=1),
+    reason TEXT NOT NULL DEFAULT '', job_id TEXT REFERENCES memory_job(id),
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(from_id, to_id, link_type)
+    UNIQUE(from_id, to_id, link_type), CHECK(from_id != to_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_link_from ON note_link(from_id);
 CREATE INDEX IF NOT EXISTS idx_link_to   ON note_link(to_id);
 
--- === Memory Block 表（3 个核心块）===
--- 用途：注入 system prompt
+-- === 用户画像与关系进展摘要 ===
+-- 当前保留内容供查看；后续从有效 fact 独立演化，不与单批记忆整理耦合。
 CREATE TABLE IF NOT EXISTS memory_block (
     id TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL REFERENCES user(id),
@@ -78,22 +62,32 @@ CREATE TABLE IF NOT EXISTS memory_block (
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, persona_id, block_type),
     CHECK (block_type IN (
-        'persona_runtime', 'user_profile', 'relationship_state'
+        'user_profile', 'relationship_state'
     ))
 );
 
 -- === 原始对话存档 ===
 -- 用途：每次对话追加一行
+CREATE TABLE IF NOT EXISTS conversation (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES user(id), persona_id TEXT NOT NULL,
+ memory_start_message_id INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(user_id,persona_id)
+);
+CREATE TABLE IF NOT EXISTS generation (
+ id TEXT PRIMARY KEY, conversation_id INTEGER NOT NULL REFERENCES conversation(id),
+ trigger_message_id INTEGER NOT NULL REFERENCES conversation_log(id),
+ status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','cancelled')),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, started_at TEXT, completed_at TEXT,
+ lease_expires_at REAL, last_error TEXT
+);
 CREATE TABLE IF NOT EXISTS conversation_log (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id      TEXT NOT NULL REFERENCES user(id),
-    persona_id   TEXT NOT NULL,
-    turn_index   INTEGER NOT NULL,
-    role         TEXT NOT NULL,
-    content      TEXT NOT NULL,
-    created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, persona_id, turn_index, role),
-    CHECK (role IN ('user', 'assistant', 'session_close'))
+ id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES user(id), persona_id TEXT NOT NULL,
+ turn_index INTEGER NOT NULL, role TEXT NOT NULL CHECK(role IN ('user','assistant','session_close')),
+ content TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ conversation_id INTEGER NOT NULL REFERENCES conversation(id), sender_kind TEXT NOT NULL, sender_id TEXT NOT NULL,
+ client_message_id TEXT, reply_to_message_id INTEGER REFERENCES conversation_log(id),
+ generation_id TEXT REFERENCES generation(id), output_index INTEGER,
+ UNIQUE(conversation_id,client_message_id), UNIQUE(generation_id,output_index)
 );
 
 CREATE INDEX IF NOT EXISTS idx_log_user_persona
@@ -163,3 +157,30 @@ END;
 CREATE TRIGGER IF NOT EXISTS note_fts_delete AFTER DELETE ON note BEGIN
     DELETE FROM note_fts WHERE note_id = old.id;
 END;
+CREATE INDEX IF NOT EXISTS idx_message_conversation ON conversation_log(conversation_id,id);
+CREATE INDEX IF NOT EXISTS idx_generation_pending ON generation(status,lease_expires_at);
+CREATE TABLE IF NOT EXISTS memory_job (
+ id TEXT PRIMARY KEY, conversation_id INTEGER NOT NULL REFERENCES conversation(id),
+ after_message_id INTEGER NOT NULL, through_message_id INTEGER NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed')),
+ attempt_count INTEGER NOT NULL DEFAULT 0, retry_at REAL, lease_token TEXT, lease_expires_at REAL, last_error TEXT,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, started_at TEXT, completed_at TEXT,
+ CHECK(through_message_id>after_message_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_one_pending ON memory_job(conversation_id) WHERE status!='succeeded';
+CREATE TABLE IF NOT EXISTS note_evidence (
+ note_id TEXT NOT NULL REFERENCES note(id) ON DELETE CASCADE,
+ message_id INTEGER NOT NULL REFERENCES conversation_log(id), quote TEXT NOT NULL CHECK(length(trim(quote))>0),
+ PRIMARY KEY(note_id,message_id,quote)
+);
+CREATE TABLE IF NOT EXISTS persona_definition (
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES user(id), persona_id TEXT NOT NULL, content TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ is_archived INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_persona_definition ON persona_definition(user_id,persona_id,is_archived);
+CREATE TABLE IF NOT EXISTS note_revision (
+ note_id TEXT NOT NULL REFERENCES note(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
+ content TEXT NOT NULL, reality TEXT NOT NULL, event_time TEXT, time_basis TEXT NOT NULL,
+ updated_at TEXT NOT NULL, job_id TEXT REFERENCES memory_job(id), PRIMARY KEY(note_id,revision)
+);

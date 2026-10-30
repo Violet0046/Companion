@@ -21,7 +21,7 @@ def context(path):
 
 def migration(path):
     old = sqlite3.connect(path)
-    old.executescript(_read_schema())
+    old.executescript((Path(__file__).parent/'fixtures/legacy_schema_v0.sql').read_text(encoding='utf-8'))
     old.execute("INSERT INTO user(id) VALUES ('alice')")
     for mid, role in [(1, 'user'), (2, 'assistant'), (50, 'session_close')]:
         old.execute('INSERT INTO conversation_log(id,user_id,persona_id,turn_index,role,content) '
@@ -161,9 +161,40 @@ def interruption(path):
         ctx.conn.close()
 
 
+def backup(path):
+    from types import SimpleNamespace
+    from companion_ever.cli.maintain_cmd import cmd_backup
+    # A deliberately old schema must be copied as-is, including committed WAL
+    # pages, without initializing services or upgrading the source database.
+    conn=sqlite3.connect(path)
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA wal_autocheckpoint=0')
+        conn.execute('CREATE TABLE sample(value TEXT)')
+        conn.execute("INSERT INTO sample VALUES ('committed in WAL')")
+        conn.commit()
+        assert Path(str(path)+'-wal').stat().st_size>0
+        assert cmd_backup(SimpleNamespace(db=path))==0
+        copies=list(path.parent.glob(path.name+'.bak-*'))
+        assert len(copies)==1
+        saved=sqlite3.connect(copies[0])
+        try:
+            assert saved.execute('SELECT value FROM sample').fetchone()[0]=='committed in WAL'
+            assert saved.execute('PRAGMA user_version').fetchone()[0]==0
+            assert saved.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+        finally:
+            saved.close()
+        assert conn.execute('PRAGMA user_version').fetchone()[0]==0
+        assert conn.execute("SELECT count(*) FROM sqlite_master WHERE name='note'").fetchone()[0]==0
+    finally:
+        conn.close()
+    missing=path.with_name('missing.db')
+    assert cmd_backup(SimpleNamespace(db=missing))==1 and not missing.exists()
+
+
 def main():
     with tempfile.TemporaryDirectory() as directory:
-        for name, test in [('migration', migration), ('receipt', receipt_and_memory), ('interrupt', interruption)]:
+        for name, test in [('migration', migration), ('receipt', receipt_and_memory), ('interrupt', interruption), ('backup',backup)]:
             test(Path(directory) / (name + '.db'))
             print('[OK] ' + name, flush=True)
 

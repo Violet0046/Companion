@@ -10,7 +10,7 @@ import asyncio
 import threading
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from starlette.concurrency import run_in_threadpool
 
 from companion_ever.app import AppContext
@@ -59,17 +59,76 @@ def generation_status(request: Request,user_id: str,persona_id: str,generation_i
     g=ctx.services.chat.generations.get(generation_id)
     if not g or (g['user_id'],g['persona_id']) != (user_id,persona_id):
         raise HTTPException(404,'生成任务不存在')
-    outputs=ctx.services.chat.generations.outputs(generation_id)
+    return _generation_snapshot(ctx, user_id, persona_id, g)
+
+
+@router.get('/api/persona/{user_id}/{persona_id}/generation')
+def latest_generation(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
+    ctx = _authorized_ctx(request,user_id,persona_id,x_pin)
+    g = ctx.services.chat.generations.latest(user_id,persona_id)
+    return _generation_snapshot(ctx,user_id,persona_id,g) if g else None
+
+
+@router.post('/api/persona/{user_id}/{persona_id}/generations/{generation_id}/retry')
+def retry_generation(request: Request,user_id: str,persona_id: str,generation_id: str,
+                     x_pin: str=Header(default='')):
+    ctx=_authorized_ctx(request,user_id,persona_id,x_pin)
+    previous=ctx.services.chat.generations.get(generation_id)
+    if not previous or (previous['user_id'],previous['persona_id'])!=(user_id,persona_id):
+        raise HTTPException(404,'生成任务不存在')
+    try:
+        generation,created=ctx.services.chat.generations.retry(generation_id)
+    except ValueError as exc:
+        raise HTTPException(409,str(exc)) from exc
+    if created:
+        _launch_reply(ctx,generation)
+    return _generation_snapshot(ctx,user_id,persona_id,generation)
+
+
+def _run_reply_background(ctx,generation):
+    try:
+        for _ in ctx.services.chat.reply_events(generation):
+            pass
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('回复生成失败')
+    finally:
+        ctx.conn.close_current()
+
+
+def _launch_reply(ctx,generation):
+    # Start before writing the HTTP response; a lost receipt must not strand
+    # the persisted input. Claiming the generation prevents duplicate execution.
+    threading.Thread(target=_run_reply_background,args=(ctx,generation),daemon=True,name='chat-generation').start()
+
+
+def resume_queued_replies(ctx):
+    """Resume receipts committed before a disconnect or process restart."""
+    ids=[r[0] for r in ctx.conn.execute("SELECT id FROM generation WHERE status='queued'")]
+    for gid in ids:
+        g=ctx.services.chat.generations.get(gid)
+        try:
+            ctx.services.conversation.authorizer.require_persona(g['user_id'],g['persona_id'])
+        except PermissionError:
+            ctx.services.chat.generations.finish(gid,'failed','角色访问权限已撤销')
+            continue
+        _launch_reply(ctx,g)
+
+
+def _generation_snapshot(ctx, user_id, persona_id, g):
+    outputs=ctx.services.chat.generations.outputs(g['id'])
+    for output in outputs:
+        output['created_at'] = output['created_at'].replace(' ', 'T') + 'Z'
     # This endpoint follows the same thinking visibility preference as history.
     show=ctx.services.settings.get_show_thinking(user_id,persona_id)
     if not show:
         for output in outputs:
             output.pop('thinking',None)
-    return {**g,'messages':outputs}
+    return {**g,'messages':outputs,'can_retry':g['status']=='failed' and not outputs}
 
 
 @router.post('/api/messages')
-def receive_message(request: Request,payload: ChatIn,background: BackgroundTasks,x_pin: str=Header(default='')):
+def receive_message(request: Request,payload: ChatIn,x_pin: str=Header(default='')):
     ctx=request.app.state.ctx
     check_pin(x_pin,request.app.state.web_cfg)
     user,persona=resolve_target(ctx,request.app.state.web_cfg,payload.user_id,payload.persona_id)
@@ -77,15 +136,8 @@ def receive_message(request: Request,payload: ChatIn,background: BackgroundTasks
         g,created=ctx.services.chat.receive(user,persona,payload.content,payload.client_message_id)
     except ValueError as exc:
         raise HTTPException(409,str(exc)) from exc
-    def run():
-        try:
-            for _ in ctx.services.chat.reply_events(g):
-                pass
-        except Exception:
-            import logging
-            logging.getLogger(__name__).exception('回复生成失败')
     if created:
-        background.add_task(run)
+        _launch_reply(ctx,g)
     return {'message_id':g['trigger_message_id'],'generation_id':g['id'],'status':g['status'],'duplicate':not created}
 
 
@@ -159,9 +211,11 @@ def _send_threadsafe(conn: _Conn, payload: dict[str, Any]) -> None:
         conn.loop.create_task(conn.send(payload))
         return
 
+    send = conn.send(payload)
     try:
-        fut = asyncio.run_coroutine_threadsafe(conn.send(payload), conn.loop)
+        fut = asyncio.run_coroutine_threadsafe(send, conn.loop)
     except RuntimeError:  # pragma: no cover —— loop 已关闭
+        send.close()
         return
 
     def _swallow(f: Any) -> None:
@@ -185,6 +239,10 @@ def broadcast(user_id: str, persona_id: str, payload: dict[str, Any]) -> None:
         _send_threadsafe(conn, payload)
 
 
+def notify_summary_updated(user_id,persona_id):
+    broadcast(user_id,persona_id,{'type':'summary_updated','user_id':user_id,'persona_id':persona_id})
+
+
 def notify_record_done(
     user_id: str, persona_id: str, report: SessionCloseReport,
 ) -> None:
@@ -198,8 +256,10 @@ def notify_record_done(
         "user_id": user_id,
         "persona_id": persona_id,
         "facts_created": ext.facts_created,
+        "notes_updated": ext.notes_updated,
         "job_id": ext.job_id,
         "job_status": ext.job_status,
+        "more_pending": report.more_pending,
         "blocks_updated": ext.blocks_updated,
         "conversations_processed": ext.conversations_processed,
         "errors": list(ext.errors),
@@ -254,7 +314,7 @@ async def post_close_session(
         # 同步等会让用户干等着、没法继续聊天。
         # 前端轮询 last_record_at 来知道记好了没有。
         started = ctx.services.session_close.close_session_background(
-            user_id, persona_id,
+            user_id, persona_id, retry_failed=True,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -335,23 +395,32 @@ async def ws_chat(
                 except (ValueError, PermissionError) as exc:
                     await conn.send({'type':'error','message':str(exc)})
                     continue
-                if created:
-                    for task in list(reply_tasks):
-                        task.cancel()
-                    if active_generation:
-                        await conn.send({'type':'cancelled','generation_id':active_generation})
-                active_generation = generation['id']
-                await conn.send({'type':'received','generation_id':generation['id'],
-                                 'message_id':generation['trigger_message_id'],
-                                 'client_message_id':msg.get('client_message_id'),
-                                 'status':generation['status'],'duplicate':not created})
-                if created or generation['status'] in ('completed','failed','cancelled'):
-                    task=asyncio.create_task(_stream_reply(conn,ctx,generation))
+                # Start execution before acknowledging: losing the acknowledgement must not
+                # strand a durable queued generation. A subscriber only controls delivery.
+                channel = _start_reply(ctx, generation) if created or generation['status'] in ('queued','completed','failed','cancelled') else None
+                try:
+                    if created:
+                        for task in list(reply_tasks):
+                            task.cancel()
+                        if active_generation:
+                            await conn.send({'type':'cancelled','generation_id':active_generation})
+                    active_generation = generation['id']
+                    await conn.send({'type':'received','generation_id':generation['id'],
+                                     'message_id':generation['trigger_message_id'],
+                                     'client_message_id':msg.get('client_message_id'),
+                                     'status':generation['status'],'duplicate':not created})
+                except BaseException:
+                    if channel:
+                        channel[1].set()
+                    raise
+                if channel:
+                    task=asyncio.create_task(_stream_reply(conn,ctx,generation,channel))
                     reply_tasks.add(task)
                     task.add_done_callback(reply_tasks.discard)
+                    task.add_done_callback(lambda _, stop=channel[1]: stop.set())
 
             elif mtype == "close_session":
-                ctx.services.session_close.close_session_background(user_id,persona_id)
+                ctx.services.session_close.close_session_background(user_id,persona_id,retry_failed=True)
                 await conn.send({'type':'record_started'})
 
             elif mtype == "ping":
@@ -392,22 +461,23 @@ def _extract_thinking(ctx: AppContext, raw: str) -> str | None:
         return None
 
 
-async def _stream_reply(conn, ctx, generation) -> None:
-    """Receive loop stays available while this generation streams independently."""
+def _start_reply(ctx, generation):
+    """The worker owns generation; its socket subscriber can detach at any time."""
     loop=asyncio.get_running_loop()
     queue=asyncio.Queue()
     stop=threading.Event()
     gid=generation['id']
     def emit(event):
         if not stop.is_set() and not loop.is_closed():
-            loop.call_soon_threadsafe(queue.put_nowait,event)
+            try:
+                loop.call_soon_threadsafe(queue.put_nowait,event)
+            except RuntimeError:
+                pass  # The event loop may close between the check and scheduling.
     def producer():
         events=ctx.services.chat.reply_events(generation)
         filt=ThinkFilter()
         try:
             for event in events:
-                if stop.is_set():
-                    break
                 if event['type']=='delta':
                     delta=filt.feed(event['content'])
                     if delta:
@@ -429,11 +499,18 @@ async def _stream_reply(conn, ctx, generation) -> None:
                 else:
                     emit(event)
         except Exception as exc:
-            emit({'type':'error','generation_id':gid,'message':str(exc)})
+            saved=ctx.services.chat.generations.get(gid)
+            emit({'type':'error','generation_id':gid,'message':saved.get('last_error') or '回复生成失败'})
         finally:
             events.close()
             ctx.conn.close_current()
     threading.Thread(target=producer,daemon=True,name='chat-generation').start()
+    return queue, stop
+
+
+async def _stream_reply(conn, ctx, generation, channel) -> None:
+    queue, stop = channel
+    gid = generation['id']
     try:
         while True:
             event=await queue.get()
@@ -449,7 +526,6 @@ async def _stream_reply(conn, ctx, generation) -> None:
         return
     finally:
         stop.set()
-        ctx.services.chat.generations.finish(gid,'cancelled')
 
 
 async def _close_session(

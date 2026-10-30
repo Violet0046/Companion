@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from companion_ever.services.memory_draft import generate_draft, validate_draft, render_review
+from companion_ever.services.memory_draft import generate_draft, validate_draft
 
 
 def main():
@@ -28,8 +28,6 @@ def main():
             assert 'PRIVATE_REVIEW' not in json.dumps(messages)
             return json.dumps(data)
     assert generate_draft(case, FakeLLM()).proposals[0].kind == 'fact'
-    assert 'PRIVATE_EXPECTATION' in render_review([case])
-    assert 'PRIVATE_REVIEW' in render_review([case])
     def reject(modify):
         broken = copy.deepcopy(data)
         modify(broken)

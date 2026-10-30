@@ -4,7 +4,8 @@
 模块加载时缓存（@lru_cache），无运行时 IO。
 
 可用模板：
-- EXTRACTION_SYSTEM: 后台抽取对话时的系统提示
+- memory_draft_system.txt: 后台整理两层笔记的系统提示
+- summary_system.txt: 从 fact 操作独立演化两个摘要的系统提示
 - PERSONA_EDIT_SYSTEM: 人设编辑时的系统提示（含 {current} 和 {instruction} 占位符）
 - CHAT_FOOTER: 拼 system prompt 时的"行为指引"脚注
 """
@@ -25,14 +26,12 @@ def load(name: str) -> str:
 
 
 # 模块级常量（首次访问时加载；之后命中 lru_cache）
-EXTRACTION_SYSTEM: str = load("extraction_system.txt")
 PERSONA_EDIT_SYSTEM: str = load("persona_edit_system.txt")
 CHAT_FOOTER: str = load("chat_footer.txt")
 
 
 __all__ = [
     "load",
-    "EXTRACTION_SYSTEM",
     "PERSONA_EDIT_SYSTEM",
     "CHAT_FOOTER",
 ]

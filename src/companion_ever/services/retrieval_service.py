@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from companion_ever.services.authz import Authorizer
 from companion_ever.config import RetrievalConfig
 from companion_ever.domain.entities import Note
-from companion_ever.domain.enums import NoteType
 from companion_ever.storage.note_repo import NoteRepo
 from companion_ever.utils.text import all_keywords, keyword_hits
 from companion_ever.trace import current_trace
@@ -51,7 +50,7 @@ class RetrievalService:
         truncated = False
         now = datetime.now(timezone.utc)
         def allowed(note):
-            return note is not None and note.user_id==user_id and note.persona_id==persona_id and not note.is_persona_basics
+            return note is not None and note.user_id==user_id and note.persona_id==persona_id
         def offer(note, reason, score, path):
             if not allowed(note):
                 return
@@ -155,7 +154,8 @@ class RetrievalService:
                 continue
             if request.purpose=='chat' and note.id in superseded:
                 continue
-            key=(memory_kind(note),str(note.content).strip())
+            key=(('episode',note.id) if memory_kind(note)=='episode' else
+                 ('fact',note.reality,note.event_time,str(note.content).strip()))
             if key in seen:
                 continue
             seen.add(key)
@@ -188,7 +188,6 @@ class RetrievalService:
         score = importance * weights["importance"]
               + recency_bonus * weights["recency"]
               + fts_bonus * weights["fts"]
-              + type_bonus * weights["type"]
         """
         w = self.cfg.weights
         score = 0.0
@@ -219,15 +218,6 @@ class RetrievalService:
                 exact = query.strip().casefold()
                 if exact and exact in content.casefold():
                     score += w["fts"]
-
-        # 4. 类型加权
-        type_str = (
-            note.type.value
-            if isinstance(note.type, NoteType)
-            else str(note.type)
-        )
-        type_bonus = self.cfg.type_bonus.get(type_str, 0.03)
-        score += type_bonus * w["type"]
 
         return score
 

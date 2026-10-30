@@ -27,7 +27,7 @@ from companion_ever.config import AppConfig, WebConfig
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
-async def _session_sweeper(app: FastAPI, interval: int = 60) -> None:
+async def _session_sweeper(app: FastAPI, interval: int = 15) -> None:
     """定期清扫：把空闲超时的 session 自动关掉（并触发抽取）。
 
     这是「用户离开后再也不回来」的唯一保障——
@@ -37,14 +37,7 @@ async def _session_sweeper(app: FastAPI, interval: int = 60) -> None:
     """
     while True:
         try:
-            ctx = app.state.ctx
-            ctx.services.chat.generations.recover()
-            ctx.services.session_close.resume_pending()
-            idle = int(getattr(ctx.cfg, "idle_session_minutes", 120) or 0)
-            for s in ctx.services.conversation.list_active_sessions():
-                ctx.services.session_close.close_if_stale(
-                    s["user_id"], s["persona_id"], idle,
-                )
+            await asyncio.to_thread(_sweep_services,app.state.ctx)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -53,9 +46,29 @@ async def _session_sweeper(app: FastAPI, interval: int = 60) -> None:
         await asyncio.sleep(interval)
 
 
+def _sweep_services(ctx):
+    from companion_ever.api.routes.chat import resume_queued_replies
+    try:
+        resume_queued_replies(ctx)
+        ctx.services.chat.generations.recover()
+        if ctx.services.background is not None:
+            ctx.services.background.tick()
+        else:
+            ctx.services.session_close.resume_pending()
+            if ctx.services.summary is not None:
+                ctx.services.summary.resume_pending()
+        idle=int(getattr(ctx.cfg,'idle_session_minutes',120) or 0)
+        for session in ctx.services.conversation.list_active_sessions():
+            ctx.services.session_close.close_if_stale(session['user_id'],session['persona_id'],idle)
+    finally:
+        ctx.conn.close_current()
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
     """启动后台清扫任务，停止时取消。"""
+    from companion_ever.services.task_runtime import runtime_for
+    runtime_for(app.state.ctx.conn).start()
     task = asyncio.create_task(_session_sweeper(app))
     try:
         yield
@@ -63,6 +76,7 @@ async def _lifespan(app: FastAPI):
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+        await asyncio.to_thread(runtime_for(app.state.ctx.conn).shutdown)
 
 
 def create_app(
@@ -94,6 +108,15 @@ def create_app(
     app.state.ctx = ctx
     app.state.web_cfg = web_cfg
 
+    @app.middleware('http')
+    async def no_cached_state(request,call_next):
+        response=await call_next(request)
+        if request.url.path.startswith('/api/'):
+            response.headers['Cache-Control']='no-store'
+        elif request.url.path in ('/','/index.html','/app.js','/styles.css'):
+            response.headers['Cache-Control']='no-cache'
+        return response
+
     # --- 路由 ---
     from companion_ever.api.routes import chat, memory
 
@@ -103,6 +126,8 @@ def create_app(
     # 记录（抽取记忆）跑完后，服务端**主动推送** record_done 给前端。
     # 前端收到就刷新关系状态 / 记忆 / 计数——不用「退出重进」才能看到变化。
     ctx.services.session_close.on_record_done = chat.notify_record_done
+    if ctx.services.summary is not None:
+        ctx.services.summary.on_updated=chat.notify_summary_updated
 
     @app.exception_handler(PermissionError)
     async def _permission_handler(request: Request, exc: PermissionError):
@@ -118,6 +143,9 @@ def create_app(
             "ok": True,
             "auth_required": bool(web_cfg.pin),
             "idle_minutes": idle,
+            "auto_memory": app.state.ctx.cfg.background.enabled,
+            "memory_idle_seconds": app.state.ctx.cfg.background.memory_idle_seconds,
+            "schema_version": app.state.ctx.conn.execute('PRAGMA user_version').fetchone()[0],
         })
 
     # manifest 要用 application/manifest+json，否则 PWA 安装不了

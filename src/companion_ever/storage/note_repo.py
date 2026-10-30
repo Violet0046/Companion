@@ -7,9 +7,8 @@ from typing import Optional
 
 from companion_ever.domain.entities import Note
 from companion_ever.utils.text import extract_keywords
-from companion_ever.domain.enums import NoteType
+from companion_ever.domain.enums import MemoryKind
 from .mappers import row_to_note
-from .db import transaction
 
 
 def _new_note_id() -> str:
@@ -59,8 +58,8 @@ class NoteRepo:
         *,
         user_id: str,
         persona_id: str,
-        type: Optional[NoteType] = None,
-        types: Optional[list[NoteType]] = None,
+        kind: Optional[MemoryKind] = None,
+        kinds: Optional[list[MemoryKind]] = None,
         is_archived: bool = False,
         limit: int = 100,
     ) -> list[Note]:
@@ -72,15 +71,15 @@ class NoteRepo:
             sql += " AND is_archived = 0"
         elif is_archived:
             sql += " AND is_archived = 1"
-        if type is not None and types is not None:
-            raise ValueError("type 和 types 是互斥的")
-        if type is not None:
-            sql += " AND type = ?"
-            params.append(type.value)
-        elif types is not None:
-            placeholders = ",".join("?" * len(types))
-            sql += f" AND type IN ({placeholders})"
-            params.extend(t.value for t in types)
+        if kind is not None and kinds is not None:
+            raise ValueError("kind 和 kinds 是互斥的")
+        if kind is not None:
+            sql += " AND kind = ?"
+            params.append(kind.value)
+        elif kinds is not None:
+            placeholders = ",".join("?" * len(kinds))
+            sql += f" AND kind IN ({placeholders})"
+            params.extend(t.value for t in kinds)
 
         sql += " ORDER BY updated_at DESC LIMIT ?"
         params.append(limit)
@@ -181,41 +180,18 @@ class NoteRepo:
                             return merged
 
         return merged
-
-    def remember(self, *, user_id: str, persona_id: str, type: NoteType,
-                 content: str, source_quote: str | None = None,
-                 importance: float = 0.5) -> tuple[str, bool]:
-        """抽取写入：同一范围、类型、正文只保留一条活跃事实。
-
-        BEGIN IMMEDIATE 让并发抽取的检查和写入成为一个原子操作。
-        不做语义合并，也不修改旧事实的时间和证据。
-        """
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError("content 必须是非空字符串")
-        content = content.strip()
-        with transaction(self.conn):
-            row = self.conn.execute(
-                "SELECT id FROM note WHERE user_id=? AND persona_id=? AND type=? "
-                "AND trim(content)=? AND is_archived=0 ORDER BY created_at, id LIMIT 1",
-                (user_id, persona_id, type.value, content),
-            ).fetchone()
-            if row:
-                result = (row["id"], False)
-            else:
-                result = (self.create(user_id=user_id, persona_id=persona_id, type=type,
-                                      content=content, source_quote=source_quote,
-                                      importance=importance), True)
-            return result
-
     def create(
         self,
         *,
         user_id: str,
         persona_id: str,
-        type: NoteType,
+        kind: MemoryKind,
         content: str,
         source_quote: Optional[str] = None,
         importance: float = 0.5,
+        reality: str = 'uncertain',
+        event_time: Optional[str] = None,
+        time_basis: str = '',
     ) -> str:
         """创建一条笔记。
 
@@ -224,8 +200,8 @@ class NoteRepo:
         Args:
             user_id: 用户 id（必须已存在，FK 自动校验）
             persona_id: persona id
-            type: 14 种 NoteType 之一
-            content: 笔记正文（字符串；PERSONA_BASICS 由调用方负责 JSON 序列化）
+            kind: episode 或 fact
+            content: 笔记正文字符串
             source_quote: 原话引用（防幻觉用，可选）
             importance: 重要性 [0, 1]
 
@@ -234,7 +210,7 @@ class NoteRepo:
 
         Raises:
             sqlite3.IntegrityError: user_id 不存在
-            ValueError: content 空 / type 无效（CHECK 约束）
+            ValueError: content 空 / kind 无效（CHECK 约束）
         """
         if not content or not content.strip():
             raise ValueError("content 不能为空")
@@ -242,16 +218,19 @@ class NoteRepo:
         note_id = _new_note_id()
         self.conn.execute(
             "INSERT INTO note "
-            "(id, user_id, persona_id, type, content, source_quote, importance) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(id, user_id, persona_id, kind, content, source_quote, importance, reality, event_time, time_basis) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 note_id,
                 user_id,
                 persona_id,
-                type.value,
+                kind.value,
                 content.strip(),
                 source_quote,
                 importance,
+                reality,
+                event_time,
+                time_basis,
             ),
         )
         return note_id
@@ -293,6 +272,7 @@ class NoteRepo:
             return
 
         updates.append("updated_at = CURRENT_TIMESTAMP")
+        updates.append("revision = revision + 1")
         params.append(note_id)
         sql = f"UPDATE note SET {', '.join(updates)} WHERE id = ?"
         self.conn.execute(sql, params)
@@ -304,7 +284,7 @@ class NoteRepo:
             True if 成功，False if 笔记不存在
         """
         cur = self.conn.execute(
-            "UPDATE note SET is_archived = 1, updated_at = CURRENT_TIMESTAMP "
+            "UPDATE note SET is_archived = 1, revision=revision+1, updated_at = CURRENT_TIMESTAMP "
             "WHERE id = ? AND is_archived = 0",
             (note_id,),
         )
@@ -317,7 +297,7 @@ class NoteRepo:
             True if 成功，False if 笔记不存在或未归档
         """
         cur = self.conn.execute(
-            "UPDATE note SET is_archived = 0, updated_at = CURRENT_TIMESTAMP "
+            "UPDATE note SET is_archived = 0, revision=revision+1, updated_at = CURRENT_TIMESTAMP "
             "WHERE id = ? AND is_archived = 1",
             (note_id,),
         )

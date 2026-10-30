@@ -40,17 +40,8 @@ class Authorizer:
         """权威判定：这个 (user, persona) 真的有数据吗。"""
         if self.note_repo is None:
             return False
-        try:
-            from companion_ever.domain.enums import NoteType
-            notes = self.note_repo.find(
-                user_id=user_id,
-                persona_id=persona_id,
-                types=[NoteType.PERSONA_BASICS],
-                limit=1,
-            )
-            return bool(notes)
-        except Exception:
-            return False
+        from companion_ever.storage.persona_repo import PersonaRepo
+        return PersonaRepo(self.note_repo.conn).get(user_id,persona_id) is not None
 
     def require_note_owner(self, note_id: str, user_id: str) -> None:
         """校验 note 存在且属于 user。

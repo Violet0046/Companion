@@ -24,7 +24,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from companion_ever.domain.enums import NoteType
 
 
 @dataclass(frozen=True)
@@ -54,29 +53,7 @@ def _default_retrieval_weights() -> dict[str, float]:
         "importance": 0.5,
         "recency": 0.2,
         "fts": 0.2,
-        "type": 0.1,
     }
-
-
-def _default_type_bonus() -> dict[str, float]:
-    return {
-        "profile_fact": 0.10,
-        "preference": 0.09,
-        "promise": 0.09,
-        "milestone": 0.07,
-        "event": 0.05,
-        "observation": 0.02,
-    }
-
-
-def _default_always_include_types() -> tuple[NoteType, ...]:
-    return (
-        NoteType.PROFILE_FACT,
-        NoteType.PREFERENCE,
-        NoteType.PROMISE,
-        NoteType.MILESTONE,
-        NoteType.INSIDE_JOKE,
-    )
 
 
 @dataclass(frozen=True)
@@ -84,37 +61,19 @@ class RetrievalConfig:
     """Wiki 检索配置。"""
 
     weights: dict[str, float] = field(default_factory=_default_retrieval_weights)
-    type_bonus: dict[str, float] = field(default_factory=_default_type_bonus)
     top_k: int = 10
-    always_include_types: tuple[NoteType, ...] = field(default_factory=_default_always_include_types)
 
     @classmethod
     def from_any(cls, value: "RetrievalConfig | dict | None") -> "RetrievalConfig":
-        """从 dict / RetrievalConfig / None 构造；自动转换 always_include_types 字符串→NoteType。"""
+        """从 dict / RetrievalConfig / None 构造。"""
         if value is None:
             return cls()
         if isinstance(value, cls):
             return value
         if isinstance(value, dict):
             data = {k: v for k, v in value.items() if k in cls.__dataclass_fields__}
-            # 自动转换 always_include_types：list[str] / Sequence → tuple[NoteType, ...]
-            if "always_include_types" in data:
-                data["always_include_types"] = _coerce_note_types(data["always_include_types"])
             return cls(**data)
         raise TypeError(f"RetrievalConfig.from_any: 不支持 {type(value)}")
-
-
-def _coerce_note_types(value: Sequence[Any]) -> tuple[NoteType, ...]:
-    """list[str] / Sequence[NoteType] → tuple[NoteType, ...]"""
-    out: list[NoteType] = []
-    for v in value:
-        if isinstance(v, NoteType):
-            out.append(v)
-        elif isinstance(v, str):
-            out.append(NoteType(v))
-        else:
-            raise TypeError(f"无法转换为 NoteType: {v!r}")
-    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -148,6 +107,21 @@ class WebConfig:
         )
 
 
+@dataclass(frozen=True)
+class BackgroundConfig:
+    enabled: bool = True
+    memory_message_threshold: int = 6
+    memory_idle_seconds: int = 180
+    summary_fact_threshold: int = 5
+    summary_interval_seconds: int = 900
+    failure_cooldown_seconds: int = 900
+    model_thinking: bool = False
+
+    def __post_init__(self):
+        if min(self.memory_message_threshold,self.memory_idle_seconds,self.summary_fact_threshold,self.summary_interval_seconds,self.failure_cooldown_seconds)<1:
+            raise ValueError('后台触发阈值必须为正数')
+
+
 class AppConfig:
     """全局应用配置（不可变）。
 
@@ -161,6 +135,8 @@ class AppConfig:
         "db_path", "tz_offset_hours", "recent_message_limit",
         "history_max_messages", "llm", "retrieval", "check_same_thread",
         "idle_session_minutes",
+        "extraction_timeout",
+        "background",
     )
 
     def __init__(
@@ -173,6 +149,8 @@ class AppConfig:
         retrieval: RetrievalConfig | dict | None = None,
         check_same_thread: bool = False,
         idle_session_minutes: int = 120,
+        extraction_timeout: float = 120.0,
+        background: BackgroundConfig | dict | None = None,
     ):
         self.db_path = Path(db_path)
         self.tz_offset_hours = tz_offset_hours
@@ -187,6 +165,10 @@ class AppConfig:
         # 空闲多久自动判定为"上一个 session 已结束"（分钟）。
         # 0 = 关闭自动判定（只能手动 /quit）。
         self.idle_session_minutes = idle_session_minutes
+        if not 0 < extraction_timeout < float('inf'):
+            raise ValueError('extraction_timeout 必须为有限正数')
+        self.extraction_timeout = extraction_timeout
+        self.background=background if isinstance(background,BackgroundConfig) else BackgroundConfig(**(background or {}))
 
     @classmethod
     def from_env(
@@ -225,6 +207,15 @@ class AppConfig:
             recent_message_limit=int(env_source.get("COMPANION_RECENT_MESSAGE_LIMIT", "20")),
             history_max_messages=int(env_source.get("COMPANION_HISTORY_MAX", "50")),
             idle_session_minutes=int(env_source.get("COMPANION_IDLE_MINUTES", "120")),
+            extraction_timeout=float(env_source.get("COMPANION_EXTRACTION_TIMEOUT", "120")),
+            background=BackgroundConfig(
+                enabled=env_source.get('COMPANION_AUTO_MEMORY','1').lower() not in ('0','false','off'),
+                memory_message_threshold=int(env_source.get('COMPANION_MEMORY_TRIGGER_MESSAGES','6')),
+                memory_idle_seconds=int(env_source.get('COMPANION_MEMORY_IDLE_SECONDS','180')),
+                summary_fact_threshold=int(env_source.get('COMPANION_SUMMARY_TRIGGER_FACTS','5')),
+                summary_interval_seconds=int(env_source.get('COMPANION_SUMMARY_INTERVAL_SECONDS','900')),
+                failure_cooldown_seconds=int(env_source.get('COMPANION_TASK_RETRY_COOLDOWN_SECONDS','900')),
+                model_thinking=env_source.get('COMPANION_BACKGROUND_THINKING','0').lower() in ('1','true','on')),
             llm=LLMConfig(
                 api_key=env_source.get("OPENAI_API_KEY", ""),
                 base_url=env_source.get("OPENAI_BASE_URL", ""),
@@ -253,4 +244,4 @@ class AppConfig:
         )
 
 
-__all__ = ["LLMConfig", "RetrievalConfig", "WebConfig", "AppConfig"]
+__all__ = ["LLMConfig", "RetrievalConfig", "WebConfig", "BackgroundConfig", "AppConfig"]

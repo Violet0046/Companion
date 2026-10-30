@@ -1,0 +1,232 @@
+{
+  "version": 1,
+  "notes": [
+    {
+      "id": "city_old",
+      "content": "用户以前住在无锡。",
+      "kind": "fact"
+    },
+    {
+      "id": "city_current",
+      "content": "用户后来搬到苏州，目前住在苏州。",
+      "kind": "fact"
+    },
+    {
+      "id": "move_episode",
+      "content": "用户搬到苏州时讨论过整理行李。",
+      "kind": "episode"
+    },
+    {
+      "id": "tea",
+      "content": "用户长期更喜欢喝茶，不爱喝咖啡。",
+      "kind": "fact"
+    },
+    {
+      "id": "interview_plan",
+      "content": "青禾科技面试安排在十月二日上午十一点；如果有好结果，用户承诺请对方吃火锅。",
+      "kind": "episode"
+    },
+    {
+      "id": "interview_result",
+      "content": "青禾科技已发出录用意向，截至十月二十日尚未收到正式 offer。",
+      "kind": "episode"
+    },
+    {
+      "id": "fiction_gift",
+      "content": "共同想象的海边旅行中，用户将折好的纸船送给角色，日期未知。",
+      "kind": "episode"
+    },
+    {
+      "id": "duplicate_tea",
+      "content": "用户长期更喜欢喝茶，不爱喝咖啡。",
+      "kind": "fact"
+    },
+    {
+      "id": "foreign",
+      "content": "用户的私密项目代号是远洋。",
+      "persona": "other",
+      "kind": "fact"
+    }
+  ],
+  "links": [
+    [
+      "city_current",
+      "city_old",
+      "supersedes"
+    ],
+    [
+      "move_episode",
+      "city_current",
+      "supports"
+    ],
+    [
+      "interview_result",
+      "interview_plan",
+      "continues"
+    ]
+  ],
+  "queries": [
+    {
+      "id": "Q01",
+      "query": "苏州",
+      "relevant": [
+        "city_current",
+        "move_episode"
+      ]
+    },
+    {
+      "id": "Q02",
+      "query": "无锡",
+      "relevant": [
+        "city_current",
+        "move_episode"
+      ],
+      "forbidden": [
+        "city_old"
+      ]
+    },
+    {
+      "id": "Q03",
+      "query": "喝茶",
+      "relevant": [
+        "tea",
+        "duplicate_tea"
+      ],
+      "equivalent_groups": [
+        [
+          "tea",
+          "duplicate_tea"
+        ]
+      ]
+    },
+    {
+      "id": "Q04",
+      "query": "咖啡",
+      "relevant": [
+        "tea",
+        "duplicate_tea"
+      ],
+      "equivalent_groups": [
+        [
+          "tea",
+          "duplicate_tea"
+        ]
+      ]
+    },
+    {
+      "id": "Q05",
+      "query": "青禾科技",
+      "relevant": [
+        "interview_plan",
+        "interview_result"
+      ]
+    },
+    {
+      "id": "Q06",
+      "query": "录用意向",
+      "relevant": [
+        "interview_result",
+        "interview_plan"
+      ]
+    },
+    {
+      "id": "Q07",
+      "query": "火锅",
+      "relevant": [
+        "interview_plan",
+        "interview_result"
+      ]
+    },
+    {
+      "id": "Q08",
+      "query": "后来呢",
+      "context_query": "青禾科技面试",
+      "relevant": [
+        "interview_plan",
+        "interview_result"
+      ]
+    },
+    {
+      "id": "Q09",
+      "query": "纸船",
+      "relevant": [
+        "fiction_gift"
+      ]
+    },
+    {
+      "id": "Q10",
+      "query": "中午好",
+      "relevant": []
+    },
+    {
+      "id": "Q11",
+      "query": "天气怎么样",
+      "relevant": []
+    },
+    {
+      "id": "Q12",
+      "query": "",
+      "relevant": []
+    },
+    {
+      "id": "Q13",
+      "query": "远洋",
+      "relevant": [],
+      "forbidden": [
+        "foreign"
+      ]
+    },
+    {
+      "id": "Q14",
+      "query": "搬家",
+      "relevant": [
+        "city_current",
+        "move_episode"
+      ],
+      "note": "不同措辞的探索样本，允许暴露词法入口缺失"
+    },
+    {
+      "id": "Q15",
+      "query": "我更爱喝什么饮料",
+      "relevant": [
+        "tea",
+        "duplicate_tea"
+      ],
+      "equivalent_groups": [
+        [
+          "tea",
+          "duplicate_tea"
+        ]
+      ],
+      "note": "不同措辞的探索样本"
+    },
+    {
+      "id": "Q16",
+      "query": "苏州",
+      "kinds": [
+        "fact"
+      ],
+      "relevant": [
+        "city_current"
+      ]
+    },
+    {
+      "id": "Q17",
+      "query": "苏州",
+      "kinds": [
+        "episode"
+      ],
+      "relevant": [
+        "move_episode"
+      ]
+    },
+    {
+      "id": "Q18",
+      "query": "那件礼物怎么给你的",
+      "relevant": [
+        "fiction_gift"
+      ],
+      "note": "指代及措辞变化的探索样本"
+    }
+  ]
+}

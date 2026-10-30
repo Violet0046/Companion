@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from fastapi.testclient import TestClient
 from test_chat_workflow import _make_ctx
-from companion_ever.domain.enums import NoteType
+from companion_ever.domain.enums import MemoryKind
 from companion_ever.services.memory_search import MemorySearch
 
 
@@ -15,15 +15,15 @@ def main():
             ctx.repos.user.create('alice')
             for persona in ('one','two'):
                 ctx.services.persona.create_persona('alice',persona,'{}')
-            def note(content, kind='profile_fact', persona='one'):
-                return ctx.services.note.create_note('alice',persona,NoteType(kind),content)
+            def note(content, kind='fact', persona='one'):
+                return ctx.services.note.create_note('alice',persona,MemoryKind(kind),content)
             def link(a,b,kind):
                 ctx.conn.execute('INSERT INTO note_link(id,from_id,to_id,link_type) VALUES (?,?,?,?)',
                                  (uuid.uuid4().hex,a,b,kind))
             service = ctx.services.retrieval
             old = note('旧址在杭州')
             new = note('后来搬到另一座城市')
-            source = note('搬迁当晚我们讨论过收拾行李','event')
+            source = note('搬迁当晚我们讨论过收拾行李','episode')
             link(new,old,'supersedes')
             link(source,new,'supports')
             result = service.search('alice','one',MemorySearch(query='杭州',limit=1))
@@ -46,7 +46,7 @@ def main():
             scoped = service.search('alice','one',MemorySearch(query='杭州',max_hops=2)).to_dict()
             assert foreign not in str(scoped) and '私聊机密' not in str(scoped)
             assert not service.search('alice','one',MemorySearch(seed_ids=[foreign])).notes
-            next_event = note('之后完成搬迁交接','event')
+            next_event = note('之后完成搬迁交接','episode')
             link(next_event,source,'continues')
             reverse = service.search('alice','one',MemorySearch(seed_ids=[source],kinds=['episode']))
             assert reverse.notes[0].id==next_event
@@ -60,7 +60,7 @@ def main():
             assert len(duplicated.hits)==1
             upper=note('Received FORMAL OFFER')
             assert upper in {n.id for n in service.search('alice','one',MemorySearch(query='formal offer')).notes}
-            hub=note('预算测试经历','event')
+            hub=note('预算测试经历','episode')
             for index in range(75):
                 leaf=note(f'独立事实 {index}')
                 link(hub,leaf,'supports')

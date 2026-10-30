@@ -60,7 +60,16 @@ def main() -> int:
     # 用 app 的 OpenAPI 拿全量路由（包含 server.py 自己定义的，如 /api/health）
     from companion_ever.api.server import create_app
     from companion_ever.config import WebConfig
-    app = create_app(web_cfg=WebConfig())
+    # Route introspection must not initialize/migrate the user's .env database.
+    import tempfile
+    from pathlib import Path
+    from test_chat_workflow import _make_ctx
+    with tempfile.TemporaryDirectory(prefix='web-assets-') as tmp:
+        ctx=_make_ctx(str(Path(tmp)/'test.db'),check_same_thread=False)
+        try:
+            app=create_app(ctx=ctx,web_cfg=WebConfig())
+        finally:
+            ctx.conn.close()
     server_paths = set(app.openapi()["paths"].keys())
     # include_in_schema=False 的路由（如 /api/health）不在 OpenAPI 里
     for r in app.routes:
@@ -90,7 +99,7 @@ def main() -> int:
     # 这些 id 是运行时动态创建的（角色资料页 / 通讯录页按需渲染）
     DYNAMIC_IDS = {
         "rel-card", "date-list", "cell-new-persona", "cell-group-chat",
-        "btn-record-now", "last-record-val",
+        "btn-record-now", "last-record-val", "task-attempts",
     }
     missing_ids = js_ids - html_ids - DYNAMIC_IDS
     assert not missing_ids, f"app.js 引用了不存在的元素: {sorted(missing_ids)}"

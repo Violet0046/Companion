@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -83,43 +84,77 @@ class Trace:
         self.error: str | None = None
         self.duration_ms: float = 0.0
         self._t0 = time.perf_counter()
+        self.context: dict[str,Any] = {}
+        self.calls: list[dict[str,Any]] = []
+        self._store = None
+        self._active_call = None
+        self._last_reasoning_save = 0.0
 
     # --- 记录 ---
 
     def step(self, name: str, ms: float = 0.0, **detail: Any) -> None:
         """记录一个步骤。detail 是关键字参数，会被原样存进 JSON。"""
-        self.steps.append(TraceStep(name=name, ms=ms, detail=detail))
+        self.steps.append(TraceStep(name=name, ms=ms, detail={
+            'at_ms': round((time.perf_counter()-self._t0)*1000, 2), **detail}))
+        self.flush()
 
     def artifact(self, name: str, content: str) -> None:
         """记录一个产物（实际发送/收到的内容）。"""
         self.artifacts[name] = content
+        if self._store:
+            self._store.write_artifact(self,name,content)
+        self.flush()
+
+    def flush(self):
+        if self._store:
+            self._store.save_meta(self)
+
+    def begin_call(self,mode,model):
+        call={'id':f'llm-{len(self.calls)+1:02d}','mode':mode,'model':model,'status':'running',
+              'response_state':'waiting','response_chars':0,
+              'started_ms':round((time.perf_counter()-self._t0)*1000,2)}
+        self.calls.append(call);self._active_call=call
+        self._last_reasoning_save=0.0
+        self.flush()
+        return call
+
+    def model_reasoning(self,text):
+        if self._active_call and time.perf_counter()-self._last_reasoning_save>=.5:
+            self.artifact(self._active_call['id']+'.reasoning',text)
+            self._last_reasoning_save=time.perf_counter()
 
     def finish(self, status: str = "ok", error: str | None = None) -> None:
         """结束 trace（幂等）。"""
         self.duration_ms = (time.perf_counter() - self._t0) * 1000
         self.status = status
         self.error = error
+        self.flush()
 
     # --- 序列化 ---
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            'format_version': 2,
             "trace_id": self.trace_id,
             "kind": self.kind,
             "user_id": self.user_id,
             "persona_id": self.persona_id,
             "started_at": self.started_at.isoformat(),
-            "duration_ms": round(self.duration_ms, 2),
+            'updated_at': datetime.now().astimezone().isoformat(),
+            "duration_ms": round((time.perf_counter()-self._t0)*1000 if self.status=='running' else self.duration_ms, 2),
             "status": self.status,
             "error": self.error,
             "steps": [s.to_dict() for s in self.steps],
             "artifacts": sorted(self.artifacts.keys()),
+            'artifact_files': {name:f'{self.trace_id}.{name}.txt' for name in sorted(self.artifacts)},
+            "context": self.context,
+            "llm_calls": self.calls,
         }
 
 
 def _new_trace_id() -> str:
     """trace_id 格式：20261027-143022-a3f9（时间 + 随机后缀，便于按时间排序）。"""
-    return f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    return f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
 
 # ============ thread-local 上下文 ============
@@ -170,6 +205,7 @@ def trace_scope(
     user_id: str,
     persona_id: str,
     store: "TraceStore | None" = None,
+    **context,
 ) -> Iterator[Trace]:
     """开启一个 trace 作用域。
 
@@ -189,17 +225,24 @@ def trace_scope(
     if store is None:
         store = get_default_store()
     prev = getattr(_local, "trace", None)
+    tr.context={**({'parent_trace_id':prev.trace_id} if prev else {}),**context}
+    tr._store=store
     _local.trace = tr
+    tr.flush()
     try:
         yield tr
     except GeneratorExit:
         tr.finish("aborted")
         raise
     except Exception as e:
-        tr.finish("error", f"{type(e).__name__}: {e}")
+        from companion_ever.services.task_errors import describe_error
+        tr.finish("error", describe_error(e))
+        raise
+    except BaseException as exc:
+        tr.finish('interrupted',type(exc).__name__)
         raise
     else:
-        tr.finish("ok")
+        tr.finish('ok' if tr.status=='running' else tr.status,tr.error)
     finally:
         _local.trace = prev
         if store is not None:
@@ -209,9 +252,11 @@ def trace_scope(
 class _NullTrace:
     """trace 关闭时的哑对象，方法都是 no-op。"""
 
-    trace_id = "-"
-    steps: list = []
-    artifacts: dict = {}
+    def __init__(self):
+        self.trace_id = '-'
+        self.steps = []
+        self.artifacts = {}
+        self.context = {}
 
     def step(self, *a, **k) -> None:
         return None
@@ -222,6 +267,9 @@ class _NullTrace:
     def finish(self, *a, **k) -> None:
         return None
 
+    def flush(self):
+        return None
+
 
 # ============ 存储 ============
 
@@ -230,28 +278,43 @@ class TraceStore:
 
     def __init__(self, base_dir: Path | str) -> None:
         self.base_dir = Path(base_dir)
+        self._write_error_reported = False
+
+    def _write_error(self, exc):
+        if not self._write_error_reported:
+            self._write_error_reported = True
+            logging.getLogger(__name__).warning('Trace 写入失败（%s）：%s', self.base_dir, type(exc).__name__)
 
     # --- 写 ---
 
     def save(self, trace: Trace) -> Path | None:
         """落盘。失败不抛异常（诊断功能不该拖垮主流程）。"""
         try:
-            day_dir = self.base_dir / trace.started_at.strftime("%Y-%m-%d")
-            day_dir.mkdir(parents=True, exist_ok=True)
-
-            meta_path = day_dir / f"{trace.trace_id}.json"
-            meta_path.write_text(
-                json.dumps(trace.to_dict(), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-
             for name, content in trace.artifacts.items():
-                (day_dir / f"{trace.trace_id}.{name}.txt").write_text(
-                    content, encoding="utf-8"
-                )
-            return meta_path
-        except Exception:
+                self.write_artifact(trace,name,content)
+            return self.save_meta(trace)
+        except Exception as exc:
+            self._write_error(exc)
             return None
+
+    def save_meta(self,trace):
+        try:
+            directory=self.base_dir/trace.started_at.strftime('%Y-%m-%d');directory.mkdir(parents=True,exist_ok=True)
+            path=directory/(trace.trace_id+'.json');temporary=path.with_suffix('.json.tmp')
+            temporary.write_text(json.dumps(trace.to_dict(),ensure_ascii=False,indent=2),encoding='utf-8')
+            temporary.replace(path)
+            return path
+        except Exception as exc:
+            self._write_error(exc)
+            return None
+
+    def write_artifact(self,trace,name,content):
+        try:
+            directory=self.base_dir/trace.started_at.strftime('%Y-%m-%d');directory.mkdir(parents=True,exist_ok=True)
+            path=directory/(trace.trace_id+'.'+name+'.txt');temporary=path.with_suffix('.txt.tmp')
+            temporary.write_text(content,encoding='utf-8');temporary.replace(path)
+        except Exception as exc:
+            self._write_error(exc)
 
     # --- 读 ---
 

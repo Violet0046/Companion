@@ -42,7 +42,7 @@ def main() -> int:
         db_path=os.path.join(tmpdir, "test.db"),
         llm={"api_key": "x", "base_url": "https://x", "model": "fake-model"},
         tz_offset_hours=8,
-        retrieval={"always_include_types": ["profile_fact"], "top_k": 10},
+        retrieval={"top_k": 10},
     )
     ctx = build_app(cfg)
     ctx.repos.user.create("alice")

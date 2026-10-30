@@ -36,6 +36,7 @@ class BlockRepo:
             None if 不存在
             否则 Block 实体（fields 已 JSON 解析）
         """
+        block_type = BlockType(block_type)
         row = self.conn.execute(
             "SELECT id, user_id, persona_id, block_type, fields_json, updated_at "
             "FROM memory_block "
@@ -45,7 +46,7 @@ class BlockRepo:
         return row_to_block(row) if row else None
 
     def get_all(self, user_id: str, persona_id: str) -> list[Block]:
-        """获取 (user, persona) 的全部 Block（最多 3 个）。
+        """获取用户画像与关系摘要（最多 2 个）。
 
         按 block_type 排序（便于 system prompt 拼接）。
         """
@@ -78,9 +79,10 @@ class BlockRepo:
         Args:
             user_id: 用户 id
             persona_id: persona id
-            block_type: 3 种之一
+            block_type: 用户画像或关系进展
             fields: 字段 dict（或已序列化的 JSON 字符串）
         """
+        block_type = BlockType(block_type)
         if isinstance(fields, dict):
             fields_json = json.dumps(fields, ensure_ascii=False)
         else:
@@ -129,6 +131,7 @@ class BlockRepo:
             True if 删除成功
             False if 不存在
         """
+        block_type = BlockType(block_type)
         cur = self.conn.execute(
             "DELETE FROM memory_block "
             "WHERE user_id = ? AND persona_id = ? AND block_type = ?",
@@ -137,7 +140,7 @@ class BlockRepo:
         return cur.rowcount > 0
 
     def delete_all(self, user_id: str, persona_id: str) -> int:
-        """删除 (user, persona) 的全部 Block（最多 3 个）。
+        """删除 (user, persona) 的两个摘要。
 
         Returns:
             删除的 Block 数量

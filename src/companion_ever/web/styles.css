@@ -294,15 +294,6 @@ body {
   border-radius: var(--radius-sm); font-size: 14px; line-height: 1.5;
   border-left: 3px solid var(--surface-2);
 }
-.note[data-type="profile_fact"] { border-left-color: #4a90d9; }
-.note[data-type="event"]       { border-left-color: #d4a03f; }
-.note[data-type="preference"]   { border-left-color: #9b7fd4; }
-.note[data-type="promise"]      { border-left-color: #3fb894; }
-.note[data-type="milestone"]    { border-left-color: #e0698f; }
-.note[data-type="inside_joke"]  { border-left-color: #d4955f; }
-.note[data-type="observation"]  { border-left-color: #8a8f96; }
-.note[data-type="sensitive"]    { border-left-color: #e05a5a; }
-.note[data-type="callback"]     { border-left-color: #3fb8b8; }
 .note .note-head {
   display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 3px;
 }
@@ -552,7 +543,7 @@ body {
 
 /* ============================================================
    多视图结构（消息 / 通讯录 / 我 / 会话 / 角色资料 / 她的记忆）
-   设计稿见 design/mockup/，class 名与设计稿一一对应
+   多页面布局
    ============================================================ */
 
 .views { flex: 1 1 auto; position: relative; overflow: hidden; }
@@ -804,3 +795,8 @@ body {
   0%, 60%, 100% { transform: translateY(0); opacity: .35; }
   30% { transform: translateY(-3px); opacity: 1; }
 }
+
+.note[data-kind="fact"] { border-left-color: #4a90d9; }
+.note[data-kind="episode"] { border-left-color: #d4a03f; }
+.reply-status { margin: 12px auto; padding: 10px 12px; max-width: 90%; color: var(--text-dim); font-size: 13px; text-align: center; }
+.reply-status .btn-mini { margin-left: 10px; }

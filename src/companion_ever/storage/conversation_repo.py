@@ -114,7 +114,7 @@ class ConversationRepo:
             按 created_at 升序的 marker 列表（可能少于 n 个）
         """
         rows = self.conn.execute(
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at "
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id "
             "FROM conversation_log "
             "WHERE user_id = ? AND persona_id = ? AND role = 'session_close' "
             "ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -155,7 +155,7 @@ class ConversationRepo:
             按 id 升序的列表（**取最近 limit 条**，不是最早的）
         """
         sql = (
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at "
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id "
             "FROM conversation_log "
             "WHERE user_id = ? AND persona_id = ? "
             "  AND role IN ('user', 'assistant')"
@@ -236,21 +236,6 @@ class ConversationRepo:
         )
         return cur.rowcount
 
-    def delete_session_close(self, marker_id: int) -> bool:
-        """删除一个 session_close marker（抽取失败时回滚用）。
-
-        为什么需要：
-        抽取失败时 marker 已经写入了，而抽取的范围是
-        [上一个 marker, 本次 marker]。如果保留 marker，下次抽取只会
-        覆盖 [本次 marker, 下次 marker]，这段内容就永远不会被抽取了。
-        回滚掉 marker，下次抽取就会自动补上。
-        """
-        cur = self.conn.execute(
-            "DELETE FROM conversation_log WHERE id = ? AND role = 'session_close'",
-            (marker_id,),
-        )
-        return cur.rowcount > 0
-
     def get_active_session(
         self, *, user_id: str, persona_id: str,
     ) -> Optional[dict]:
@@ -328,7 +313,7 @@ class ConversationRepo:
             limit: 最多返回多少条
         """
         sql = (
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at "
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id "
             "FROM conversation_log "
             "WHERE user_id = ? AND persona_id = ? AND role IN ('user', 'assistant')"
         )
@@ -405,7 +390,7 @@ class ConversationRepo:
             return []
         where = " OR ".join(["content LIKE ?"] * len(patterns))
         sql = (
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at "
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id "
             "FROM conversation_log "
             f"WHERE user_id = ? AND persona_id = ? AND role IN ('user', 'assistant') "
             f"  AND ({where}) "
@@ -442,7 +427,7 @@ class ConversationRepo:
             按时间正序的列表（ConversationMessage 实体）
         """
         rows = self.conn.execute(
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at "
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id "
             "FROM conversation_log "
             "WHERE user_id = ? AND persona_id = ? "
             "  AND role IN ('user', 'assistant') "
@@ -450,36 +435,6 @@ class ConversationRepo:
             (user_id, persona_id, limit),
         ).fetchall()
         return [row_to_conversation_message(r) for r in reversed(rows)]
-
-    def get_since(
-        self,
-        *,
-        user_id: str,
-        persona_id: str,
-        since: datetime,
-        limit: int = 100,
-    ) -> list[ConversationMessage]:
-        """获取 since 之后的所有对话消息（按时间正序，自动过滤 session_close）。
-
-        Args:
-            user_id, persona_id: 限定范围
-            since: 起始时间（包含）
-            limit: 最多返回多少条
-
-        Returns:
-            按时间正序的列表
-        """
-        since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-        rows = self.conn.execute(
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at "
-            "FROM conversation_log "
-            "WHERE user_id = ? AND persona_id = ? "
-            "  AND role IN ('user', 'assistant') "
-            "  AND created_at >= ? "
-            "ORDER BY id ASC LIMIT ?",
-            (user_id, persona_id, since_str, limit),
-        ).fetchall()
-        return [row_to_conversation_message(r) for r in rows]
 
     def get_last_conversation_at(
         self,

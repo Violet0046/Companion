@@ -42,9 +42,13 @@ class NoteOut(BaseModel):
     """一条记忆。"""
 
     id: str
-    type: str
+    kind: str
     content: str
     importance: float
+    reality: str = 'uncertain'
+    event_time: Optional[str] = None
+    time_basis: str = ''
+    pinned: bool = False
     source_quote: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -70,6 +74,7 @@ class MessageOut(BaseModel):
     content: str
     created_at: Optional[str] = None
     thinking: Optional[str] = None
+    client_message_id: Optional[str] = None
 
 
 class DateEntry(BaseModel):
@@ -90,7 +95,7 @@ class SearchHit(BaseModel):
     content: str
     created_at: Optional[str] = None
     role: Optional[str] = None
-    type: Optional[str] = None
+    memory_kind: Optional[str] = None
     importance: Optional[float] = None
 
 
@@ -123,6 +128,8 @@ class PersonaSummary(BaseModel):
     # 现在是不是正在记录中（抽取跑着）。
     # 前端用它把「记一次」按钮变成「记录中…」，也用来判断记录是否已完成。
     recording: bool = False
+    summary_meta: Optional[dict[str,Any]] = None
+    memory_meta: Optional[dict[str,Any]] = None
 
 
 class UserOut(BaseModel):

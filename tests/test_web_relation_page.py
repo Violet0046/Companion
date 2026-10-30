@@ -120,6 +120,7 @@ function assert(cond, msg) {
 
 S.user = 'u1'; S.persona = '小柳'; S.personaTitle = '小柳';
 S.idleMinutes = 120;
+S.debug = true;
 
 // --- 1. relationHtml 是纯函数：阶段 / 进展 / 关键时刻 ---
 const info = {
@@ -316,8 +317,7 @@ def test_record_hook_fires() -> None:
         model = "fake-model"
 
         def chat(self, messages, **kwargs) -> str:
-            return json.dumps({"facts": [], "blocks": [], "reasoning": "t"},
-                              ensure_ascii=False)
+            return __import__("fake_memory").no_memory(messages)
 
         def stream_chat(self, messages, **kwargs):
             yield "ok"
@@ -328,7 +328,7 @@ def test_record_hook_fires() -> None:
         db_path=os.path.join(tmpdir, "test.db"),
         llm={"api_key": "x", "base_url": "https://x", "model": "fake-model"},
         idle_session_minutes=120,
-        retrieval={"always_include_types": ["profile_fact"], "top_k": 10},
+        retrieval={"top_k": 10},
     )
     ctx = build_app(cfg)
     ctx.repos.user.create("alice")

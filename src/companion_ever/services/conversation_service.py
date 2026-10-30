@@ -135,10 +135,6 @@ class ConversationService:
             user_id=user_id, persona_id=persona_id,
         )
 
-    def delete_session_close(self, marker_id: int) -> bool:
-        """删除一个 session_close marker（抽取失败时回滚）。"""
-        return self.conv_repo.delete_session_close(marker_id)
-
     def get_active_session(
         self, user_id: str, persona_id: str,
     ) -> Optional[dict]:
@@ -247,26 +243,6 @@ class ConversationService:
         """统计 user/assistant 对话总条数。"""
         self.authorizer.require_persona(user_id, persona_id)
         return self.conv_repo.count(user_id=user_id, persona_id=persona_id)
-
-    def get_since(
-        self,
-        *,
-        user_id: str,
-        persona_id: str,
-        since: datetime,
-        limit: int = 100,
-    ) -> list[ConversationMessage]:
-        """获取 since 之后的所有对话（按时间正序，过滤 session_close）。
-
-        用途：后台抽取 service 读上次触发后的对话。
-        """
-        self.authorizer.require_persona(user_id, persona_id)
-        return self.conv_repo.get_since(
-            user_id=user_id,
-            persona_id=persona_id,
-            since=since,
-            limit=limit,
-        )
 
     def get_messages_between(
         self,

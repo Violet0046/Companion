@@ -41,7 +41,7 @@ def _build(tmpdir: str):
     cfg = AppConfig(
         db_path=os.path.join(tmpdir, "test.db"),
         llm={"api_key": "x", "base_url": "https://x", "model": "test-model"},
-        retrieval={"always_include_types": ["profile_fact"], "top_k": 5},
+        retrieval={"top_k": 5},
     )
     return build_app(cfg)
 

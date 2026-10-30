@@ -25,11 +25,7 @@ class FakeLLM:
 
     def chat(self, messages, **kwargs) -> str:
         self.calls += 1
-        return json.dumps({
-            "facts": [],
-            "blocks": [],
-            "reasoning": "test",
-        }, ensure_ascii=False)
+        return __import__("fake_memory").no_memory(messages)
 
     def stream_chat(self, messages, **kwargs):
         self.calls += 1
@@ -50,7 +46,7 @@ def main() -> int:
         db_path=os.path.join(tmpdir, "test.db"),
         llm={"api_key": "x", "base_url": "https://x", "model": "fake-model"},
         idle_session_minutes=120,
-        retrieval={"always_include_types": ["profile_fact"], "top_k": 10},
+        retrieval={"top_k": 10},
     )
     ctx = build_app(cfg)
     ctx.repos.user.create("alice")

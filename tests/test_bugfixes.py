@@ -48,7 +48,7 @@ def _build(tmpdir: str, llm):
     cfg = AppConfig(
         db_path=os.path.join(tmpdir, "test.db"),
         llm={"api_key": "x", "base_url": "https://x", "model": "fake-model"},
-        retrieval={"always_include_types": ["profile_fact"], "top_k": 10},
+        retrieval={"top_k": 10},
     )
     return build_app(cfg)
 
@@ -123,17 +123,17 @@ def main() -> int:
     print("[OK] Bug2: /quit 直接进 close 节点，0 次聊天 LLM 调用，不写日志")
 
     # ---------- Bug 3: 自然语言查询要能召回 ----------
-    from companion_ever.domain.enums import NoteType
+    from companion_ever.domain.enums import MemoryKind
 
     ctx.services.note.create_note(
         user_id="alice", persona_id="舒舒",
-        type=NoteType.EVENT,
+        kind=MemoryKind.EPISODE,
         content="用户明天上午11点有一场字节跳动的面试",
         importance=0.9,
     )
     ctx.services.note.create_note(
         user_id="alice", persona_id="舒舒",
-        type=NoteType.PREFERENCE,
+        kind=MemoryKind.FACT,
         content="用户喜欢喝美式咖啡",
         importance=0.6,
     )
@@ -154,6 +154,9 @@ def main() -> int:
         def chat(self, messages, **kwargs):
             self.calls += 1
             raise TimeoutError("simulated LLM timeout")
+
+        def stream_chat(self, messages, **kwargs):
+            return self.chat(messages, **kwargs)
 
     failing = FailingLLM()
     tmpdir2 = tmpdir + "_2"

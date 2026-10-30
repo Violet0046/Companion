@@ -170,6 +170,9 @@ handleWs({type:'message_done',generation_id:'new',message:{id:901,role:'assistan
 handleWs({type:'message_done',generation_id:'new',message:{id:901,role:'assistant',content:'saved',thinking:null,created_at:'2026-10-29T10:00:00Z'}});
 assert(S.messages.filter(x=>x.id===901).length===1, 'canonical saved message replay is deduplicated');
 
+// End the simulated page lifecycle; pending retries belong to an open page.
+writeOutbox({}); stopReplyRecovery(); resetSending(); clearTimeout(S.reconnectTimer);
+
 if (process.exitCode) { console.error('有断言失败'); process.exit(1); }
 console.log('[OK] WS 消息流全流程正常');
 """

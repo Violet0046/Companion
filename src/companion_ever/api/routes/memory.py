@@ -4,7 +4,7 @@
 - GET /api/users                                    所有用户 + 角色
 - GET /api/persona/{user}/{persona}                角色总览（人设 + 关系状态 + 计数）
 - GET /api/persona/{user}/{persona}/notes          记忆列表
-- GET /api/persona/{user}/{persona}/blocks         3 个 memory block
+- GET /api/persona/{user}/{persona}/blocks         用户画像与关系进展摘要
 - GET /api/persona/{user}/{persona}/history        最近对话
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 
 from companion_ever.app import AppContext
 from companion_ever.api.deps import check_pin, resolve_target
@@ -27,11 +27,64 @@ from companion_ever.api.schemas import (
     SettingsOut,
     UserOut,
 )
-from companion_ever.domain.enums import NoteType
+from companion_ever.domain.enums import MemoryKind
 from companion_ever.utils.timeutil import utc_ts_to_local
 from companion_ever.services.memory_search import MemorySearch
 
 router = APIRouter()
+
+
+@router.get('/api/persona/{user_id}/{persona_id}/task-attempts')
+def task_attempts(request: Request,user_id: str,persona_id: str,
+                  kind: Optional[str]=Query(default=None,pattern='^(memory|summary)$'),
+                  job_id: Optional[str]=Query(default=None),x_pin: str=Header(default='')):
+    ctx,_=_ctx_and_cfg(request,x_pin)
+    ctx.services.note.authorizer.require_persona(user_id,persona_id)
+    from companion_ever.storage.task_repo import TaskRepo
+    return TaskRepo(ctx.conn).recent(user_id,persona_id,kind,job_id)
+
+
+def _summary(ctx):
+    if ctx.services.summary is None:
+        from companion_ever.services.summary_service import SummaryService
+        ctx.services.summary=SummaryService(ctx.services.note.authorizer,ctx.repos.note,ctx.repos.block,ctx.llm,
+                                            timeout=ctx.cfg.extraction_timeout,thinking=ctx.cfg.background.model_thinking)
+        from companion_ever.api.routes.chat import notify_summary_updated
+        ctx.services.summary.on_updated=notify_summary_updated
+        ctx.services.prompt.summary_service=ctx.services.summary
+    return ctx.services.summary
+
+
+@router.post('/api/persona/{user_id}/{persona_id}/summaries/refresh')
+def refresh_summaries(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
+    ctx,_=_ctx_and_cfg(request,x_pin)
+    return _summary(ctx).request(user_id,persona_id)
+
+
+@router.get('/api/persona/{user_id}/{persona_id}/summary-status')
+def summary_status(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
+    ctx,_=_ctx_and_cfg(request,x_pin)
+    return _summary(ctx).status(user_id,persona_id)
+
+
+@router.get('/api/persona/{user_id}/{persona_id}/summary-jobs')
+def summary_jobs(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
+    ctx,_=_ctx_and_cfg(request,x_pin)
+    ctx.services.note.authorizer.require_persona(user_id,persona_id)
+    return [dict(r) for r in ctx.conn.execute('SELECT id,after_change_id,through_change_id,status,attempt_count,last_error,'
+        'created_at,completed_at,retry_at FROM summary_job WHERE user_id=? AND persona_id=? ORDER BY rowid DESC LIMIT 50',(user_id,persona_id))]
+
+
+@router.get('/api/persona/{user_id}/{persona_id}/fact-changes')
+def fact_changes(request: Request,user_id: str,persona_id: str,after_id: int=Query(default=0,ge=0),
+                 limit: int=Query(default=50,ge=1,le=200),x_pin: str=Header(default='')):
+    ctx,_=_ctx_and_cfg(request,x_pin)
+    ctx.services.note.authorizer.require_persona(user_id,persona_id)
+    rows=ctx.conn.execute('SELECT * FROM fact_change WHERE user_id=? AND persona_id=? AND id>? ORDER BY id LIMIT ?',
+                         (user_id,persona_id,after_id,limit)).fetchall()
+    return [{k:r[k] for k in ('id','note_id','operation','source_job_id','created_at')} |
+            {'before':json.loads(r['before_json']) if r['before_json'] else None,
+             'after':json.loads(r['after_json']) if r['after_json'] else None} for r in rows]
 
 @router.post('/api/persona/{user_id}/{persona_id}/memories/search')
 def search_memories(request: Request, user_id: str, persona_id: str,
@@ -79,29 +132,17 @@ def persona_summary(
     persona_id: str,
     x_pin: str = Header(default=""),
 ) -> PersonaSummary:
-    """角色总览：人设宪法 + 3 个 block + 计数。"""
+    """角色总览：角色配置、两种摘要与计数。"""
     ctx, _ = _ctx_and_cfg(request, x_pin)
     tz = ctx.cfg.tz_offset_hours
     if not ctx.repos.user.owns_persona(user_id, persona_id):
         raise HTTPException(status_code=404, detail=f"用户 '{user_id}' 没有 persona '{persona_id}'")
 
-    # 人设宪法（PERSONA_BASICS 类型的 note）
-    basics: dict[str, Any] = {}
-    basics_notes = ctx.services.note.find_notes(
-        user_id=user_id,
-        persona_id=persona_id,
-        type=NoteType.PERSONA_BASICS,
-        limit=1,
-    )
-    if basics_notes:
-        content = basics_notes[0].content
-        if isinstance(content, dict):
-            basics = content
-        else:
-            try:
-                basics = json.loads(content)
-            except (json.JSONDecodeError, TypeError):
-                basics = {"_raw": content}
+    row = ctx.services.note.get_persona_definition(user_id,persona_id)
+    try:
+        basics = json.loads(row['content']) if row else {}
+    except (ValueError,TypeError):
+        basics = {'_raw':row['content']}
 
     blocks = [
         BlockOut(block_type=b.block_type.value, fields=b.fields)
@@ -120,6 +161,9 @@ def persona_summary(
         "WHERE c.user_id=? AND c.persona_id=? AND j.status='succeeded'", (user_id,persona_id)
     ).fetchone()[0]
 
+    memory_meta=ctx.conn.execute('SELECT j.id,j.status,j.attempt_count,j.last_error,j.retry_at FROM memory_job j '
+        'JOIN conversation c ON c.id=j.conversation_id WHERE c.user_id=? AND c.persona_id=? '
+        'ORDER BY j.rowid DESC LIMIT 1',(user_id,persona_id)).fetchone()
     return PersonaSummary(
         user_id=user_id,
         persona_id=persona_id,
@@ -129,10 +173,12 @@ def persona_summary(
         message_count=ctx.services.conversation.count(user_id, persona_id),
         session_count=len(markers),
         last_conversation_at=_s(last_at, tz),
-        # markers 是时间升序，最后一个就是最近一次记录
+        # marker 仅统计会话边界；整理完成时间来自成功的持久任务。
         last_record_at=_s(completed, tz),
         # 现在正在记录吗？（前端用来显示「记录中…」）
         recording=ctx.services.session_close.is_closing(user_id, persona_id),
+        summary_meta=_summary(ctx).status(user_id,persona_id),
+        memory_meta=dict(memory_meta) if memory_meta else None,
     )
 
 
@@ -143,28 +189,31 @@ def list_notes(
     persona_id: str,
     x_pin: str = Header(default=""),
     limit: int = Query(default=100, ge=1, le=1000),
-    type: Optional[str] = Query(default=None),
+    kind: Optional[str] = Query(default=None),
 ) -> list[NoteOut]:
-    """记忆列表（最新优先）。type 可选，按 note 类型过滤。"""
+    """记忆列表（最新优先），只支持 episode/fact。"""
     ctx, _ = _ctx_and_cfg(request, x_pin)
-    note_type: Optional[NoteType] = None
-    if type:
+    if 'type' in request.query_params:
+        raise HTTPException(400,'旧分类 type 已移除，请使用 kind=episode 或 kind=fact')
+    note_kind: Optional[MemoryKind] = None
+    if kind:
         try:
-            note_type = NoteType(type)
+            note_kind = MemoryKind(kind)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"未知的 note 类型: {type}") from e
+            raise HTTPException(status_code=400, detail=f"未知的 note 类型: {kind}") from e
 
     tz = ctx.cfg.tz_offset_hours
     notes = ctx.services.note.find_notes(
         user_id=user_id,
         persona_id=persona_id,
-        type=note_type,
+        kind=note_kind,
         limit=limit,
     )
     return [
         NoteOut(
             id=n.id,
-            type=n.type.value,
+            kind=n.kind.value,
+            reality=n.reality, event_time=n.event_time, time_basis=n.time_basis, pinned=n.pinned,
             content=n.content if isinstance(n.content, str) else json.dumps(n.content, ensure_ascii=False),
             importance=n.importance,
             source_quote=n.source_quote,
@@ -173,6 +222,17 @@ def list_notes(
         )
         for n in notes
     ]
+
+
+@router.patch('/api/persona/{user_id}/{persona_id}/notes/{note_id}/pin')
+def pin_note(request: Request,user_id: str,persona_id: str,note_id: str,
+             pinned: bool=Body(...,embed=True),x_pin: str=Header(default='')):
+    ctx, _ = _ctx_and_cfg(request,x_pin)
+    try:
+        ctx.services.note.set_pinned(user_id,persona_id,note_id,pinned)
+    except ValueError as exc:
+        raise HTTPException(404,str(exc)) from exc
+    return {'id':note_id,'pinned':pinned}
 
 
 @router.get("/api/persona/{user_id}/{persona_id}/blocks", response_model=list[BlockOut])
@@ -248,9 +308,20 @@ def list_history(
             content=m.content,
             created_at=_s(m.created_at, tz),
             thinking=thinking_map.get(m.id),
+            client_message_id=m.client_message_id,
         )
         for m in messages
     ]
+
+
+@router.get('/api/persona/{user_id}/{persona_id}/unread-count')
+def unread_count(request: Request,user_id: str,persona_id: str,
+                 after_id: int=Query(default=0,ge=0),x_pin: str=Header(default='')):
+    ctx,_=_ctx_and_cfg(request,x_pin)
+    ctx.services.conversation.authorizer.require_persona(user_id,persona_id)
+    row=ctx.conn.execute("SELECT count(*),coalesce(max(id),0) FROM conversation_log "
+        "WHERE user_id=? AND persona_id=? AND role='assistant' AND id>?",(user_id,persona_id,after_id)).fetchone()
+    return {'count':row[0],'latest_id':row[1]}
 
 
 # ============ 历史检索（微信式）============
@@ -310,7 +381,7 @@ def search_history(
             content = n.content if isinstance(n.content, str) else json.dumps(n.content, ensure_ascii=False)
             hits.append(SearchHit(
                 kind="memory", id=n.id, content=content,
-                created_at=None, type=n.type.value, importance=n.importance,
+                created_at=None, memory_kind=n.kind.value, importance=n.importance,
             ))
 
     return hits[: limit * 2]

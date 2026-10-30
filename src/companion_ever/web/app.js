@@ -15,6 +15,9 @@ const S = {
   showThinking: true,
   info: null,
   streamEl: null,
+  replyState: null,
+  replyStatusEl: null,
+  historyRequest: 0,
   /* 历史浏览 */
   messages: [],
   hasMore: true,
@@ -50,7 +53,8 @@ const S = {
   convQuery: '',
   contactQuery: '',
   /* 服务端的自动记录间隔（分钟） */
-  idleMinutes: 120,
+  idleMinutes: 3,
+  automaticMemory: true,
   /* 日历 */
   calUser: null,
   calPersona: null,
@@ -124,22 +128,26 @@ async function api(path, opts = {}) {
   const headers = Object.assign({}, opts.headers || {});
   if (S.pin) headers['X-Pin'] = S.pin;
   if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const res = await fetch(path, Object.assign({}, opts, { headers }));
-  if (!res.ok) {
-    let detail = res.statusText;
-    try { detail = (await res.json()).detail || detail; } catch (e) { /* ignore */ }
-    const err = new Error(detail);
-    err.status = res.status;
-    throw err;
-  }
-  return res.json();
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(),15000);
+  try {
+    const res = await fetch(path, Object.assign({cache:'no-store'}, opts, { headers, signal:opts.signal || controller.signal }));
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json()).detail || detail; } catch (e) { /* ignore */ }
+      const err = new Error(detail);
+      err.status = res.status;
+      throw err;
+    }
+    return await res.json();
+  } finally { clearTimeout(timer); }
 }
 
 const base = () => `/api/persona/${encodeURIComponent(S.user)}/${encodeURIComponent(S.persona)}`;
 
 /* ============================================================
    页面层：消息 / 通讯录 / 我 / 会话 / 角色资料 / 她的记忆
-   设计稿见 design/mockup/
+   页面入口与渲染
    ============================================================ */
 
 const TAB_VIEWS = ['messages', 'contacts', 'me'];
@@ -184,7 +192,34 @@ function readMark(user, persona) {
   return v == null ? null : Number(v);
 }
 function setReadMark(user, persona, id) {
-  if (id) localStorage.setItem('ce_read_' + pkey(user, persona), String(id));
+  if (Number.isSafeInteger(id) && id >= 0 && id > (readMark(user,persona) ?? -1)) {
+    localStorage.setItem('ce_read_' + pkey(user, persona), String(id));
+  }
+}
+
+function markVisibleChatRead() {
+  if (S.view !== 'chat' || document.visibilityState !== 'visible' || S.viewMode !== 'live' || !wasAtBottom) return;
+  const replies = S.messages.filter(m => m.role === 'assistant' && Number.isSafeInteger(m.id) && !m.localOnly);
+  if (!replies.length) return;
+  setReadMark(S.user,S.persona,Math.max(...replies.map(m => m.id)));
+  const mark = readMark(S.user,S.persona);
+  const conv = S.convs.find(c => c.user === S.user && c.persona === S.persona);
+  if (conv && (conv.unreadThrough ?? conv.last?.id ?? 0) <= mark) {
+    conv.unread = 0;
+    renderConvs();
+  }
+}
+
+async function fetchUnread(user,persona) {
+  // Read position can advance while the request is in flight. Recheck against
+  // the current cursor so a late count cannot resurrect already read badges.
+  for (;;) {
+    const after = readMark(user,persona) ?? 0;
+    const result = await api(`/api/persona/${enc(user)}/${enc(persona)}/unread-count?after_id=${after}`);
+    const current = readMark(user,persona) ?? 0;
+    if (current >= result.latest_id) return {count:0,latest_id:result.latest_id};
+    if (current === after) return result;
+  }
 }
 
 /** 按名字散列出一个稳定的头像配色 */
@@ -222,9 +257,10 @@ function fmtAgo(iso) {
 }
 
 function intervalText() {
+  if (!S.automaticMemory) return '已关闭';
   return S.idleMinutes >= 60
-    ? `每 ${Math.round(S.idleMinutes / 60)} 小时`
-    : `每 ${S.idleMinutes} 分钟`;
+    ? `空闲约 ${Math.round(S.idleMinutes / 60)} 小时后`
+    : `空闲约 ${S.idleMinutes} 分钟后`;
 }
 
 /** 只刷新一个角色的会话摘要（收到新消息时用） */
@@ -272,7 +308,7 @@ function startSendWatchdog() {
       S.sending = false;
       $('btn-send').disabled = false;
       setTyping(false);
-      toast('这次没等到回复，可以再发一次', 3200);
+      recoverReply(true);
     }
   }, SEND_WATCHDOG_MS);
 }
@@ -306,11 +342,16 @@ async function fetchConv(p) {
   if (msgs.status === 'fulfilled') {
     const list = msgs.value;
     item.last = list.length ? list[list.length - 1] : null;
-    const mark = readMark(p.user, p.persona);
-    // 只数**她的回复**：一问一答，没有分段发消息，未读就是「她回了几条」
-    item.unread = mark == null
-      ? 0
-      : list.filter((m) => m.role === 'assistant' && m.id > mark).length;
+    if (readMark(p.user,p.persona) == null) setReadMark(p.user,p.persona,item.last?.id ?? 0);
+    try {
+      const unread = await fetchUnread(p.user,p.persona);
+      item.unread = unread.count;
+      item.unreadThrough = unread.latest_id;
+    } catch (_) {
+      // Preserve the last known count on a failed count request.
+      item.unread = p.unread || 0;
+      item.unreadThrough = p.unreadThrough;
+    }
   } else {
     item.error = (msgs.reason && msgs.reason.message) || '加载失败';
     console.error('会话加载失败', p, msgs.reason);
@@ -345,6 +386,9 @@ async function loadConvs() {
 function renderConvs() {
   const box = $('conv-list');
   if (!box) return;
+  for (const c of S.convs) {
+    if (Number.isSafeInteger(c.unreadThrough) && (readMark(c.user,c.persona) ?? -1) >= c.unreadThrough) c.unread = 0;
+  }
   const q = (S.convQuery || '').trim().toLowerCase();
   const items = S.convs.filter((c) => {
     if (!q) return true;
@@ -464,6 +508,10 @@ async function switchTarget(user, persona) {
   $('persona-name').textContent = persona;
   $('btn-avatar').textContent = persona.slice(0, 1);
   if (changed) {
+    stopReplyRecovery();
+    S.latestClientMessageId = null; S.generationId = null; S.replyState = null;
+    S.messages = [];
+    if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
     connect();               // WS 的 URL 里带 user/persona，换角色必须重连
     await loadPersona();
     await loadHistory(true);
@@ -472,12 +520,7 @@ async function switchTarget(user, persona) {
 
 async function openChat(user, persona) {
   await switchTarget(user, persona);
-  const c = S.convs.find((x) => x.user === user && x.persona === persona);
-  if (c) {
-    if (c.last) setReadMark(user, persona, c.last.id);
-    c.unread = 0;
-  }
-  renderConvs();
+  if (S.user !== user || S.persona !== persona) return;
   showView('chat');
 }
 
@@ -624,6 +667,7 @@ async function loadAround(firstId) {
 /* ---------- 角色资料 ---------- */
 
 function relStage(info) {
+  if (info && info.summary_meta && info.summary_meta.current) return '查看关系概况';
   const blocks = (info && info.blocks) || [];
   const rel = blocks.find((b) => b.block_type === 'relationship_state');
   if (!rel) return '—';
@@ -667,7 +711,6 @@ function renderProfile(user, persona, info) {
       <div class="row" id="row-dates"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>
       <div class="row" id="row-relation"><span>关系状态</span><span class="row-val">${esc(relStage(info))} <span class="chev">›</span></span></div>
     </div>
-    <div class="hint">对话${esc(intervalText())}自动记录一次，记录后她会记住聊过的事。<br/>关系状态、上次记录都在「关系状态」页里。</div>
   `;
   const q = (id) => body.querySelector('#' + id);
   q('row-chat').onclick = () => openChat(user, persona);
@@ -692,6 +735,13 @@ function relationHtml(info) {
   let html = '';
   if (rel) {
     const f = rel.fields || {};
+    if (Array.isArray(f.overview)) {
+      for (const [field,label] of [['overview','关系概况'],['agreements','约定与边界'],['key_moments','明确记载的重要时刻']]) {
+        const items = f[field] || [];
+        if (items.length) html += `<div class="row"><span class="k">${label}</span></div><ul>${items.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`;
+      }
+      if (!(f.overview.length || (f.agreements || []).length || (f.key_moments || []).length)) html += '<div class="hint">现有事实不足以总结关系概况</div>';
+    } else {
     const stage = REL_STAGE[f.stage] || f.stage || '—';
     const prog = Math.round((f.stage_progress || 0) * 100);
     html += `<div class="row"><span class="k">关系</span><span class="v">${esc(stage)}</span></div>`;
@@ -702,13 +752,14 @@ function relationHtml(info) {
       html += '<div class="moments"><ul>'
         + mom.slice(-6).map((m) => `<li>${esc(m)}</li>`).join('') + '</ul></div>';
     }
+    }
   }
   if (prof) {
     const f = prof.fields || {};
     const arr = (v) => (Array.isArray(v) ? v : v ? [v] : []);
-    const p = arr(f.preferences).slice(0, 3);
-    if (p.length) {
-      html += `<div class="row" style="margin-top:8px"><span class="k">偏好</span><span class="v">${esc(p.join('、'))}</span></div>`;
+    for (const [field,label] of [['identity','用户信息'],['personality','特点'],['preferences','偏好'],['communication_style_hint','沟通方式']]) {
+      const values = arr(f[field]);
+      if (values.length) html += `<div class="row" style="margin-top:8px"><span class="k">${label}</span><span class="v">${esc(values.join('、'))}</span></div>`;
     }
   }
   return html;
@@ -739,13 +790,23 @@ function renderRelationPage(user, persona, info) {
   // 「记录中」两个来源：本地刚点的 / 服务器说正在记
   const recording = !!S.recording[key] || !!(info && info.recording);
   const lastRec = info && info.last_record_at;
+  const meta = (info && info.summary_meta) || {};
+  const summaryBusy = ['queued','running'].includes(meta.job_status);
   body.innerHTML = `
     <div class="profile-hero">
       <div class="ava ava-xl ${avaClass(persona)}">${esc(name.slice(0, 1))}</div>
       <div class="profile-name">${esc(name)}</div>
-      <div class="profile-sub">你们的关系</div>
+      <div class="profile-sub">用户画像与关系概况</div>
     </div>
     <div class="rel-card">${relationHtml(info)}</div>
+    ${summaryEvidenceHtml(meta)}
+    ${S.debug ? `
+    <div class="hint">${meta.current ? '摘要已与事实操作同步，可查看每项结论的依据。' : '当前摘要尚未与最新事实同步，不会送入对话。'}${meta.pending_changes ? ` 尚有 ${meta.pending_changes} 条事实操作待处理。` : ''}</div>
+    <div class="group">
+      <div class="row"><span>摘要更新</span><span class="row-val"><button class="btn-mini" id="btn-summary-refresh" ${summaryBusy ? 'disabled' : ''}>${summaryBusy ? '更新中…' : meta.job_status === 'failed' ? '重试更新' : meta.legacy ? '从事实生成' : '更新摘要'}</button></span></div>
+      ${meta.generated_at ? `<div class="row"><span>摘要更新时间</span><span class="row-val">${esc(fmtTime(meta.generated_at))}</span></div>` : ''}
+    </div>
+    ${meta.last_error ? `<div class="hint">摘要暂未完成：${esc(taskFailureText(meta.last_error))}${meta.retry_scheduled ? '（已安排重试）' : '（当前快速重试已暂停，可查看后台执行记录）'}</div>` : ''}
     <div class="group">
       <div class="row"><span>上次记录</span>
         <span class="row-val col">
@@ -755,10 +816,69 @@ function renderRelationPage(user, persona, info) {
       <div class="row"><span>手动记一次</span>
         <span class="row-val"><span class="btn-mini${recording ? ' is-busy' : ''}" id="btn-record-now">${recording ? '记录中…' : '记一次'}</span></span></div>
     </div>
+    ${info && info.memory_meta && info.memory_meta.last_error ? `<div class="hint">记一次未完成：${esc(taskFailureText(info.memory_meta.last_error))}${info.memory_meta.retry_at ? '（已安排重试）' : '（当前快速重试已暂停）'}</div>` : ''}
     <div class="hint">对话${esc(intervalText())}自动记录一次，记录后她会记住聊过的事。<br/>想现在记也可以手动触发，记录完这里会自动刷新。</div>
+    <button class="btn-mini" id="btn-task-attempts">查看后台执行记录</button><pre id="task-attempts"></pre>
+    ` : ''}
   `;
   const btn = body.querySelector('#btn-record-now');
   if (btn && !recording) btn.onclick = (e) => recordNow(user, persona, e.target);
+  const summaryBtn = body.querySelector('#btn-summary-refresh');
+  if (summaryBtn && !summaryBusy) summaryBtn.onclick = () => refreshFactSummaries(user,persona);
+  const attemptsBtn = body.querySelector('#btn-task-attempts');
+  if (S.debug && attemptsBtn) attemptsBtn.onclick = () => loadTaskAttempts(user,persona);
+  if (summaryBusy || (meta.stale && (!meta.job_status || meta.retry_scheduled))) watchFactSummaries(user,persona);
+}
+
+async function loadTaskAttempts(user,persona) {
+  try {
+    const records=await api(`/api/persona/${enc(user)}/${enc(persona)}/task-attempts`);
+    const target=S.relationPersona;
+    if (!S.debug || S.view!=='relation' || !target || target.user!==user || target.persona!==persona) return;
+    const box=$('task-attempts');
+    if (box) box.textContent=JSON.stringify(records,null,2);
+  } catch (e) { toast('读取执行记录失败：'+e.message); }
+}
+
+function summaryEvidenceHtml(meta) {
+  if (!meta.document) return '';
+  const entries = [];
+  for (const block of ['user_profile','relationship_state']) {
+    for (const items of Object.values(meta.document[block] || {})) {
+      for (const item of items) entries.push(`<li>${esc(item.text)}<ul>${item.citations.map(c => `<li>${esc(c.note_id)}：${esc(c.quote)}</li>`).join('')}</ul></li>`);
+    }
+  }
+  return entries.length ? `<details><summary>查看事实依据</summary><ul>${entries.join('')}</ul></details>` : '';
+}
+
+const summaryWatchers = new Set();
+async function refreshFactSummaries(user,persona) {
+  const key = pkey(user,persona);
+  try {
+    const result = await api(`/api/persona/${enc(user)}/${enc(persona)}/summaries/refresh`, {method:'POST'});
+    toast(result.status === 'unchanged' ? '事实没有变化，摘要已是最新' : '开始更新摘要，你可以继续聊天',2500);
+    const info = await api(`/api/persona/${enc(user)}/${enc(persona)}`);
+    S.summaries[key] = info; renderRelationIfOpen(user,persona); renderProfileIfOpen(user,persona);
+  } catch (e) { toast('摘要更新失败：' + e.message,4000); }
+}
+
+async function watchFactSummaries(user,persona) {
+  const key = pkey(user,persona);
+  if (summaryWatchers.has(key)) return;
+  summaryWatchers.add(key);
+  try {
+    for (let i=0;i<160;i++) {
+      await new Promise(resolve => setTimeout(resolve,3000));
+      const target = S.relationPersona;
+      if (S.view !== 'relation' || !target || target.user !== user || target.persona !== persona || document.visibilityState !== 'visible') return;
+      let info;
+      try { info = await api(`/api/persona/${enc(user)}/${enc(persona)}`); } catch (_) { continue; }
+      if (S.view !== 'relation' || S.relationPersona !== target) return;
+      S.summaries[key] = info; renderRelationIfOpen(user,persona); renderProfileIfOpen(user,persona);
+      const meta = info.summary_meta || {};
+      if (meta.current || (meta.job_status === 'failed' && !meta.retry_scheduled)) return;
+    }
+  } finally { summaryWatchers.delete(key); }
 }
 
 /** 关系状态页当前是开着这个角色的话，就地重画（不跳页、不打断） */
@@ -825,8 +945,9 @@ function restoreRecordBtn(btn) {
 /**
  * 兜底轮询：WS 没推 record_done（比如断线了）时，靠它发现记录完成。
  *
- * 判定完成的两个条件缺一不可：
- *   1. last_record_at 变了 —— marker 写了（= 开始记录的时刻）
+ * 成功时间变化和 worker 结束之外，还必须确认没有失败/未完成的批次。
+ * 判定完成的两个条件：
+ *   1. last_record_at 变了 —— 至少一个持久任务已成功提交
  *   2. recording 变回 false —— 抽取真的跑完了
  * 只看 1 会**提前误判**成「记好了」（那时候记忆还没抽出来）。
  */
@@ -837,10 +958,19 @@ async function pollRecordDone(user, persona, before, tries = 40) {
     // 已经被 WS 推送处理过了 → 不用管
     if (!S.recordPending || S.recordPending.key !== key) return;
     let info = null;
+    let jobs = [];
     try {
-      info = await api(`/api/persona/${enc(user)}/${enc(persona)}`);
+      const scope = `/api/persona/${enc(user)}/${enc(persona)}`;
+      [info, jobs] = await Promise.all([api(scope), api(`${scope}/memory-jobs`)]);
     } catch (e) { continue; }
     if (!S.recordPending || S.recordPending.key !== key) return;
+    const failed = jobs.find(j => j.status === 'failed');
+    if (failed && !info.recording) {
+      finishRecord(user, persona, info, false);
+      toast('记忆整理未完成，可点「记一次」重试：' + (failed.last_error || ''), 5000);
+      return;
+    }
+    if (jobs.some(j => j.status === 'queued' || j.status === 'running')) continue;
     if (info && info.last_record_at && info.last_record_at !== before && !info.recording) {
       finishRecord(user, persona, info, true);
       return;
@@ -889,22 +1019,39 @@ function renderMemory() {
   const box = $('memory-list');
   if (!chips || !box) return;
   const counts = {};
-  notes.forEach((n) => { counts[n.type] = (counts[n.type] || 0) + 1; });
+  notes.forEach((n) => { counts[n.kind] = (counts[n.kind] || 0) + 1; });
   const types = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
   chips.innerHTML = '<button class="chip' + (S.memoryFilter === 'all' ? ' active' : '') + '" data-t="all">全部</button>'
-    + types.slice(0, 8).map((t) => `<button class="chip${S.memoryFilter === t ? ' active' : ''}" data-t="${escAttr(t)}">${esc(t)} ${counts[t]}</button>`).join('');
+    + types.map((t) => `<button class="chip${S.memoryFilter === t ? ' active' : ''}" data-t="${escAttr(t)}">${esc(t)} ${counts[t]}</button>`).join('');
   chips.querySelectorAll('.chip').forEach((c) => {
     c.onclick = () => { S.memoryFilter = c.dataset.t; renderMemory(); };
   });
-  const filtered = S.memoryFilter === 'all' ? notes : notes.filter((n) => n.type === S.memoryFilter);
+  const filtered = S.memoryFilter === 'all' ? notes : notes.filter((n) => n.kind === S.memoryFilter);
   if (!filtered.length) { box.innerHTML = '<div class="empty">还没有这类记忆</div>'; return; }
   box.innerHTML = filtered.map((n) => `
-    <div class="note" data-type="${escAttr(n.type)}">
-      <div class="note-head"><span class="note-type">${esc(n.type)}</span>
+    <div class="note" data-kind="${escAttr(n.kind)}">
+      <div class="note-head"><span class="note-type">${n.kind === 'episode' ? '经历' : '事实'}</span>
       <span class="note-imp">重要度 ${(n.importance || 0).toFixed(2)}</span></div>
       ${esc(n.content)}
+      ${n.reality === 'shared_fiction' ? '<div class="dim-sm">共同想象</div>' : ''}
+      <button class="btn-mini note-pin" data-id="${escAttr(n.id)}">${n.pinned ? '取消固定' : '固定记忆'}</button>
       <div class="note-bar"><i style="width:${Math.round((n.importance || 0) * 100)}%"></i></div>
     </div>`).join('');
+  box.querySelectorAll('.note-pin').forEach(btn => {
+    btn.onclick = async () => {
+      const note = notes.find(n => n.id === btn.dataset.id);
+      const target = S.memoryPersona;
+      if (!note || !target) return;
+      btn.disabled = true;
+      try {
+        const result = await api(`/api/persona/${enc(target.user)}/${enc(target.persona)}/notes/${enc(note.id)}/pin`,
+          {method: 'PATCH', body: JSON.stringify({pinned: !note.pinned})});
+        note.pinned = result.pinned;
+        if (S.memoryPersona === target) renderMemory();
+      } catch (e) { toast('固定记忆失败：' + e.message, 3000); }
+      finally { btn.disabled = false; }
+    };
+  });
 }
 
 /* ---------- 视口：用 visualViewport 精确跟随「实际可见区域」 ---------- */
@@ -1028,6 +1175,8 @@ document.addEventListener('visibilitychange', () => {
 async function boot() {
   try {
     const health = await api('/api/health');
+    S.automaticMemory=health.auto_memory !== false;
+    if (health.memory_idle_seconds) S.idleMinutes=Math.ceil(health.memory_idle_seconds/60);
     if (health.auth_required && !S.pin) { showGate(); return; }
   } catch (e) { showGate(true); return; }
   $('gate').classList.add('hidden');
@@ -1089,6 +1238,8 @@ async function loadSettings() {
 
 async function loadHistory(reset, opts) {
   opts = opts || {};
+  const scope = base(), clientId = S.latestClientMessageId;
+  const request = ++S.historyRequest;
   const box = $('chat');
   const prevH = box.scrollHeight;
   const prevTop = box.scrollTop;
@@ -1097,8 +1248,19 @@ async function loadHistory(reset, opts) {
     const wantThinking = opts.withThinking !== undefined ? opts.withThinking : S.showThinking;
     const q = new URLSearchParams({ limit: String(PAGE) });
     q.set('include_thinking', wantThinking ? '1' : '0');
-    const msgs = await api(`${base()}/history?${q}`);
-    S.messages = msgs;
+    const msgs = await api(`${scope}/history?${q}`);
+    if (scope !== base() || clientId !== S.latestClientMessageId || request !== S.historyRequest) return;
+    // A history snapshot may predate a websocket message received while fetch
+    // was in flight. Preserve the confirmed live tail and unacknowledged input.
+    const ids = new Set(msgs.map(m => m.id));
+    const clients = new Set(msgs.map(m => m.client_message_id).filter(Boolean));
+    const latest = Math.max(0, ...msgs.map(m => m.id));
+    const tail = S.messages.filter(m => !ids.has(m.id) && !clients.has(m.client_message_id)
+      && (m.pending || (Number.isSafeInteger(m.id) && !m.localOnly && m.id > latest)));
+    S.messages = msgs.concat(tail);
+    const pending = readOutbox();
+    for (const id of clients) delete pending[id];
+    writeOutbox(pending);
     S.hasMore = msgs.length >= PAGE;
     S.viewMode = 'live';
     S.viewLabel = '';
@@ -1221,6 +1383,7 @@ function renderChat() {
     hint.className = 'empty';
     hint.textContent = '还没有对话过。说点什么吧。';
     box.appendChild(hint);
+    renderReplyStatus();
     return;
   }
   let prevAt = null;
@@ -1239,6 +1402,48 @@ function renderChat() {
     box.appendChild(renderMsg(m.role, m.content, m.thinking, m.id));
   });
   S.sinceLastSep = since;
+  if (S.streamEl && S.viewMode === 'live') box.appendChild(S.streamEl);
+  renderReplyStatus();
+  markVisibleChatRead();
+}
+
+function taskFailureText(error) {
+  const text = String(error || '未知错误');
+  if (/Timeout|timed out/i.test(text)) return '模型响应超时';
+  if (/Connection|ConnectError|NetworkError/i.test(text)) return '暂时无法连接模型服务';
+  if (/HTTP 40[13]/.test(text)) return '模型服务拒绝访问，请检查服务端配置';
+  if (/ValidationError|JSONDecodeError/.test(text)) return '模型输出未通过格式校验';
+  return text;
+}
+
+function renderReplyStatus() {
+  if (S.replyStatusEl) { S.replyStatusEl.remove(); S.replyStatusEl = null; }
+  const state = S.replyState;
+  if (!state || state.scope !== base() || S.viewMode !== 'live' || state.status !== 'failed') return;
+  const el = document.createElement('div');
+  el.className = 'reply-status';
+  const label = document.createElement('span');
+  label.textContent = '回复未完成：' + taskFailureText(state.last_error);
+  el.appendChild(label);
+  if (state.status === 'failed' && state.can_retry) {
+    const button = document.createElement('button');
+    button.className = 'btn-mini'; button.textContent = '重试回复'; button.disabled = !!state.retrying;
+    button.onclick = () => retryReply(state);
+    el.appendChild(button);
+  }
+  $('chat').appendChild(el); S.replyStatusEl = el;
+}
+
+async function retryReply(state) {
+  if (state.scope !== base() || state.retrying) return;
+  state.retrying = true; renderReplyStatus();
+  try {
+    const g = await api(`${state.scope}/generations/${enc(state.id)}/retry`, {method:'POST'});
+    if (state.scope !== base()) return;
+    S.generationId = g.id; S.replyState = {...g, scope:state.scope};
+    await recoverReply(true);
+  } catch (e) { toast('重试失败：' + taskFailureText(e.message),4000); }
+  finally { state.retrying = false; renderReplyStatus(); }
 }
 
 function renderMsg(role, content, thinking, id) {
@@ -1382,6 +1587,7 @@ function anchorBottom() {
     requestAnimationFrame(() => {
       scrollBottom(true);
       wasAtBottom = true;
+      markVisibleChatRead();
     });
   });
 }
@@ -1480,7 +1686,7 @@ async function doSearch(q) {
       groups[kind].forEach((h) => {
         const text = esc(h.content).replace(re, (m) => `<mark>${m}</mark>`);
         const meta = h.kind === 'memory'
-          ? `${esc(h.type || '')}`
+          ? `${esc(h.memory_kind || '')}`
           : `${esc(h.role === 'user' ? '我' : '她')} · ${fmtTime(h.created_at)}`;
         const jump = h.kind === 'message' ? ` data-jump="${h.id}"` : '';
         html += `<div class="hit" data-kind="${h.kind}"${jump}>
@@ -1515,12 +1721,14 @@ function setStatus(text, cls) {
 
 function connect() {
   if (!S.user || !S.persona) return;
+  clearTimeout(S.reconnectTimer);
   setStatus('连接中…', '');
   try { if (S.ws) S.ws.close(); } catch (e) { /* ignore */ }
   const ws = new WebSocket(wsUrl());
   S.ws = ws;
 
   ws.onopen = () => {
+    if (S.ws !== ws) return;
     S.connected = true;
     setStatus('', 'online');        // 不再显示"在线"（AI 一直都在）
     // 连接恢复了：可能有一轮卡在"等待回复"，这里清掉
@@ -1528,17 +1736,19 @@ function connect() {
     loadConvs();
   };
   ws.onclose = () => {
+    if (S.ws !== ws) return;
     S.connected = false;
     setStatus('已断开 · 重连中…', 'offline');
-    // 连接断了 → 这一轮永远等不到回复了，
-    // 不清掉的话发送按钮会一直灰着（能打字但发不出去）
+    // 只清理临时显示；服务器继续生成，重连后恢复正式消息。
     resetSending();
     if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
+    recoverReply(true);
     clearTimeout(S.reconnectTimer);
     S.reconnectTimer = setTimeout(connect, 2500);
   };
   ws.onerror = () => { try { ws.close(); } catch (e) { /* ignore */ } };
   ws.onmessage = (ev) => {
+    if (S.ws !== ws) return;
     let m;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
     try {
@@ -1553,11 +1763,74 @@ function connect() {
   };
 }
 
-function outboxKey() { return `companion-outbox:${S.user}:${S.persona}`; }
-function readOutbox() {
-  try { return JSON.parse(localStorage.getItem(outboxKey()) || '{}'); } catch (_) { return {}; }
+function outboxKey(user=S.user,persona=S.persona) { return `companion-outbox:${user}:${persona}`; }
+function readOutbox(user=S.user,persona=S.persona) {
+  try { return JSON.parse(localStorage.getItem(outboxKey(user,persona)) || '{}'); } catch (_) { return {}; }
 }
-function writeOutbox(value) { localStorage.setItem(outboxKey(), JSON.stringify(value)); }
+function writeOutbox(value,user=S.user,persona=S.persona) { localStorage.setItem(outboxKey(user,persona), JSON.stringify(value)); }
+
+const outboxFlushes = new Map();
+function flushOutbox(user,persona) {
+  const key=pkey(user,persona), scope=`/api/persona/${enc(user)}/${enc(persona)}`;
+  if (outboxFlushes.has(key)) return outboxFlushes.get(key);
+  const work=(async () => {
+    for (const [id,content] of Object.entries(readOutbox(user,persona))) {
+      const receipt=await api('/api/messages',{method:'POST',body:JSON.stringify({user_id:user,persona_id:persona,content,client_message_id:id})});
+      const pending=readOutbox(user,persona); delete pending[id]; writeOutbox(pending,user,persona);
+      if (scope===base()) {
+        const saved=S.messages.find(m=>m.client_message_id===id);
+        if (saved) { saved.id=receipt.message_id; saved.pending=false; }
+        if (!S.latestClientMessageId || S.latestClientMessageId===id) S.generationId=receipt.generation_id;
+      }
+    }
+  })();
+  outboxFlushes.set(key,work);
+  return work.finally(()=>{ if (outboxFlushes.get(key)===work) outboxFlushes.delete(key); });
+}
+
+let replyRecoveryTimer = null;
+let replyRecoveryEpoch = 0;
+function stopReplyRecovery() {
+  clearTimeout(replyRecoveryTimer);
+  replyRecoveryTimer = null;
+  replyRecoveryEpoch += 1;
+}
+
+async function recoverReply(refreshHistory = false) {
+  stopReplyRecovery();
+  if (!S.user || !S.persona) return;
+  const epoch = replyRecoveryEpoch, scope = base(), clientId = S.latestClientMessageId;
+  const current = () => epoch === replyRecoveryEpoch && scope === base() && clientId === S.latestClientMessageId;
+  try {
+    while (Object.keys(readOutbox()).length) {
+      await flushOutbox(S.user,S.persona);
+      if (!current()) return;
+    }
+    const g = await api(`${scope}/generation`);
+    if (!current()) return;
+    if (refreshHistory && S.viewMode === 'live') {
+      await loadHistory(true, { keepScroll: !wasAtBottom });
+      if (!current()) return;
+    }
+    if (!g) return;
+    S.generationId = g.id;
+    S.replyState = {...g, scope};
+    if (S.viewMode === 'live') {
+      for (const message of g.messages) {
+        if (!S.messages.some(m => m.id === message.id)) handleWs({type: 'message_done', generation_id: g.id, message});
+      }
+    }
+    if (g.status === 'queued' || g.status === 'running') {
+      setTyping(true);
+      replyRecoveryTimer = setTimeout(() => recoverReply(), 1500);
+    } else {
+      resetSending();
+    }
+    renderReplyStatus();
+  } catch (_) {
+    if (current()) replyRecoveryTimer = setTimeout(() => recoverReply(refreshHistory), 2500);
+  }
+}
 
 function handleWs(m) {
   if (m.generation_id && ['start', 'delta', 'thinking', 'message_done', 'done', 'cancelled', 'error'].includes(m.type)
@@ -1565,11 +1838,12 @@ function handleWs(m) {
   switch (m.type) {
     case 'received': {
       const saved = S.messages.find(x => x.client_message_id === m.client_message_id);
-      if (saved) saved.id = m.message_id;
+      if (saved) { saved.id = m.message_id; saved.pending = false; }
       const pending = readOutbox();
       delete pending[m.client_message_id];
       writeOutbox(pending);
       if (!S.latestClientMessageId || m.client_message_id === S.latestClientMessageId) S.generationId = m.generation_id;
+      recoverReply(true);
       break;
     }
     case 'message_done': {
@@ -1582,9 +1856,12 @@ function handleWs(m) {
         if (wasAtBottom) scrollBottom();
       }
       S.streamThinking = '';
+      renderReplyStatus();
+      markVisibleChatRead();
       break;
     }
     case 'cancelled': {
+      stopReplyRecovery();
       if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
       resetSending();
       break;
@@ -1598,6 +1875,7 @@ function handleWs(m) {
       setStatus('', 'online')  // 不显示"在线"（对 AI 来说它一直都在）;
       // 连上了说明服务器活着了 → 刷新聊天列表（服务器重启后自动恢复）
       loadConvs();
+      recoverReply(true);
       break;
     case 'start': {
       // 不再往聊天区插空气泡了（那个框一直跳很吵），
@@ -1636,6 +1914,8 @@ function handleWs(m) {
       break;
     }
     case 'done': {
+      stopReplyRecovery();
+      S.replyState = null; renderReplyStatus();
       if (S.streamEl) {
         const cur = S.streamEl.querySelector('.cursor');
         if (cur) cur.remove();
@@ -1650,7 +1930,7 @@ function handleWs(m) {
         S.streamEl.firstChild.innerHTML = renderMarkdown(rawText);
         // 同步进 S.messages（保持内存态一致）
         S.messages.push({
-          id: Date.now(), role: 'assistant',
+          id: Date.now(), role: 'assistant', localOnly:true,
           content: rawText,
           thinking: think,
           created_at: new Date().toISOString(),
@@ -1671,12 +1951,24 @@ function handleWs(m) {
       break;
     }
     case 'error': {
+      stopReplyRecovery();
+      if (m.generation_id) S.replyState = {id:m.generation_id, scope:base(), status:'failed', last_error:m.message};
+      renderReplyStatus();
       if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
       S.sending = false;
       $('btn-send').disabled = false;
       stopSendWatchdog();
       setTyping(false);
-      toast('出错了：' + (m.message || '未知错误'), 4000);
+      if (m.generation_id) recoverReply(true);
+      else toast('出错了：' + taskFailureText(m.message), 4000);
+      break;
+    }
+    case 'summary_updated': {
+      const user = m.user_id || S.user, persona = m.persona_id || S.persona;
+      api(`/api/persona/${enc(user)}/${enc(persona)}`).then(info => {
+        S.summaries[pkey(user,persona)] = info;
+        renderRelationIfOpen(user,persona); renderProfileIfOpen(user,persona);
+      }).catch(() => {});
       break;
     }
     case 'record_done': {
@@ -1690,6 +1982,11 @@ function handleWs(m) {
       const p = m.persona_id || S.persona;
       const key = pkey(u, p);
       const isCurrent = (u === S.user && p === S.persona);
+      if (m.more_pending) {
+        S.recording[key] = true;
+        renderRelationIfOpen(u, p);
+        break;
+      }
       const wasPending = !!(S.recordPending && S.recordPending.key === key);
       S.recording[key] = false;
       if (S.recordPending && S.recordPending.key === key) S.recordPending = null;
@@ -1700,10 +1997,11 @@ function handleWs(m) {
         renderProfileIfOpen(u, p);
         if (isCurrent) loadConvs();
       }).catch(() => { /* ignore */ });
-      if (!isCurrent) break;   // 不是当前角色的记录 → 静默刷新就行，不打扰
-      if (m.errors && m.errors.length) { toast('记忆整理未完成，可重试：' + m.errors[0], 5000); break; }
+      if (!isCurrent || (!S.debug && !wasPending)) break;
+      if (m.errors && m.errors.length) { toast('记忆整理未完成，可在关系页点「记一次」重试：' + m.errors[0], 5000); break; }
       const bits = [];
       if (m.facts_created) bits.push(`记住了 ${m.facts_created} 件事`);
+      if (m.notes_updated) bits.push(`更新了 ${m.notes_updated} 条记忆`);
       if (m.blocks_updated) bits.push(`关系状态更新了 ${m.blocks_updated} 项`);
       if (wasPending) {
         toast(bits.length ? `记好了，${bits.join('，')}` : '记好了', 3000);
@@ -1730,10 +2028,12 @@ function send() {
   const input = $('input');
   const text = input.value.trim();
   if (!text) return;
-  if (!S.connected || !S.ws || S.ws.readyState !== WebSocket.OPEN) { toast('还没连上，等一下'); return; }
+  if (!S.user || !S.persona) return;
+  stopReplyRecovery();
   // A new user message interrupts only the unfinished assistant draft.
   if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
   S.generationId = null;
+  S.replyState = null; renderReplyStatus();
   const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   S.latestClientMessageId = requestId;
 
@@ -1743,14 +2043,20 @@ function send() {
   const now = new Date().toISOString();
   const el = renderMsg('user', text, null, null);
   appendChatMsg(el, now);
-  S.messages.push({ id: Date.now(), role: 'user', content: text, created_at: now, client_message_id: requestId });
+  S.messages.push({ id: Date.now(), role: 'user', content: text, created_at: now, client_message_id: requestId, pending:true });
   input.value = '';
   input.style.height = 'auto';
 
   const pending = readOutbox();
   pending[requestId] = text;
   writeOutbox(pending);
-  S.ws.send(JSON.stringify({ type: 'chat', content: text, client_message_id: requestId }));
+  if (S.connected && S.ws && S.ws.readyState === WebSocket.OPEN) {
+    try { S.ws.send(JSON.stringify({ type: 'chat', content: text, client_message_id: requestId })); }
+    catch (_) { recoverReply(true); }
+  } else recoverReply(true);
+  // An OPEN mobile socket may already be dead without emitting close/received.
+  // Retry the durable receipt over HTTP with the same idempotency key.
+  setTimeout(()=>{ if (S.latestClientMessageId===requestId && readOutbox()[requestId]) recoverReply(true); },1500);
   S.sending = true;
   $('btn-send').disabled = false;
   scrollBottom();
@@ -1892,7 +2198,7 @@ $('chat').addEventListener('scroll', () => {
   // 记住是否贴在底部（发送时不要把用户拉走）
   wasAtBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   // 自己滑回底部了 → 角标清零
-  if (wasAtBottom) S.newCount = 0;
+  if (wasAtBottom) { S.newCount = 0; markVisibleChatRead(); }
   updateJumpButton();
 });
 
@@ -1910,12 +2216,28 @@ $('chat').addEventListener('click', (e) => {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
-    if (!S.connected) connect();
-    // 回到前台：在底部就保持贴底，在翻历史就保持原来的位置
-    else if (S.viewMode === 'live') loadHistory(true, { keepScroll: !wasAtBottom });
+    // 手机后台的旧 socket 可能看似 OPEN；新连接的 ready 会恢复正式消息和任务状态。
+    connect();
+    recoverReply(true);
     loadConvs();
+    if (S.view === 'relation' && S.relationPersona) {
+      const target = S.relationPersona;
+      api(`/api/persona/${enc(target.user)}/${enc(target.persona)}`).then(info => {
+        if (S.view === 'relation' && S.relationPersona === target) {
+          S.summaries[pkey(target.user,target.persona)] = info;
+          renderRelationIfOpen(target.user,target.persona);
+        }
+      }).catch(() => {});
+    }
+  } else {
+    stopReplyRecovery();
   }
 });
+
+// Safari-family browsers can restore a frozen page from the back/forward cache
+// without a new websocket ready event. HTTP recovery does not depend on it.
+window.addEventListener('pageshow', () => { if (S.user && S.persona) recoverReply(true); });
+window.addEventListener('online', () => { if (S.user && S.persona) { connect(); recoverReply(true); } });
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

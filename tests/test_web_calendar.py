@@ -64,7 +64,8 @@ def main() -> int:
     print("[OK] 搜索结果跳转也带上目标消息本身")
 
     # --- 5. 上下滑不被限制 ---
-    assert "S.viewMode !== 'live'" not in js, \
+    load_older = js.split('async function loadOlder()',1)[1].split('/* ----------',1)[0]
+    assert "S.viewMode !== 'live'" not in load_older, \
         "loadOlder 不该再按视图模式拦截（定位后也要能往上翻）"
     print("[OK] 定位后仍能上下翻历史")
 

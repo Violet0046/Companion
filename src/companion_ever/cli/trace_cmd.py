@@ -17,6 +17,8 @@ from companion_ever.trace import TraceStore, default_trace_dir
 
 
 def _store(args) -> TraceStore:
+    if getattr(args,'trace_dir',None):
+        return TraceStore(args.trace_dir)
     db_path = getattr(args, "db", "./memory/companion.db")
     return TraceStore(default_trace_dir(db_path))
 
@@ -77,7 +79,8 @@ def _total_chars(d: dict[str, Any]) -> int:
     for s in d.get("steps", []):
         if s.get("name") == "prompt.build":
             return int(s.get("detail", {}).get("total_chars", 0))
-    return 0
+    return sum(int(s.get('detail',{}).get('request_chars',0)) for s in d.get('steps',[])
+               if s.get('name') in ('llm.chat','llm.stream'))
 
 
 def cmd_trace_show(args) -> int:
@@ -100,6 +103,20 @@ def cmd_trace_show(args) -> int:
     print(f"  状态      : {d.get('status')}")
     if d.get("error"):
         print(f"  错误      : {d['error']}")
+    for key,value in (d.get('context') or {}).items():
+        if value is not None:
+            print(f'  {key}: {value}')
+    children=[item for _,item in store.iter_meta()
+              if item.get('context',{}).get('parent_trace_id')==tid]
+    if children:
+        print('\n--- 执行记录 ---')
+        for child in children:
+            print(f"  {child['trace_id']}  {child['kind']}  {child['status']}")
+    if d.get('llm_calls'):
+        print('\n--- 模型调用（每次纠错独立保留）---')
+        for call in d['llm_calls']:
+            print(f"  {call['id']}  {call['status']}  response={call.get('response_state','?')}  "
+                  f"{call.get('elapsed_ms',0):.0f}ms  {call.get('response_chars',0)} 字符")
 
     steps = d.get("steps", [])
     if steps:
@@ -127,8 +144,10 @@ def cmd_trace_show(args) -> int:
         for a in arts:
             ap = store.artifact_path(path, a)
             exists = "✓" if ap and ap.exists() else "✗"
-            size = f"{ap.stat().st_size:,} 字符" if ap and ap.exists() else "缺失"
+            size = f"{ap.stat().st_size:,} 字节" if ap and ap.exists() else "缺失"
             print(f"  {exists} {a:<10} {size}")
+            if ap:
+                print(f'      {ap.resolve()}')
             if a == "request":
                 print(f"      → companion-cli trace show {tid} --request")
             elif a == "response":
@@ -147,7 +166,10 @@ def cmd_trace_show_raw(args) -> int:
         return 1
 
     path, d = found
-    name = "request" if args.request else "response"
+    name = getattr(args,'artifact',None) or ("request" if args.request else "response")
+    if name not in (d.get('artifacts') or []):
+        print(f'[!] 该 trace 没有 {name} 产物')
+        return 1
     ap = store.artifact_path(path, name)
     if ap is None or not ap.exists():
         print(f"[!] 该 trace 没有 {name} 产物")

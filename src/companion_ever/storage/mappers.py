@@ -6,7 +6,7 @@ import sqlite3
 from typing import Any
 
 from companion_ever.domain.entities import Block, ConversationMessage, Note, User
-from companion_ever.domain.enums import BlockType, NoteType
+from companion_ever.domain.enums import BlockType, MemoryKind
 
 
 def row_to_user(row: sqlite3.Row) -> User:
@@ -18,37 +18,14 @@ def row_to_user(row: sqlite3.Row) -> User:
 
 
 def row_to_note(row: sqlite3.Row) -> Note:
-    """note 表行 → Note 实体。
-
-    PERSONA_BASICS 类型的 content 仅当看起来像 JSON（首字符为 {）时自动解析。
-    实际数据中有时存的是原始文本（PersonaService.create_persona 的 definition），
-    有时存的是 JSON 字符串（PersonaEditService.edit 的输出）。本函数采用启发式：
-    内容以 '{' 开头才尝试 json.loads。
-    """
-    raw_content: str = row["content"]
-    note_type = NoteType(row["type"])
-    content: str | dict[str, Any]
-    if note_type == NoteType.PERSONA_BASICS and raw_content.lstrip().startswith("{"):
-        try:
-            content = json.loads(raw_content)
-        except (json.JSONDecodeError, TypeError):
-            content = {"_raw": raw_content}
-    else:
-        content = raw_content
-
+    """note 表行 → 经历/事实实体；角色配置不经过这里。"""
     return Note(
-        id=row["id"],
-        user_id=row["user_id"],
-        persona_id=row["persona_id"],
-        type=note_type,
-        content=content,
-        source_quote=row["source_quote"],
-        importance=row["importance"],
-        decay_score=row["decay_score"],
-        is_archived=bool(row["is_archived"]),
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-        last_accessed_at=row["last_accessed_at"],
+        id=row['id'], user_id=row['user_id'], persona_id=row['persona_id'],
+        kind=MemoryKind(row['kind']), content=row['content'], source_quote=row['source_quote'],
+        importance=row['importance'], decay_score=row['decay_score'], is_archived=bool(row['is_archived']),
+        created_at=row['created_at'], updated_at=row['updated_at'], last_accessed_at=row['last_accessed_at'],
+        reality=row['reality'], event_time=row['event_time'], time_basis=row['time_basis'],
+        revision=row['revision'], pinned=bool(row['pinned']),
     )
 
 
@@ -80,6 +57,7 @@ def row_to_conversation_message(row: sqlite3.Row) -> ConversationMessage:
         role=row["role"],
         content=row["content"],
         created_at=row["created_at"],
+        client_message_id=row['client_message_id'] if 'client_message_id' in row.keys() else None,
     )
 
 

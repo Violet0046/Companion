@@ -44,8 +44,8 @@ class PersonaService:
         2. user_repo.exists(user_id)             校验用户存在
         3. user_repo.owns_persona(...)             校验不重复
         4. user_repo.add_persona(...)             注册归属
-        5. note_service.create_persona_basics_note(...) 写定义笔记
-        6. block_repo.upsert x 3                  初始化 3 个 Block
+        5. note_service.set_persona_definition(...) 写定义笔记
+        6. block_repo.upsert x 2                  初始化画像与关系摘要
 
         Args:
             user_id: 用户 id
@@ -72,15 +72,14 @@ class PersonaService:
         self.user_repo.add_persona(user_id, persona_id)
 
         # 4. 写 persona_basics 笔记（通过 NoteService）
-        self.note_service.create_persona_basics_note(
+        self.note_service.set_persona_definition(
             user_id=user_id,
             persona_id=persona_id,
             content=definition.strip(),
         )
 
-        # 5. 初始化 3 个 Block（空 fields，由后续 LLM 抽取填入）
+        # 5. 保留两种摘要容器；记一次只写 note，摘要后续从有效 fact 独立演化。
         for block_type in (
-            BlockType.PERSONA_RUNTIME,
             BlockType.USER_PROFILE,
             BlockType.RELATIONSHIP_STATE,
         ):

@@ -5,7 +5,7 @@ from typing import Optional
 
 from companion_ever.services.authz import Authorizer
 from companion_ever.domain.entities import Note
-from companion_ever.domain.enums import NoteType
+from companion_ever.domain.enums import MemoryKind
 from companion_ever.storage.note_repo import NoteRepo
 
 
@@ -22,22 +22,19 @@ class NoteService:
         self.authorizer = authorizer
         self.note_repo = note_repo
 
-    # === 写入（2 个）===
+    # === 显式写入与固定 ===
 
     def create_note(
         self,
         user_id: str,
         persona_id: str,
-        type: NoteType,
+        kind: MemoryKind,
         content: str,
         *,
         source_quote: Optional[str] = None,
         importance: float = 0.5,
     ) -> str:
-        """通用：创建一条笔记。
-
-        LLM 调用场景：抽取 service 自动调，传入 facts。
-        用户调用场景：通过 CLI 输入。
+        """显式创建笔记；自动抽取由 MemoryWriter 校验并原子提交。
 
         校验：
         - user 必须拥有 persona（authorizer.require_persona）
@@ -56,79 +53,37 @@ class NoteService:
         return self.note_repo.create(
             user_id=user_id,
             persona_id=persona_id,
-            type=type,
+            kind=kind,
             content=content,
             source_quote=source_quote,
             importance=importance,
         )
+    def set_persona_definition(self, user_id, persona_id, content):
+        self.authorizer.require_persona(user_id,persona_id)
+        from companion_ever.storage.persona_repo import PersonaRepo
+        return PersonaRepo(self.note_repo.conn).put(user_id,persona_id,content)
 
-    def remember(self, user_id: str, persona_id: str, type: NoteType,
-                 content: str, *, source_quote: str | None = None,
-                 importance: float = 0.5) -> tuple[str, bool]:
-        """幂等写入抽取事实，返回 (note_id, 是否新增)。"""
-        self.authorizer.require_persona(user_id, persona_id)
-        self._check_importance(importance)
-        return self.note_repo.remember(user_id=user_id, persona_id=persona_id,
-                                       type=type, content=content,
-                                       source_quote=source_quote, importance=importance)
+    def get_persona_definition(self, user_id, persona_id):
+        self.authorizer.require_persona(user_id,persona_id)
+        from companion_ever.storage.persona_repo import PersonaRepo
+        return PersonaRepo(self.note_repo.conn).get(user_id,persona_id)
 
-    def create_persona_basics_note(
-        self,
-        user_id: str,
-        persona_id: str,
-        content: str,
-    ) -> str:
-        """写入 persona 的基础设定（创建或更新，幂等）。
+    def set_pinned(self, user_id, persona_id, note_id, pinned):
+        self.authorizer.require_persona(user_id,persona_id)
+        note = self.note_repo.get(note_id)
+        if note is None or (note.user_id,note.persona_id)!=(user_id,persona_id) or note.is_archived:
+            raise ValueError('记忆不存在或不属于当前角色')
+        self.note_repo.conn.execute('UPDATE note SET pinned=?,revision=revision+1 WHERE id=?',(int(pinned),note_id))
 
-        行为：
-        - 如果不存在 persona_basics 笔记 → 创建
-        - 如果已存在 → 更新 content（保持 type / source_quote / importance）
+    def pinned_notes(self, user_id, persona_id):
+        self.authorizer.require_persona(user_id,persona_id)
+        from companion_ever.storage.mappers import row_to_note
+        return [row_to_note(r) for r in self.note_repo.conn.execute(
+            "SELECT n.* FROM note n WHERE user_id=? AND persona_id=? AND pinned=1 AND is_archived=0 "
+            "AND NOT EXISTS (SELECT 1 FROM note_link l JOIN note newer ON newer.id=l.from_id WHERE l.to_id=n.id "
+            "AND l.link_type='supersedes' AND newer.is_archived=0) ORDER BY importance DESC,id LIMIT 8",(user_id,persona_id))]
 
-        幂等：重复调用只会更新内容，不会创建多条。
-
-        调用场景：
-        - 模板初始化（PersonaService.create_persona 内部调）
-        - 用户自填人设
-        - LLM 重新生成人设
-
-        内部固定字段：
-        - type = PERSONA_BASICS
-        - importance = 0.9（关键设定）
-        - source_quote = '[persona_setup]'
-
-        Returns:
-            该 persona_basics 笔记的 id
-
-        Raises:
-            PermissionError: user 不存在 / 不拥有 persona
-            ValueError: content 空
-        """
-        self.authorizer.require_persona(user_id, persona_id)
-
-        # 查找已存在的 persona_basics 笔记
-        existing = self.note_repo.find(
-            user_id=user_id,
-            persona_id=persona_id,
-            types=[NoteType.PERSONA_BASICS],
-        )
-
-        if existing:
-            # 更新现有（保持其他字段不变）
-            note_id = existing[0].id
-            self.note_repo.update(note_id, content=content)
-            return note_id
-
-        # 创建新的（固定参数）
-        return self.note_repo.create(
-            user_id=user_id,
-            persona_id=persona_id,
-            type=NoteType.PERSONA_BASICS,
-            content=content,
-            source_quote="[persona_setup]",
-            importance=0.9,
-        )
-
-    # === 读取（3 个）===
+    # === 读取 ===
 
     def get_note(self, note_id: str, user_id: str) -> Optional[Note]:
         """读单条笔记（带权限校验）。
@@ -139,7 +94,7 @@ class NoteService:
 
         重要：返回 None 而不是抛异常，防"note 存在但不属于你"的信息泄露。
 
-        同时会调用 bump_access（更新 last_accessed_at，Ebbinghaus 公式依赖）。
+        同时更新访问元数据；当前召回评分尚未使用这些字段。
         """
         note = self.note_repo.get(note_id)
         if note is None or note.user_id != user_id:
@@ -152,8 +107,8 @@ class NoteService:
         user_id: str,
         persona_id: str,
         *,
-        type: Optional[NoteType] = None,
-        types: Optional[list[NoteType]] = None,
+        kind: Optional[MemoryKind] = None,
+        kinds: Optional[list[MemoryKind]] = None,
         is_archived: bool = False,
         limit: int = 100,
     ) -> list[Note]:
@@ -162,19 +117,20 @@ class NoteService:
         Args:
             user_id: 用户 id（必填，自动限定）
             persona_id: persona id（必填，自动限定）
-            type: 单选 type 过滤（与 types 二选一）
-            types: 多选 type 过滤（IN 子句）
+            kind: 单选 kind 过滤（与 kinds 二选一）
+            kinds: 多选 kind 过滤（IN 子句）
             is_archived: 默认 False（不含归档）
             limit: 最多返回多少条
 
         Returns:
             按 updated_at DESC 排序的笔记列表
         """
+        self.authorizer.require_persona(user_id,persona_id)
         return self.note_repo.find(
             user_id=user_id,
             persona_id=persona_id,
-            type=type,
-            types=types,
+            kind=kind,
+            kinds=kinds,
             is_archived=is_archived,
             limit=limit,
         )
@@ -195,6 +151,7 @@ class NoteService:
         Returns:
             按 FTS5 相关度排序的笔记列表
         """
+        self.authorizer.require_persona(user_id,persona_id)
         return self.note_repo.search(
             query=query,
             user_id=user_id,

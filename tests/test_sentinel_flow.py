@@ -33,7 +33,7 @@ from companion_ever.services.session_close_service import (
 from companion_ever.services.note_service import NoteService
 from companion_ever.services.block_service import BlockService
 from companion_ever.services.persona_service import PersonaService
-from companion_ever.domain.enums import NoteType
+from companion_ever.domain.enums import MemoryKind
 from companion_ever.llm.openai_client import OpenAICompatibleClient
 from companion_ever.storage.block_repo import BlockRepo
 from companion_ever.storage.conversation_repo import ConversationRepo
@@ -62,17 +62,18 @@ def _make_stack(db_path: str, llm=None):
         # mock LLM：返回符合 schema 的合法 JSON
         # 包含一条 fact（用于测试 notes 写入路径）
         llm = MagicMock()
-        llm.chat.return_value = json.dumps({
-            "facts": [
-                {"type": "profile_fact", "content": "用户叫周艺科",
-                 "importance": 0.95, "source_quote": "我叫周艺科"}
-            ],
-            "blocks": [
-                {"block_type": "persona_runtime",
-                 "fields": {"current_topic": "初次对话"}}
-            ],
-            "reasoning": "测试 mock 返回",
-        })
+        from test_kind_storage import draft, proposal
+        from fake_memory import no_memory
+        def reply(messages, **kwargs):
+            case=json.loads(messages[-1]['content'])
+            matching=[m for m in case['messages'] if m['role']=='user' and m['id'] in case['new_message_ids'] and '我叫周艺科' in m['content']]
+            if not matching:
+                return no_memory(messages)
+            result=json.loads(no_memory(messages))
+            result['proposals']=[proposal(matching[0]['id'],'我叫周艺科',content='用户叫周艺科')]
+            result['skipped']=[s for s in result['skipped'] if s['message_id']!=matching[0]['id']]
+            return json.dumps(result)
+        llm.chat.side_effect = reply
     extraction_svc = ExtractionService(conv_svc, note_svc, block_svc, llm)
     extraction_graph = build_extraction_graph(
         conversation_service=conv_svc,
@@ -157,7 +158,7 @@ def test_full_sentinel_flow_extracts_session():
         # 8. 验证至少创建了一条 note（用户说"叫周艺科"）
         notes = s["note_svc"].find_notes(
             user_id="alice", persona_id="舒舒",
-            types=[NoteType.PROFILE_FACT],
+            kinds=[MemoryKind.FACT],
         )
         assert len(notes) >= 1, "应至少有一条 profile_fact 笔记（名字抽取）"
         # 验证内容包含名字

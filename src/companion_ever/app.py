@@ -1,22 +1,6 @@
-"""app.py — 组合根（composition root）。
+"""装配入口：build_app(AppConfig) → AppContext。
 
-唯一的"装配"入口——所有 service、repo、workflow 的依赖关系都在这里按拓扑序构造。
-调用方：build_app(AppConfig) → AppContext，从中取出 .services.* / .workflows.* 调用。
-
-依赖 DAG：
-    repos/llm/authorizer (leaves)
-        ↓
-    note_svc, block_svc, conversation_svc, retrieval_svc (mid)
-        ↓
-    persona_svc, persona_edit_svc, prompt_svc (composite)
-        ↓
-    chat_svc, extraction_svc (orchestrators)
-        ↓
-    extraction_workflow (LangGraph)
-        ↓
-    session_close_svc (uses extraction_workflow)
-        ↓
-    chat_workflow (uses session_close_svc)
+构造仓库、客户端、业务服务、调用适配和后台调度；依赖关系集中在此。
 """
 from __future__ import annotations
 
@@ -33,6 +17,8 @@ from companion_ever.services.retrieval_service import RetrievalService
 from companion_ever.services.session_close_service import SessionCloseService
 from companion_ever.services.note_service import NoteService
 from companion_ever.services.block_service import BlockService
+from companion_ever.services.summary_service import SummaryService
+from companion_ever.services.background_service import BackgroundService
 from companion_ever.services.persona_edit_service import PersonaEditService
 from companion_ever.services.persona_service import PersonaService
 from companion_ever.services.setting_service import SettingService
@@ -50,7 +36,7 @@ from companion_ever.workflows import build_chat_graph, build_extraction_graph
 
 @dataclass
 class Repos:
-    """持久化层 4 个 repo。"""
+    """共享仓库。"""
 
     user: UserRepo
     note: NoteRepo
@@ -60,7 +46,7 @@ class Repos:
 
 @dataclass
 class Services:
-    """应用层 10 个 service。"""
+    """应用服务。"""
 
     note: NoteService
     block: BlockService
@@ -73,6 +59,8 @@ class Services:
     chat: ChatService
     extraction: ExtractionService
     session_close: SessionCloseService
+    summary: Any = None
+    background: Any = None
 
 
 @dataclass
@@ -121,6 +109,7 @@ def build_app(cfg: AppConfig) -> AppContext:
     # 5. Services — 拓扑序
     note_svc = NoteService(authorizer, repos.note)
     block_svc = BlockService(authorizer, repos.block)
+    summary_svc = SummaryService(authorizer,repos.note,repos.block,llm,timeout=cfg.extraction_timeout,thinking=cfg.background.model_thinking)
     persona_svc = PersonaService(repos.user, repos.block, note_svc, authorizer)
     persona_edit_svc = PersonaEditService(note_svc, llm)
     conversation_svc = ConversationService(authorizer, repos.conversation)
@@ -136,13 +125,14 @@ def build_app(cfg: AppConfig) -> AppContext:
         cfg.recent_message_limit,
         cfg.history_max_messages,
     )
+    prompt_svc.summary_service = summary_svc
     # session_close_svc 在下面构造，这里先占位，后面回填
     chat_svc = ChatService(
         prompt_svc, conversation_svc, llm,
         session_close_service=None, idle_session_minutes=cfg.idle_session_minutes,
     )
     extraction_svc = ExtractionService(
-        conversation_svc, note_svc, block_svc, llm,
+        conversation_svc, note_svc, block_svc, llm, timeout=cfg.extraction_timeout, tz_offset_hours=cfg.tz_offset_hours,thinking=cfg.background.model_thinking,
     )
 
     # 6. LangGraph workflows
@@ -152,10 +142,14 @@ def build_app(cfg: AppConfig) -> AppContext:
         note_service=note_svc,
         block_service=block_svc,
         llm_client=llm,
+        timeout=cfg.extraction_timeout,
+        tz_offset_hours=cfg.tz_offset_hours,
+        thinking=cfg.background.model_thinking,
     )
     session_close_svc = SessionCloseService(
         authorizer, conversation_svc, extraction_graph,
     )
+    session_close_svc.automatic=cfg.background.enabled
     # 回填：chat 路径也要能自动关 session
     chat_svc.session_close_service = session_close_svc
     chat_graph = build_chat_graph(
@@ -178,13 +172,16 @@ def build_app(cfg: AppConfig) -> AppContext:
         chat=chat_svc,
         extraction=extraction_svc,
         session_close=session_close_svc,
+        summary=summary_svc,
     )
     workflows = Workflows(chat=chat_graph, extraction=extraction_graph)
 
-    return AppContext(
+    ctx=AppContext(
         cfg=cfg, conn=conn, llm=llm,
         repos=repos, services=services, workflows=workflows,
     )
+    services.background=BackgroundService(ctx)
+    return ctx
 
 
 __all__ = ["AppContext", "Repos", "Services", "Workflows", "build_app"]

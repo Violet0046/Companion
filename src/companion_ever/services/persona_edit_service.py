@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 from companion_ever.services.llm_json import parse_json_response
 from companion_ever.services.note_service import NoteService
-from companion_ever.domain.enums import NoteType
 from companion_ever.llm.llm_client import LLMClient
 from companion_ever.prompts import PERSONA_EDIT_SYSTEM
 
@@ -56,7 +55,7 @@ class PersonaEditService:
 
         # 3. 写回（idempotent）
         new_content = json.dumps(new_fields, ensure_ascii=False, indent=2)
-        self.note_service.create_persona_basics_note(
+        self.note_service.set_persona_definition(
             user_id=user_id,
             persona_id=persona_id,
             content=new_content,
@@ -66,20 +65,13 @@ class PersonaEditService:
 
     def _get_current(self, user_id: str, persona_id: str) -> dict:
         """读当前 persona_basics fields（不存在时返回空 dict）."""
-        notes = self.note_service.find_notes(
-            user_id=user_id,
-            persona_id=persona_id,
-            types=[NoteType.PERSONA_BASICS],
-        )
-        if not notes:
+        row = self.note_service.get_persona_definition(user_id,persona_id)
+        if row is None:
             return {}
-        content = notes[0].content
-        if isinstance(content, dict):
-            return content
         try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return {}
+            return json.loads(row['content'])
+        except (ValueError,TypeError):
+            return {'_raw': row['content']}
 
     def _call_llm_edit(
         self,

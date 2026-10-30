@@ -11,11 +11,13 @@ from pathlib import Path
 
 def _read_schema() -> str:
     """读取包内的 schema.sql。"""
-    return (
+    base = (
         resources.files("companion_ever.storage")
         .joinpath("schema.sql")
         .read_text(encoding="utf-8")
     )
+    return base + '\n' + '\n'.join(resources.files('companion_ever.storage').joinpath(name).read_text(encoding='utf-8')
+                                  for name in ('summary_schema.sql','task_schema.sql'))
 
 
 def connect(
@@ -49,9 +51,15 @@ def apply_schema(conn: sqlite3.Connection) -> None:
 
     多次执行是幂等的（所有 DDL 都用 IF NOT EXISTS）。
     """
-    conn.executescript(_read_schema())
     from .migrations import migrate
-    migrate(conn)
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='note'").fetchone():
+        migrate(conn)
+    else:
+        try:
+            conn.executescript('BEGIN IMMEDIATE;\n' + _read_schema() + '\nPRAGMA user_version=5;\nCOMMIT;')
+        except BaseException:
+            conn.rollback()
+            raise
 
 
 @contextmanager
@@ -109,12 +117,16 @@ class ThreadLocalConnection:
 
     @property
     def _conn(self) -> sqlite3.Connection:
+        return self.open_current()
+
+    def open_current(self, *, timeout=None) -> sqlite3.Connection:
+        """Open this thread's connection with an optional shorter busy timeout."""
         conn = getattr(self._local, "conn", None)
         if conn is None:
             conn = connect(
                 self._path,
                 check_same_thread=self._check,
-                timeout=self._timeout,
+                timeout=self._timeout if timeout is None else timeout,
             )
             self._local.conn = conn
             with self._lock:

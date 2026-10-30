@@ -21,17 +21,9 @@ from typing import Optional
 from companion_ever.services.session_close_service import SessionCloseReport
 from companion_ever.config import AppConfig, LLMConfig
 from companion_ever.app import build_app
-from companion_ever.domain.enums import NoteType
 from companion_ever.domain.persona_templates import PERSONA_TEMPLATES, template_to_json
 from companion_ever.utils.text import strip_format_prefix
-from companion_ever.cli.maintain_cmd import (
-    cmd_backup,
-    cmd_clean_history,
-    cmd_clean_quit_notes,
-    cmd_repair_csv,
-    cmd_restore_thinking,
-    cmd_strip_think,
-)
+from companion_ever.cli.maintain_cmd import cmd_backup
 from companion_ever.cli.trace_cmd import (
     cmd_trace_list,
     cmd_trace_prune,
@@ -227,6 +219,11 @@ def cmd_show(args) -> int:
                 print(f"[FAIL] User '{args.user}' 不拥有 persona '{args.persona}'。")
                 return 1
 
+            definition = ctx.services.note.get_persona_definition(args.user,args.persona)
+            if definition:
+                print('\n--- Persona definition ---')
+                print(definition['content'])
+
             # 1. 显示 notes
             notes = ctx.services.note.find_notes(
                 user_id=args.user, persona_id=args.persona, limit=20,
@@ -240,7 +237,7 @@ def cmd_show(args) -> int:
                 )
                 # 截断过长内容
                 display = content[:120] + "..." if len(content) > 120 else content
-                print(f"  [{n.type.value}] importance={n.importance:.2f}")
+                print(f"  [{n.kind.value}] importance={n.importance:.2f}")
                 print(f"    {display}")
 
             # 2. 显示 blocks
@@ -323,44 +320,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("--persona", help="指定 persona 看详情")
 
     # maintain（数据维护）
-    p_maint = sub.add_parser("maintain", help="数据维护（清理历史数据）")
+    p_maint = sub.add_parser("maintain", help="数据库备份")
     maint_sub = p_maint.add_subparsers(dest="maint_cmd", required=True)
-
-    m_strip = maint_sub.add_parser(
-        "strip-think",
-        help="剥掉历史 assistant 消息里的 <think> 块（推理模型的思考过程）",
-    )
-
-    m_clean = maint_sub.add_parser(
-        "clean-history",
-        help="清理 conversation_log 的历史污染（/quit 轮次 + 模仿旧格式的前缀）",
-    )
-    m_clean.add_argument(
-        "--dry-run", action="store_true",
-        help="只报告会改什么，不实际改动",
-    )
-
-    m_qnotes = maint_sub.add_parser(
-        "clean-quit-notes",
-        help="清理 note 表里由 /quit 派生的幻觉记忆",
-    )
-    m_qnotes.add_argument(
-        "--dry-run", action="store_true",
-        help="只报告会改什么，不实际改动",
-    )
-
-    m_repair = maint_sub.add_parser(
-        "repair-csv",
-        help="修复 user.persona_ids 与真实数据不一致",
-    )
-
-    m_restore = maint_sub.add_parser(
-        "restore-thinking",
-        help="从备份里把历史思考过程恢复到 thinking_log",
-    )
-    m_restore.add_argument("--source", default="", help="备份文件路径（默认取最新的 memory/*.db.bak-*）")
-    m_restore.add_argument("--user", required=True)
-    m_restore.add_argument("--persona", required=True)
 
     m_bak = maint_sub.add_parser(
         "backup",
@@ -377,18 +338,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     # trace（诊断：看模型究竟看到了什么）
     p_trace = sub.add_parser("trace", help="trace 诊断（看每轮链路 + 模型实际收到的内容）")
+    p_trace.add_argument('--dir',dest='trace_dir',help='直接指定 trace 目录；默认使用数据库同级 traces/')
     trace_sub = p_trace.add_subparsers(dest="trace_cmd", required=True)
 
     t_list = trace_sub.add_parser("list", help="列出最近的 trace")
     t_list.add_argument("--user", default=None, help="按用户过滤")
     t_list.add_argument("--persona", default=None, help="按角色过滤")
-    t_list.add_argument("--kind", default=None, choices=["chat", "extraction"], help="按类型过滤")
+    t_list.add_argument("--kind", default=None, choices=["chat", "extraction", "memory_attempt", "summary", "memory_evaluation"], help="按类型过滤")
     t_list.add_argument("--last", type=int, default=20, help="显示最近 N 条（默认 20）")
 
     t_show = trace_sub.add_parser("show", help="看某一轮的链路")
     t_show.add_argument("trace_id", help="trace_id（可只给前缀）")
     t_show.add_argument("--request", action="store_true", help="直接打印模型实际收到的请求")
     t_show.add_argument("--response", action="store_true", help="直接打印模型实际返回的内容")
+    t_show.add_argument('--artifact',help='查看指定产物，如 llm-01.payload、llm-02.response、validation-01.error')
     t_show.add_argument("--max-chars", type=int, default=0, help="最多打印多少字符（0 = 不限）")
 
     t_prune = trace_sub.add_parser("prune", help="清理旧 trace")
@@ -409,21 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "show":
         return cmd_show(args)
     elif args.cmd == "maintain":
-        if args.maint_cmd == "strip-think":
-            return cmd_strip_think(args)
-        elif args.maint_cmd == "clean-history":
-            return cmd_clean_history(args)
-        elif args.maint_cmd == "clean-quit-notes":
-            return cmd_clean_quit_notes(args)
-        elif args.maint_cmd == "backup":
-            return cmd_backup(args)
-        elif args.maint_cmd == "restore-thinking":
-            return cmd_restore_thinking(args)
-        elif args.maint_cmd == "repair-csv":
-            return cmd_repair_csv(args)
-        else:
-            print("[FAIL] 未知 maintain 子命令")
-            return 1
+        return cmd_backup(args)
     elif args.cmd == "serve":
         try:
             from companion_ever.api.server import run_server
@@ -437,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.trace_cmd == "list":
             return cmd_trace_list(args)
         elif args.trace_cmd == "show":
-            if args.request or args.response:
+            if args.request or args.response or args.artifact:
                 return cmd_trace_show_raw(args)
             return cmd_trace_show(args)
         elif args.trace_cmd == "prune":
