@@ -167,7 +167,22 @@ def test_persona_form_wired_in():
     print("[OK] 新建角色对话框、标签输入、删除与恢复入口都已接上")
 
 
+def back_button_returns_to_origin():
+    """资料页的返回要回"来路"，不能固定回聊天页。
+
+    通讯录点开 B 的资料就回通讯录，聊天页点开的就回聊天页——
+    打开资料页不改变当前聊天角色，固定回聊天页会串到上一个角色上。
+    """
+    from companion_ever.entrypoints.web.server import WEB_DIR
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "S.profileFrom = S.view" in js, "打开资料页时没记住来路"
+    back = js.split("$('btn-profile-back')")[1][:200]
+    assert "S.profileFrom" in back, "返回按钮没有回到来路"
+    assert "showView('chat')" not in back, "返回按钮还硬编码着聊天页"
+
+
 if __name__ == "__main__":
     test_persona_form_wired_in()
     test_persona_form_logic()
-    print("[OK] 新建角色对话框前端逻辑")
+    back_button_returns_to_origin()
+    print("[OK] 新建角色对话框前端逻辑与返回导航")

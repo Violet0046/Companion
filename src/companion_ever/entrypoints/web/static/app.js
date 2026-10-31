@@ -688,10 +688,16 @@ async function deletePersona(user, persona) {
   try {
     await api(`/api/persona/${enc(user)}/${enc(persona)}`, { method: 'DELETE' });
     toast('角色已删除');
-    showView('messages');
     await loadUsers();
+    // 删掉的可能就是当前聊天角色——换到还剩下的一个，别留着失效的上下文
+    if (S.user === user && S.persona === persona) {
+      const left = allPersonas();
+      if (left.length) await switchTarget(left[0].user, left[0].persona);
+    }
     await loadConvs();
     renderContacts();
+    // 回原处（通讯录点开的就回通讯录）
+    showView(S.profileFrom || 'messages');
   } catch (e) {
     toast('删除失败：' + e.message);
   }
@@ -909,6 +915,9 @@ function relStage(info) {
 
 async function openProfile(user, persona) {
   S.profilePersona = { user, persona };
+  // 记住来路：返回时回原处。通讯录点开的就回通讯录，聊天页点开的就回聊天页——
+  // 打开资料页不改变当前聊天角色（那是 openChat 的事），所以固定回聊天页会串台。
+  S.profileFrom = S.view;
   showView('profile');
   const body = $('profile-body');
   body.innerHTML = '<div class="empty">载入中…</div>';
@@ -2319,7 +2328,7 @@ $('btn-jump-latest').onclick = () => {
 
 $('btn-back-list').onclick = () => showView('messages');
 $('btn-avatar').onclick = () => openProfile(S.user, S.persona);
-$('btn-profile-back').onclick = () => showView('chat');
+$('btn-profile-back').onclick = () => showView(S.profileFrom || 'chat');
 $('btn-memory-back').onclick = () => showView('profile');
 $('btn-relation-back').onclick = () => showView('profile');
 $('btn-new-conv').onclick = () => toast('新建会话：还没做', 2500);
