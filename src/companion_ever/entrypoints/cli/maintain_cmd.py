@@ -5,7 +5,12 @@ import sqlite3
 
 
 def cmd_backup(args) -> int:
-    path = Path(args.db).resolve()
+    db_path = getattr(args, 'db', None)
+    if not db_path:
+        # 没给 --db 就用环境变量里的路径（COMPANION_DB_PATH）
+        from companion_ever.config import AppConfig
+        db_path = str(AppConfig.from_env().db_path)
+    path = Path(db_path).resolve()
     if not path.is_file():
         print('[FAIL] 数据库不存在')
         return 1

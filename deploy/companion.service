@@ -1,0 +1,36 @@
+[Unit]
+Description=同行 (Companion Ever Memory) — 带长期记忆的 AI 伴侣
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=companion
+Group=companion
+WorkingDirectory=/opt/companion
+EnvironmentFile=/etc/companion/companion.env
+ExecStart=/opt/companion/.venv/bin/python -m companion_ever serve
+Restart=always
+RestartSec=5
+# 收到 SIGTERM 后给在途的聊天/整理留点时间收尾
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 数据库与 trace 落在 /var/lib/companion（systemd 自动建目录并设好属主）
+StateDirectory=companion
+StateDirectoryMode=0750
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=companion
+
+# 这台机器只跑这一个服务，收紧一点
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# 唯一需要写的：/opt/companion（pip 升级时）与 /var/lib/companion（数据库）
+ReadWritePaths=/opt/companion /var/lib/companion
+
+[Install]
+WantedBy=multi-user.target

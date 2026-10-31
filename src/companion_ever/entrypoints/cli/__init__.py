@@ -31,7 +31,7 @@ from companion_ever.entrypoints.cli.trace_cmd import (
 )
 
 
-def _build_app(db_path: str, llm_cfg: Optional[LLMConfig] = None) -> "AppContext":
+def _build_app(db_path: Optional[str], llm_cfg: Optional[LLMConfig] = None) -> "AppContext":
     """构造 AppContext（CLI 用）。
 
     优先级（从高到低）：
@@ -42,17 +42,18 @@ def _build_app(db_path: str, llm_cfg: Optional[LLMConfig] = None) -> "AppContext
     LLM 配置同理：命令行 > .env > 内置默认值。
     AppConfig.from_env() 自动加载 .env 文件。
     """
-    # 自动创建 db 所在目录（如果不存在）
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-
     if llm_cfg is not None:
         # 命令行显式指定 LLM——直接用，不读 .env
-        cfg = AppConfig(db_path=Path(db_path), llm=llm_cfg)
+        cfg = AppConfig(db_path=Path(db_path or "./memory/companion.db"), llm=llm_cfg)
     else:
         # 从 .env 读（含 DB path 和 LLM 配置）
         cfg = AppConfig.from_env()
-        # 命令行 --db 优先于 .env
-        cfg.db_path = Path(db_path)
+        # 命令行 --db 优先于 .env（没给 --db 时保留 .env 里的路径）
+        if db_path:
+            cfg.db_path = Path(db_path)
+
+    # 自动创建 db 所在目录（如果不存在）
+    cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
     return build_app(cfg)
 
 
@@ -203,8 +204,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Companion Ever Memory CLI",
     )
     parser.add_argument(
-        "--db", default="./memory/companion.db",
-        help="SQLite database path（默认 ./memory/companion.db）",
+        "--db", default=None,
+        help="SQLite database path（不指定则用 COMPANION_DB_PATH，默认 ./memory/companion.db）",
     )
 
     sub = parser.add_subparsers(dest="cmd", required=True)

@@ -7,7 +7,8 @@ name = "companion-ever-memory"
 version = "0.2.0"
 description = "基于 SQLite + LangGraph 的对话式长期记忆系统"
 readme = "README.md"
-requires-python = ">=3.9"
+# 实际下限是 3.10：pydantic 模型用了 `str | None`（PEP 604），运行时求值，3.9 会 TypeError
+requires-python = ">=3.10"
 license = { text = "Internal" }
 authors = [{ name = "Companion Ever Memory" }]
 dependencies = [
