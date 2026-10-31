@@ -92,14 +92,29 @@ def main() -> int:
         "本轮用户输入必须在 system 里显式标注——"
         "模型要回答哪一句不能靠猜（历史上曾出现两条连续 user 消息）"
     )
-    # 只出现一次：system 里标注了，messages 里就不能再放一遍
     assert system2.count(marker) == 1, "本轮输入在 system 里出现了多次"
-    assert not any(marker in m["content"] for m in msgs2[1:]), (
-        "本轮输入又出现在 messages 里了——同一句话被送了两遍"
-    )
+    # 本轮输入还必须是最后一条 user 消息——模型接口不接受没有 user 轮次的对话。
+    # 全新角色的第一句话尤其重要：那时消息列表里只有它。
+    assert msgs2[-1]["role"] == "user", "最后一条必须是本轮的 user 消息"
+    assert msgs2[-1]["content"] == marker, "本轮输入的正文必须原样发出"
     # 历史停在本轮之前
-    assert msgs2[-1]["role"] == "assistant", "历史应以助手上一条回复结尾"
-    print("[OK] 本轮用户输入只在 system 里出现一次，历史停在本轮之前")
+    assert msgs2[-2]["role"] == "assistant", "本轮之前应以助手上一条回复结尾"
+    print("[OK] 本轮用户输入在 system 里标注，也是最后一条 user 消息")
+
+    # ---------- 1c. 全新角色的第一句话：不能只发一条 system ----------
+    # 模型接口不接受没有 user 轮次的对话（报 chat content is empty）。
+    # 全新角色没有历史，消息列表里只有本轮输入——必须带上它。
+    ctx.services.persona.create_persona("alice", "新人", '{"name":"新人"}')
+    first_id = ctx.services.conversation.log_turn(
+        user_id="alice", persona_id="新人", turn_index=1,
+        role="user", content="你好呀",
+    )
+    fresh = ctx.services.prompt.build(
+        "alice", "新人", query="你好呀", current_message_id=first_id)
+    fresh_msgs = fresh["messages"]
+    assert [m["role"] for m in fresh_msgs] == ["system", "user"], fresh_msgs
+    assert fresh_msgs[1]["content"] == "你好呀", fresh_msgs[1]
+    print("[OK] 全新角色的第一句话带上了 user 轮次，接口不会拒收")
 
     # ---------- 2. 历史格式：user 带时间戳，assistant 不带 ----------
     user_msgs = [m for m in history if m["role"] == "user"]

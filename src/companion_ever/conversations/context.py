@@ -103,11 +103,14 @@ class PromptService:
             fetched = self.conversation_service.get_messages_between(
                 user_id=user_id, persona_id=persona_id, until_id=current_message_id,
                 limit=self.history_max_messages + 1)
-            # 本轮输入不放进 messages——它在 system 的「当前这一轮」里显式标注一次，
-            # 避免同一句话出现两遍。历史因此停在本轮之前。
-            history = [m for m in fetched if m.id != current_message_id]
-            last_conv_at = history[-1].created_at if history else None
-            current = next((m for m in fetched if m.id == current_message_id), None)
+            # 本轮输入必须留在 messages 里——模型接口不接受没有 user 轮次的对话
+            # （全新角色的第一句话会只发出一条 system，接口报 chat content is empty）。
+            # 它同时出现在 system 的「当前那一轮」：那里紧挨着"这一轮该怎么开场"的
+            # 指引，模型读到时才认得出那是本轮要回答的那句。
+            history = list(fetched)
+            earlier = [m for m in history if m.id != current_message_id]
+            last_conv_at = earlier[-1].created_at if earlier else None
+            current = next((m for m in history if m.id == current_message_id), None)
             current_input = current.content if current is not None else ''
         else:
             history = self._get_recent_messages(user_id, persona_id, limit=self.history_max_messages)
@@ -138,12 +141,12 @@ class PromptService:
         # 3. 拼装 messages 列表
         #    历史对话只在这里出现一次（作为原生 role 消息）——
         #    不要再在 system_prompt 里渲染一遍 "## 对话历史"，否则会重复送两遍。
-        #    本轮输入不在这里：它由 system 的「当前这一轮」承载。
+        #    本轮输入是最后一条 user 消息（不带时间戳，与历史区分开）。
         messages = [{"role": "system", "content": system_prompt}]
         for msg in history:
             messages.append({
                 "role": msg.role,
-                "content": self._render_message(msg),
+                "content": msg.content if msg.id == current_message_id else self._render_message(msg),
             })
 
         self._record_trace(

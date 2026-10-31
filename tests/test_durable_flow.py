@@ -67,12 +67,13 @@ def receipt_and_memory(path):
         assert chat.chat('alice', 'one', 'next', 'request2') == 'one\n\ntwo'
         assert ctx.llm.chat.call_count == count
         sent = ctx.llm.chat.call_args[0][0]
-        # 本轮输入只在 system 的「当前这一轮」里出现一次，不再作为独立消息
+        # 本轮输入在 system 的「当前这一轮」里标注一次，同时是最后一条 user 消息——
+        # 模型接口不接受没有 user 轮次的对话。
         assert sent[0]['content'].count('用户本轮说的话**：next') == 1, (
-            "本轮输入应当只被送一次"
+            "本轮输入应当在 system 里标注一次"
         )
-        assert not any(m['content'] == 'next' for m in sent[1:]), (
-            "本轮输入不应再作为独立消息出现"
+        assert sent[-1]['role'] == 'user' and sent[-1]['content'] == 'next', (
+            "本轮输入必须是最后一条 user 消息"
         )
         for size in (1, 2, 7):
             raw = 'split one\nsame bubble<message_break>split two\n\nsame second'
