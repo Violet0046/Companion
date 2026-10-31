@@ -66,3 +66,4 @@ scratch_*
 # 想恢复跟踪：删掉下面两行，再 git add -f tests tools
 tests/
 tools/
+docs/

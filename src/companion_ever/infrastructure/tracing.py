@@ -7,7 +7,7 @@
 2. **产物在发送前捕获** —— 存的是实际发给 LLM 的 payload，不是事后重建
    （重建会因为 think 剥离、时间戳转换等处理而失真，那就失去意义了）
 3. **零侵入** —— thread-local 传递当前 trace，业务代码签名不用改
-4. **默认开启** —— COMPANION_TRACE=0 关闭。调试期开着最省事
+4. **默认关闭** —— COMPANION_TRACE=1 打开。服务器上不留噪音，本地调试再开
 
 存储布局：
     memory/traces/2026-10-27/<trace_id>.json
@@ -37,8 +37,8 @@ from typing import Any, Iterator, Optional
 # ============ 全局开关 ============
 
 def trace_enabled() -> bool:
-    """trace 是否开启。COMPANION_TRACE=0 关闭（默认开启）。"""
-    return os.environ.get("COMPANION_TRACE", "1").strip().lower() not in ("0", "false", "off", "no")
+    """trace 是否开启。默认关闭——服务器上不留噪音，本地调试设 COMPANION_TRACE=1 打开。"""
+    return os.environ.get("COMPANION_TRACE", "0").strip().lower() not in ("0", "false", "off", "no")
 
 
 def default_trace_dir(db_path: Path | str) -> Path:
