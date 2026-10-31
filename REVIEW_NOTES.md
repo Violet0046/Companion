@@ -6,12 +6,12 @@
 
 | 编号 | 当前情况 | 代码入口 |
 |---|---|---|
-| R-001～003 | decay_score 未参与评分；get_note 的访问计数未接入实际召回，排序新鲜度仍用 updated_at。暂未决定引入访问强化，应先评测。 | `storage/note_repo.py`、`services/note_service.py`、`retrieval_service.py` |
-| R-006 | strength 只影响关系遍历优先级，不直接改变排序分数。是否加入评分待验证。 | `storage/note_link_repo.py`、`services/retrieval_service.py` |
-| R-014 | UserRepo.remove_persona 只改用户列表，persona_definition 仍会被 Authorizer 作为归属兜底，不能真正撤权。当前无调用方；接删除角色功能前应修复。 | `storage/user_repo.py`、`services/authz.py` |
-| R-015 | persona_definition 缺少用户/角色唯一约束；is_archived 没有完整归档入口。并发 put 可能产生多行，get 只取一行。 | `storage/persona_repo.py`、`storage/schema.sql` |
+| R-001～003 | decay_score 未参与评分；get_note 的访问计数未接入实际召回，排序新鲜度仍用 updated_at。暂未决定引入访问强化，应先评测。 | `memory/notes/repository.py`、`memory/notes/service.py`、`memory/retrieval/service.py` |
+| R-006 | strength 只影响关系遍历优先级，不直接改变排序分数。是否加入评分待验证。 | `memory/notes/links.py`、`memory/retrieval/service.py` |
 
 ## 尚未决定或实现
+
+- 按业务模块重构：角色、会话与记忆边界已完成，R-014/R-015 已修复；离线评测已移出生产服务，公共执行与入口收敛按 [架构迁移方案](docs/ARCHITECTURE.md) 继续推进。停用/恢复目前为业务入口，尚未增加管理页面或公开接口。
 
 - 语义检索/重排与语义去重：目前词法入口对改述、指代仍会漏召回，固定集合 Recall@5 为 78.6%。
 - contradicts：尚未增加“冲突但无法确定先后”的边，当前仅支持三种确定关系。

@@ -1,6 +1,10 @@
 # 运行、自动任务与恢复
 
-当前 schema v5。Web 服务启动后每 15 秒扫描，先恢复持久任务，再创建到期工作。手机页面关闭或切后台不负责维持任务；Python 服务仍须运行。
+当前 schema v6。Web 服务启动后每 15 秒扫描，先恢复持久任务，再创建到期工作。手机页面关闭或切后台不负责维持任务；Python 服务仍须运行。
+
+记忆业务调度位于 memory/scheduling.py 的 MemoryScheduler，显式接收配置和业务服务，不依赖 AppContext。原话积累通过会话查询读取，固定范围、进度与诊断 SQL 归各自仓库；整理和摘要图分别位于 memory/extraction/workflow.py、memory/summaries/workflow.py。记忆路由只调用授权用例，阈值、模型预算和任务恢复规则保持不变。
+
+角色停用统一经过 PersonaService.deactivate：有效列表撤权与聊天取消、后台租约失效同事务生效，保留已有消息和记忆。restore 仅将因停用中止的记忆/摘要固定范围重新排队；新执行领取新租约，旧结果不能写回，聊天不自动重发。原先已终止的失败任务不因停用/恢复而重试。
 
 ## 自动触发
 
@@ -21,11 +25,15 @@ note 整理另取最多 12 条/约 4000 字候选及最近 6 条/约 2000 字参
 
 ## 聊天消息与后台回复
 
-接收输入时，用户消息和 queued generation 同事务保存。client_message_id 在同一聊天内防重；相同 ID 内容不一致会拒绝。模型默认可用 `<message_break>` 输出 1～3 条回复，完整消息逐条保存，草稿不参与记忆。
+接收输入时，用户消息和 queued generation 同事务保存。client_message_id 在同一聊天内防重；相同 ID 内容不一致会拒绝。模型默认可用 `<message_break>` 输出 1～3 条回复，分隔符前后不要求换行；普通换行保留在同一条消息中。完整消息逐条保存，草稿不参与记忆。
 
 新输入逻辑取消该聊天旧生成的未完成输出，已经保存的消息保留。断线只停止推送，服务器继续生成。前端通过 HTTP 确认 outbox、恢复 generation/历史，不依赖 WebSocket ready；过滤旧响应并按正式 message ID 去重。回到前台恢复完整消息，不恢复中断的逐字草稿。
 
 queued 生成在启动/扫描时恢复；过期 running 生成保留失败，避免擅自重复可能已交付的回复。没有部分正式输出的最后一条失败回复可沿用原用户消息重试。取消不能保证服务商立刻停止计费。
+
+会话执行集中在 conversations/execution.py 的 GenerationService：HTTP/WS 共用 submit、retry、snapshot/latest，服务扫描调用 recover；CLI 同步使用相同的 ChatService。WS 只桥接回调与页面事件循环，不创建生成线程。订阅异常不影响落库，同一实例的重复启动与订阅合并，执行权仍由 SQLite claim 决定。流式正文过滤与正式回复拆分也归会话模块，时间格式转换留在 Web 层。
+
+聊天没有斜杠退出命令，`/quit`、`/exit` 均为普通消息。调试 CLI 在 EOF 或 Ctrl+C 时结束循环，不触发记忆整理；关闭终端也不承担保存或整理的业务职责。CLI 目前未启动 Web 宿主的持续扫描，公共生命周期在下一阶段统一，已保存原话供后续调度处理。
 
 已读游标只前进：当前可见会话滚到最新才标为已读，后台/其他页面保持未读；旧计数响应不能复活红点。当前没有跨设备已读同步。
 
@@ -45,6 +53,8 @@ queued 生成在启动/扫描时恢复；过期 running 生成保留失败，避
 
 记忆任务的模型、工具及纠错节点共用上述总时限。LangGraph 只编排一次已领取任务内部的步骤，不再叠加 RetryPolicy 或图检查点。退出/失租后仍由原 SQLite 任务恢复整批，已提交状态和旧 token 检查继续决定能否写入。
 
+摘要同样由图编排：先加载和判断，复用/清空可直接校验提交；需要生成时最多两次模型调用，第二次仅用于定向纠错。两类图都由原服务领取任务并管理执行，ctx.workflows 中只是共享的编译图引用。
+
 `task_attempt` 保存逐次执行、固定范围、心跳和分类；`task_event` 保存阶段和 trace ID。attempt_count 只是当前快速重试预算，完整次数看 sequence。写入、进度及成功记录同事务提交。完整请求/原始回复不放状态接口，保存在 [trace 文件](TRACING.md)。
 
 ## 配置与接口
@@ -53,7 +63,7 @@ queued 生成在启动/扫描时恢复；过期 running 生成保留失败，避
 
 `COMPANION_AUTO_MEMORY=0` 关闭新自动触发，已持久化任务仍恢复。旧 `COMPANION_IDLE_MINUTES` 只表示逻辑会话边界，marker 不代表记忆处理成功。
 
-HTTP 定义直接看 `api/routes/chat.py`、`memory.py` 或服务的 `/docs`。主要诊断接口位于 `/api/persona/{user}/{persona}/` 下：memory-jobs、summary-jobs、summary-status、fact-changes、task-attempts；均检查 PIN 与角色归属。`/api/health` 返回 schema_version、auto_memory 和 memory_idle_seconds。
+HTTP 定义直接看 `entrypoints/web/routes/chat.py`、`memory.py` 或服务的 `/docs`。主要诊断接口位于 `/api/persona/{user}/{persona}/` 下：memory-jobs、summary-jobs、summary-status、fact-changes、task-attempts；均检查 PIN 与角色归属。`/api/health` 返回 schema_version、auto_memory 和 memory_idle_seconds。
 
 ## 升级与备份
 

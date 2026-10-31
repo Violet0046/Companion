@@ -36,11 +36,19 @@
 
 记忆图另记录 graph.node 和 tool.result，沿 load_input/prefetch/model/validate/tools/repair/commit 对照实际分支。ToolRequest 的 validation.passed 只表示只读请求结构合法，不能当作最终 Draft 通过或写入成功。初始 input_case 与最终 input_case.final 的候选集合可能不同，补查材料同时出现在下一次模型请求中。
 
+摘要图记录 load_input/decide/reuse/clear/model/validate/repair/commit。复用和清空没有 llm_calls；不能因为有图节点就视为产生模型费用。
+
+三层逐次调用在 llm_calls[].usage 统一记录 input_tokens、output_tokens、cached_input_tokens、uncached_input_tokens、reasoning_tokens 和 source，并保留 elapsed_ms。OpenAI 兼容接口的输入计数包含缓存读取；reasoning_tokens 是输出的细分项，不另加一次。未返回的字段为 null，不默认成 0；旧的 tokens_in_est/tokens_out_est 仍明确是字符粗估，不参与实际合计。
+
+流式默认请求 include_usage；不支持的服务可设 COMPANION_STREAM_USAGE=0，不因统计参数被拒绝而自动再发收费请求。trace list/show 合计逐次调用并显示各字段覆盖次数；缓存命中率只在所有调用都返回输入及缓存计数时计算。金额须另按实际服务费率计算，代码不写死价格。
+
 摘要 task.input_ready 的 journal_events 是原始范围内操作数，changes 是合并后的实质变化数。原始逐条流水通过 fact-changes 或数据库核对，不再把所有证据和重复快照发送给模型。零净变化复用仍有任务/提交记录，但没有模型请求文件。
 
 请求在调用模型前落盘。接收正文或独立思考字段时，约每 0.5 秒保存一次快照；正常结束和异常退出时补存最后内容。`response_state=partial` 表示异常前收到的部分输出，`none` 表示没有正文，`complete` 表示完整返回；进行中的调用使用 `waiting`/`streaming`。进程硬退出时文件可能仍标 `running`，需结合执行表后续的中断/接管记录判断，不能当作成功，也不能恢复尚未落盘的最后分片。
 
 文件更新使用临时文件替换，避免读到半个 JSON。诊断目录写入失败会在服务日志警告一次，并继续业务流程。请求中的授权头、API key 等选项脱敏；原始业务文本保留以便核查，不对来源正文做摘要。
+
+临时文件名每次独立，Windows 短暂占用目标文件时最多短暂重试替换；持续失败仍告警且不影响业务。评测报告标记 trace_write_error，出现时不把已保存的调用合计当作完整账单。
 
 ## 怎么查看
 
