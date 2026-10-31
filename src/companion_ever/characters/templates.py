@@ -49,6 +49,25 @@ PERSONA_TEMPLATES: dict[str, dict] = {
 
 # === 接口函数 ===
 
+# 表单字段描述：前端按这个渲染「自定义角色」表单。
+# 与 PERSONA_TEMPLATES 的结构同源——type=text 是字符串，type=list 是字符串数组。
+TEMPLATE_FIELDS: list[dict] = [
+    {"key": "name", "label": "名字", "type": "text", "required": True},
+    {"key": "identity", "label": "一句话身份", "type": "text", "required": True},
+    {"key": "personality", "label": "性格", "type": "list"},
+    {"key": "background", "label": "背景", "type": "text"},
+    {"key": "style", "label": "说话风格", "type": "text"},
+    {"key": "relationship", "label": "与用户的关系", "type": "text"},
+    {"key": "values", "label": "价值观", "type": "list"},
+    {"key": "avoid", "label": "不会做的事", "type": "list"},
+    {"key": "habits", "label": "习惯", "type": "list"},
+]
+
+# 模板里写死的用户名占位符 → 实际 user_id。
+# "周艺科(用户)" 保留"(用户)"后缀，读起来仍是"某某（作为用户）"。
+_USER_PLACEHOLDERS = (("周艺科(用户)", "{user}(用户)"), ("周艺科", "{user}"))
+
+
 def get_template(name: str) -> dict:
     """获取模板的 persona_basics fields（dict）。
 
@@ -67,6 +86,48 @@ def get_template(name: str) -> dict:
     return PERSONA_TEMPLATES[name]
 
 
+def list_templates() -> list[str]:
+    """所有模板 ID。"""
+    return list(PERSONA_TEMPLATES)
+
+
+def _substitute_user(fields: dict, user_id: str) -> dict:
+    """把模板里写死的"周艺科"等用户名占位符替换成实际 user_id。
+
+    递归扫描所有字符串字段。"我"/"自己"属于角色视角，不需要替换。
+    返回新 dict，不修改原模板。
+    """
+    def _walk(obj):
+        if isinstance(obj, dict):
+            return {k: _walk(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_walk(v) for v in obj]
+        if isinstance(obj, str):
+            for old, new in _USER_PLACEHOLDERS:
+                obj = obj.replace(old, new.format(user=user_id))
+            return obj
+        return obj
+
+    return _walk(fields)
+
+
+def build_definition(name: str, user_id: str) -> str:
+    """用模板生成角色的 JSON 设定（用户占位符已替换成实际 user_id）。
+
+    Args:
+        name: 模板 ID
+        user_id: 实际用户 ID
+
+    Returns:
+        JSON 字符串，写入 persona_definition.content
+
+    Raises:
+        KeyError: 模板不存在
+    """
+    fields = _substitute_user(get_template(name), user_id)
+    return json.dumps(fields, ensure_ascii=False, indent=2)
+
+
 def template_to_json(name: str) -> str:
     """获取模板的 persona_basics JSON 字符串（用于写入 note.content）。
 
@@ -83,8 +144,28 @@ def template_to_json(name: str) -> str:
     return json.dumps(template, ensure_ascii=False, indent=2)
 
 
+def template_cards() -> list[dict]:
+    """给前端的模板卡片数据。
+
+    fields 是完整的 persona_basics——前端选模板后要拿它预填表单。
+    """
+    cards = []
+    for template_id, fields in PERSONA_TEMPLATES.items():
+        cards.append({
+            "id": template_id,
+            "name": fields.get("name", template_id),
+            "identity": fields.get("identity", ""),
+            "fields": dict(fields),
+        })
+    return cards
+
+
 __all__ = [
     "PERSONA_TEMPLATES",
+    "TEMPLATE_FIELDS",
     "get_template",
+    "list_templates",
+    "build_definition",
+    "template_cards",
     "template_to_json",
 ]

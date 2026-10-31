@@ -2,11 +2,23 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+import json
 
 from companion_ever.characters.access import Authorizer
 from companion_ever.characters.repository import PersonaRepo
+from companion_ever.characters.templates import (
+    TEMPLATE_FIELDS, build_definition, template_cards)
 from companion_ever.infrastructure.database.connection import transaction
 from companion_ever.characters.users import UserRepo
+
+
+def _basics_of(content: str) -> dict:
+    """角色设定文本 → dict；不是 JSON 时原样留着。"""
+    try:
+        parsed = json.loads(content)
+    except (ValueError, TypeError):
+        return {'_raw': content}
+    return parsed if isinstance(parsed, dict) else {'_raw': content}
 
 
 class PersonaService:
@@ -88,3 +100,38 @@ class PersonaService:
     def list_users(self):
         """现有联系人入口的用户列表，不读取角色的历史留存数据。"""
         return self.user_repo.list_all()
+
+    def templates(self):
+        """角色模板目录 + 自定义表单的字段描述。"""
+        return {'templates': template_cards(), 'fields': TEMPLATE_FIELDS}
+
+    def create_from_template(self, user_id: str, persona_id: str, template_id: str) -> None:
+        """用内置模板创建角色（模板里的用户占位符替换成实际 user_id）。
+
+        Raises:
+            KeyError: 模板不存在
+            ValueError: 用户/角色已存在或设定为空
+        """
+        definition = build_definition(template_id, user_id)
+        self.create_persona(user_id, persona_id, definition)
+
+    def list_archived(self, user_id: str) -> list[dict]:
+        """已停用（删除）的角色。
+
+        判定：设定行还在，但不在有效角色列表里——停用只撤销访问，数据保留。
+        """
+        if not self.user_repo.exists(user_id):
+            raise PermissionError(f"User '{user_id}' 不存在")
+        active = set(self.user_repo.list_personas(user_id))
+        archived = []
+        for row in self.persona_repo.list_by_user(user_id):
+            persona_id = row['persona_id']
+            if persona_id in active:
+                continue
+            basics = _basics_of(row['content'])
+            archived.append({
+                'persona_id': persona_id,
+                'name': basics.get('name') or persona_id,
+                'identity': basics.get('identity', ''),
+            })
+        return archived

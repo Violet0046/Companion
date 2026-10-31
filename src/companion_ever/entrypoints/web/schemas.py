@@ -111,6 +111,17 @@ class SettingsIn(BaseModel):
     show_thinking: bool = True
 
 
+class PersonaCreateIn(BaseModel):
+    """创建角色。
+
+    两条路径：用 template_id 走内置模板，或用 definition 传自己填的 JSON。
+    """
+
+    persona_id: str
+    template_id: str = ""
+    definition: Optional[str] = None
+
+
 class PersonaSummary(BaseModel):
     """角色总览——前端顶栏 + "她记得什么"面板用。"""
 

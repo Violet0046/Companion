@@ -79,9 +79,10 @@ def create_app(
         return response
 
     # --- 路由 ---
-    from companion_ever.entrypoints.web.routes import chat, memory
+    from companion_ever.entrypoints.web.routes import chat, memory, persona
 
     app.include_router(chat.router)
+    app.include_router(persona.router)
     app.include_router(memory.router)
 
     # 记录（抽取记忆）跑完后，服务端**主动推送** record_done 给前端。

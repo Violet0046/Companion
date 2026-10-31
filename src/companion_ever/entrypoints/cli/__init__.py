@@ -20,7 +20,7 @@ from typing import Optional
 
 from companion_ever.config import AppConfig, LLMConfig
 from companion_ever.bootstrap.app import build_app
-from companion_ever.characters.templates import PERSONA_TEMPLATES
+from companion_ever.characters.templates import build_definition, list_templates
 from companion_ever.utils.text import strip_format_prefix
 from companion_ever.entrypoints.cli.maintain_cmd import cmd_backup
 from companion_ever.entrypoints.cli.trace_cmd import (
@@ -29,35 +29,6 @@ from companion_ever.entrypoints.cli.trace_cmd import (
     cmd_trace_show,
     cmd_trace_show_raw,
 )
-
-
-def _substitute_user_in_template(fields: dict, user_id: str) -> dict:
-    """把模板里写死的"周艺科"等用户名占位符替换成实际 user_id。
-
-    递归扫描所有 string 字段，替换常见的用户身份代词：
-    - "周艺科(用户)" / "周艺科" / "周艺科(用户)" → "{user_id}"
-    - "我" / "自己" 保留（属于角色视角，不需要换）
-
-    返回新 dict（不修改原 template）。
-    """
-    # 写死的角色身份占位符 → 实际 user_id
-    substitutions = {
-        "周艺科(用户)": f"{user_id}(用户)",
-        "周艺科": user_id,
-    }
-
-    def _walk(obj):
-        if isinstance(obj, dict):
-            return {k: _walk(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_walk(v) for v in obj]
-        if isinstance(obj, str):
-            for old, new in substitutions.items():
-                obj = obj.replace(old, new)
-            return obj
-        return obj
-
-    return _walk(fields)
 
 
 def _build_app(db_path: str, llm_cfg: Optional[LLMConfig] = None) -> "AppContext":
@@ -101,21 +72,13 @@ def cmd_setup(args) -> int:
         # 2. 准备 definition
         if args.template:
             # 用模板时，把模板里写死的"周艺科"替换成实际 user_id
-            template_fields = PERSONA_TEMPLATES[args.template].copy()
-            template_fields = _substitute_user_in_template(
-                template_fields, args.user,
-            )
-            definition = json.dumps(template_fields, ensure_ascii=False, indent=2)
+            definition = build_definition(args.template, args.user)
             print(f"[--] Using template '{args.template}' (with user='{args.user}')")
         elif args.definition:
             definition = args.definition
         else:
             # 默认用 template hot_girlfriend
-            template_fields = PERSONA_TEMPLATES["hot_girlfriend"].copy()
-            template_fields = _substitute_user_in_template(
-                template_fields, args.user,
-            )
-            definition = json.dumps(template_fields, ensure_ascii=False, indent=2)
+            definition = build_definition("hot_girlfriend", args.user)
             print(f"[--] No template specified, using 'hot_girlfriend'")
 
         # 3. 创建 persona
@@ -251,7 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--user", required=True, help="用户名")
     p_setup.add_argument("--persona", required=True, help="persona ID")
     p_setup.add_argument(
-        "--template", choices=list(PERSONA_TEMPLATES.keys()),
+        "--template", choices=list_templates(),
         help="使用内置 persona 模板",
     )
     p_setup.add_argument(

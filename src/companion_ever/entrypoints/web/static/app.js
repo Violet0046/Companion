@@ -169,6 +169,12 @@ async function loadUsers() {
   } catch (e) {
     S.users = [];
   }
+  S.archived = [];
+  if (S.user) {
+    try {
+      S.archived = await api(`/api/archived-personas/${enc(S.user)}`);
+    } catch (e) { /* 已删除清单拿不到就先不显示 */ }
+  }
 }
 
 function allPersonas() {
@@ -448,6 +454,15 @@ function renderContacts() {
       <div class="cell-sub">${esc(personaTag(p))}</div></div>
     </div>`).join('');
   }
+  const archived = (S.archived || []).filter((p) => !q || p.persona_id.toLowerCase().includes(q));
+  if (archived.length) {
+    html += '<div class="group-label">已删除的角色</div>';
+    html += archived.map((p) => `<div class="cell" data-archived="${escAttr(p.persona_id)}">
+      <div class="ava" style="background:var(--surface-2);color:var(--text-muted)">${esc(p.name.slice(0, 1))}</div>
+      <div class="cell-body"><div class="cell-title">${esc(p.name)}</div><div class="cell-sub">${esc(p.identity || '已删除')}</div></div>
+      <button class="btn-mini persona-restore" data-archived="${escAttr(p.persona_id)}">恢复</button>
+    </div>`).join('');
+  }
   html += '<div class="group-label">功能</div>';
   html += `<div class="cell" id="cell-new-persona"><div class="ava" style="background:var(--surface-2);color:var(--text-muted)">+</div>
     <div class="cell-body"><div class="cell-title">新建角色</div><div class="cell-sub">创建一个新的 AI 伴侣</div></div></div>`;
@@ -458,9 +473,158 @@ function renderContacts() {
     el.onclick = () => openProfile(el.dataset.user, el.dataset.persona);
   });
   const nb = $('cell-new-persona');
-  if (nb) nb.onclick = () => toast('新建角色：还没做（需要后端加一个接口）', 3000);
+  if (nb) nb.onclick = () => openCreatePersona();
   const gb = $('cell-group-chat');
   if (gb) gb.onclick = () => toast('群聊：还没做', 2500);
+  box.querySelectorAll('.persona-restore').forEach((el) => {
+    el.onclick = (ev) => {
+      ev.stopPropagation();
+      restorePersona(S.user, el.dataset.archived);
+    };
+  });
+}
+
+/* ---------- 新建 / 删除角色 ---------- */
+
+const PF = { fields: [], templates: [], activeTemplate: '' };
+
+function openCreatePersona() {
+  const dlg = $('dialog-persona');
+  if (!dlg) return;
+  dlg.classList.remove('hidden');
+  $('pf-persona-id').value = '';
+  PF.activeTemplate = '';
+  api('/api/persona-templates').then((data) => {
+    PF.fields = data.fields || [];
+    PF.templates = data.templates || [];
+    renderTemplateCards();
+    renderPersonaFields();
+  }).catch((e) => { toast('拿不到角色模板：' + e.message); });
+}
+
+function renderTemplateCards() {
+  const box = $('tpl-list');
+  if (!box) return;
+  box.innerHTML = PF.templates.map((t) => `
+    <button type="button" class="tpl-card" data-tpl="${escAttr(t.id)}">
+      <div class="tpl-name">${esc(t.name)}</div>
+      <div class="tpl-id">${esc(t.identity || t.id)}</div>
+    </button>`).join('');
+  box.querySelectorAll('.tpl-card').forEach((el) => {
+    el.onclick = () => pickTemplate(el.dataset.tpl);
+  });
+}
+
+/** 模板内容 → 表单值（列表拍平成、分隔的字符串）。纯函数，不碰 DOM。 */
+function templateValues(fields, template) {
+  const values = {};
+  fields.forEach((f) => {
+    const v = template ? template[f.key] : null;
+    values[f.key] = v == null ? '' : (Array.isArray(v) ? v.join('、') : String(v));
+  });
+  return values;
+}
+
+/** 表单值 → persona_basics。空值不写进去；列表按、分隔拆开。纯函数，不碰 DOM。 */
+function buildDefinition(fields, values) {
+  const out = {};
+  fields.forEach((f) => {
+    const raw = (values[f.key] || '').trim();
+    if (!raw) return;
+    out[f.key] = f.type === 'list'
+      ? raw.split(/[、,，]/).map((s) => s.trim()).filter(Boolean)
+      : raw;
+  });
+  return out;
+}
+
+/** 选模板：把模板内容填进表单；没填过的字段清空，避免残留上一个模板。 */
+function pickTemplate(id) {
+  const tpl = PF.templates.find((t) => t.id === id);
+  if (!tpl) return;
+  PF.activeTemplate = id;
+  document.querySelectorAll('#tpl-list .tpl-card').forEach((el) => {
+    el.classList.toggle('is-active', el.dataset.tpl === id);
+  });
+  const values = templateValues(PF.fields, tpl.fields || {});
+  PF.fields.forEach((f) => {
+    const el = $('pf-' + f.key);
+    if (el) el.value = values[f.key];
+  });
+  const idInput = $('pf-persona-id');
+  if (idInput && !idInput.value) idInput.value = tpl.name || id;
+}
+
+function renderPersonaFields() {
+  const box = $('pf-fields');
+  if (!box) return;
+  box.innerHTML = PF.fields.map((f) => {
+    const hint = f.type === 'list' ? '（用、分隔）' : '';
+    const label = `<label class="dlg-field-label" for="pf-${escAttr(f.key)}">${esc(f.label)}${f.required ? ' *' : ''}${hint}</label>`;
+    const input = f.type === 'list'
+      ? `<input id="pf-${escAttr(f.key)}" class="dlg-input" autocomplete="off">`
+      : `<textarea id="pf-${escAttr(f.key)}" class="dlg-textarea" rows="2"></textarea>`;
+    return label + input;
+  }).join('');
+}
+
+/** 表单 → persona_basics。 */
+function collectPersonaDefinition() {
+  const values = {};
+  PF.fields.forEach((f) => {
+    const el = $('pf-' + f.key);
+    if (el) values[f.key] = el.value || '';
+  });
+  return buildDefinition(PF.fields, values);
+}
+
+async function savePersona() {
+  const personaId = ($('pf-persona-id').value || '').trim();
+  if (!personaId) { toast('给角色起个标识'); return; }
+  const definition = collectPersonaDefinition();
+  if (!definition.name || !definition.identity) { toast('名字和一句话身份都要填'); return; }
+  const user = S.user;
+  try {
+    await api(`/api/persona/${enc(user)}`, {
+      method: 'POST',
+      body: JSON.stringify({ persona_id: personaId, definition: JSON.stringify(definition) }),
+    });
+    $('dialog-persona').classList.add('hidden');
+    toast('角色已创建');
+    await loadUsers();
+    await loadConvs();
+    renderContacts();
+    await openChat(user, personaId);
+  } catch (e) {
+    toast('创建失败：' + e.message);
+  }
+}
+
+/** 删除角色 = 停用：撤销访问，记忆和聊天记录都留着，可以恢复。 */
+async function deletePersona(user, persona) {
+  if (!confirm(`删除角色「${persona}」？\n\n记忆和聊天记录都会保留，之后可以在「已删除的角色」里恢复。`)) return;
+  try {
+    await api(`/api/persona/${enc(user)}/${enc(persona)}`, { method: 'DELETE' });
+    toast('角色已删除');
+    showView('messages');
+    await loadUsers();
+    await loadConvs();
+    renderContacts();
+  } catch (e) {
+    toast('删除失败：' + e.message);
+  }
+}
+
+async function restorePersona(user, persona) {
+  try {
+    await api(`/api/persona/${enc(user)}/${enc(persona)}/restore`, { method: 'POST' });
+    toast('已恢复');
+    await loadUsers();
+    await loadConvs();
+    renderContacts();
+  } catch (e) {
+    toast('恢复失败：' + e.message);
+  }
 }
 
 /* ---------- 我（Tab 3） ---------- */
@@ -697,12 +861,16 @@ function renderProfile(user, persona, info) {
       <div class="row" id="row-dates"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>
       <div class="row" id="row-relation"><span>关系状态</span><span class="row-val">${esc(relStage(info))} <span class="chev">›</span></span></div>
     </div>
+    <div class="dlg-danger">
+      <button class="dlg-danger-btn" id="btn-persona-delete">删除角色</button>
+    </div>
   `;
   const q = (id) => body.querySelector('#' + id);
   q('row-chat').onclick = () => openChat(user, persona);
   q('row-memory').onclick = () => openMemory(user, persona);
   q('row-dates').onclick = () => openCalendar(user, persona);
   q('row-relation').onclick = () => openRelation(user, persona);
+  q('btn-persona-delete').onclick = () => deletePersona(user, persona);
 }
 
 /* ---------- 关系状态（独立子页面） ---------- */
@@ -2175,6 +2343,11 @@ $('pin-submit').onclick = async () => {
   }
 };
 $('pin-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pin-submit').click(); });
+
+/* 新建角色对话框 */
+$('btn-persona-close').onclick = () => $('dialog-persona').classList.add('hidden');
+$('btn-persona-cancel').onclick = () => $('dialog-persona').classList.add('hidden');
+$('btn-persona-save').onclick = savePersona;
 
 /* 往上滑到顶 → 加载更早的 */
 $('chat').addEventListener('scroll', () => {

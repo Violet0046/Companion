@@ -56,7 +56,7 @@ memory 需要显式区分私聊与群聊的来源、可见范围和关系对象�
 
 ### 已落地的角色入口与一致性约定
 
-- `characters/service.py` 的 PersonaService 是配置与生命周期入口；`characters/editing.py` 的 PersonaEditService 只读取和更新该入口，模型调用在事务外。
+- `characters/service.py` 的 PersonaService 是配置与生命周期入口。角色设定由用户直接编辑，不再经模型改写——模型辅助编辑的服务与模板已删除，避免"模型改了人设但用户不知情"。
 - `characters/access.py` 的 Authorizer 只依赖用户有效角色列表，不依赖 NoteRepo，不按留存设定兜底授权。笔记归属与角色有效性共同由 NoteService 检查；NoteService 的设定读写方法已删除。
 - API 总览、CLI 展示及 PromptService 统一从 PersonaService.get_definition 读取设定。旧 services/persona_*、services/authz 和 storage/persona_repo 路径已删除；共享 JSON 响应解析移至 infrastructure/llm/json_output.py，角色编辑不反向依赖业务模块。
 - create_persona 在一个事务中注册角色、写设定、初始化两个空摘要；停用的同名角色必须通过 restore 恢复，不能以重新创建覆盖旧设定。
@@ -66,6 +66,26 @@ memory 需要显式区分私聊与群聊的来源、可见范围和关系对象�
 - schema v6 添加 persona_definition.revision 与有效设定唯一索引。旧库只增加字段与约束，不删除、归档或猜测选取设定；发现重复有效行时回滚 v6 步骤并报告，需先人工确认重复设定。可用 tools/verify_migration.py 在只读源库的临时副本上验证。
 
 验收入口：tests/test_persona_service.py 覆盖跨用户隔离、创建/停用失败回滚、直接笔记访问撤权、保留恢复、三层模型迟到结果与编辑竞争、旧租约拒写、v5→v6 迁移和重复约束回滚。其他交互链路继续由完整脚本集验证。
+
+### 已落地的角色创建与删除入口
+
+Web 端原先没有角色管理入口——创建只能走 CLI `setup`，`deactivate`/`restore` 已实现却零调用方。现在补上：
+
+| 路由 | 作用 |
+|---|---|
+| `GET /api/persona-templates` | 模板卡片 + 自定义表单的字段描述 |
+| `POST /api/persona/{user_id}` | 创建。body: `{persona_id, template_id}` 或 `{persona_id, definition}` |
+| `DELETE /api/persona/{user_id}/{persona_id}` | 删除 = 停用 |
+| `POST /api/persona/{user_id}/{persona_id}/restore` | 恢复 |
+| `GET /api/archived-personas/{user_id}` | 已删除的角色清单 |
+
+- **两条创建路径**：用内置模板（服务端把模板里写死的用户名占位符替换成实际 user_id），或自己填字段（前端按字段描述拼 JSON）。
+- **表单字段描述由后端给出**（`characters/templates.py` 的 `TEMPLATE_FIELDS`），前端照它渲染输入框 —— 加字段不用改前端。
+- **"已删除"的判定**：`persona_definition` 行还在，但不在 `user.persona_ids` 里。停用只撤销访问，数据全部保留；`is_archived` 列从未被置 1，是遗留列，不要依赖它。
+- 硬删除（级联清空 16 张表）**不在范围内** —— 误删不可逆，且有 6 张表没有归属列需要靠父表 join。
+- 模板的用户占位符替换是业务规则，住在 `characters/templates.py`（CLI 与 Web 共用），入口层不再自己实现一遍。
+
+验收入口：tests/test_persona_management.py 覆盖模板列表、两条创建路径、重复创建与停用后同名创建、删除保留数据与恢复、跨用户与 PIN；tests/test_web_persona_ui.py 用 node 跑前端表单组装逻辑（模板预填、列表拆分、往返一致）。
 
 ### 已落地的会话入口与执行约定
 
