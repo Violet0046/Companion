@@ -31,11 +31,11 @@ class FakeLLM:
 
 def main() -> int:
     import uvicorn
-    from companion_ever.api.server import create_app
-    from companion_ever.app import build_app
+    from companion_ever.entrypoints.web.server import create_app
+    from companion_ever.bootstrap.app import build_app
     from companion_ever.config import AppConfig, WebConfig
-    import companion_ever.app as app_mod
-    from companion_ever.llm.traced_client import TracedLLMClient
+    import companion_ever.bootstrap.app as app_mod
+    from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
 
     tmpdir = tempfile.mkdtemp(prefix="history_test_")
     app_mod.create_llm_client = lambda cfg: TracedLLMClient(FakeLLM())

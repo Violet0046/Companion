@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def main() -> int:
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     raw_css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")

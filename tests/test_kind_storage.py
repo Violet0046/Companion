@@ -5,9 +5,9 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 from test_durable_flow import context
-from companion_ever.storage.db import init_db
+from companion_ever.infrastructure.database.connection import init_db
 from companion_ever.domain.enums import MemoryKind
-from companion_ever.services.memory_search import MemorySearch
+from companion_ever.memory.retrieval.query import MemorySearch
 
 
 def proposal(mid, quote, **changes):
@@ -36,7 +36,7 @@ def production(path):
     try:
         assert 'type' not in {r['name'] for r in ctx.conn.execute('PRAGMA table_info(note)')}
         assert not ctx.repos.note.find(user_id='alice',persona_id='one')
-        assert ctx.services.note.get_persona_definition('alice','one')['content']=='{}'
+        assert ctx.services.persona.get_definition('alice','one')['content']=='{}'
         out=extract(ctx,'我住在杭州',lambda mid,_:draft([proposal(mid,'我住在杭州')]))
         assert out['job_status']=='succeeded',out
         first=out['note_ids']['p1']
@@ -101,7 +101,7 @@ def production(path):
         assert out['job_status']=='failed' and '候选记忆已改变' in out['errors'][0],out
 
         from fastapi.testclient import TestClient
-        from companion_ever.api.server import create_app
+        from companion_ever.entrypoints.web.server import create_app
         from companion_ever.config import WebConfig
         with TestClient(create_app(ctx,WebConfig(pin='test-pin'))) as client:
             base='/api/persona/alice/one/notes'
@@ -129,7 +129,7 @@ def migration(path):
     conn.commit(); conn.close()
     conn=init_db(path)
     try:
-        assert conn.execute('PRAGMA user_version').fetchone()[0]==5
+        assert conn.execute('PRAGMA user_version').fetchone()[0]==6
         assert 'type' not in {r['name'] for r in conn.execute('PRAGMA table_info(note)')}
         assert [tuple(r) for r in conn.execute('SELECT id,kind FROM note ORDER BY id')]==[('e','episode'),('f','fact')]
         assert conn.execute('SELECT id FROM persona_definition').fetchone()[0]=='config'
@@ -166,7 +166,7 @@ def rejected_migration(path):
 
 
 def relation_guards(path):
-    from companion_ever.storage.note_link_repo import NoteLinkRepo
+    from companion_ever.memory.notes.links import NoteLinkRepo
     ctx=context(path)
     try:
         ctx.services.persona.create_persona('alice','two','{}')

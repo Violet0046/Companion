@@ -9,8 +9,8 @@ from pathlib import Path
 from test_durable_flow import context
 from test_kind_storage import draft,proposal
 from test_summary_evolution import empty,item,service
-from companion_ever.llm.openai_client import OpenAICompatibleClient
-from companion_ever.services.task_errors import can_retry,describe_error
+from companion_ever.infrastructure.llm.openai_client import OpenAICompatibleClient
+from companion_ever.runtime.errors import can_retry,describe_error
 
 
 def main():

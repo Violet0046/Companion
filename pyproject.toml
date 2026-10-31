@@ -26,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-companion-cli = "companion_ever.cli:main"
+companion-cli = "companion_ever.entrypoints.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -36,4 +36,4 @@ where = ["src"]
 
 # PWA 前端静态文件（web/）跟着包一起装
 [tool.setuptools.package-data]
-companion_ever = ["web/*", "web/**/*", "prompts/*.txt", "storage/*.sql"]
+companion_ever = ["entrypoints/web/static/*", "entrypoints/web/static/**/*", "prompts/*.txt", "infrastructure/database/*.sql"]

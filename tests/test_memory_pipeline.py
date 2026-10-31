@@ -3,7 +3,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from test_chat_workflow import _make_ctx
+from test_chat_service import _make_ctx
 from companion_ever.domain.enums import MemoryKind
 
 
@@ -45,12 +45,11 @@ def main():
                              ('独特索引词', target))
             found = ctx.repos.note.search('独特索引词', user_id='alice', persona_id='one')
             assert target in {n.id for n in found}
-            # 图入口的轮次从数据库计算，不依赖调用方过期的状态。
+            # 聊天轮次由服务从数据库计算，调用方不再维护图状态。
             ctx.llm.chat.return_value = '好'
             before = ctx.services.conversation.get_max_turn_index('alice', 'one')
-            state = ctx.workflows.chat.invoke({'user_id': 'alice', 'persona_id': 'one',
-                                              'user_input': '继续', 'next_turn_index': 1})
-            assert state['next_turn_index'] == before + 2
+            assert ctx.services.chat.chat('alice', 'one', '继续') == '好'
+            assert ctx.services.conversation.get_max_turn_index('alice', 'one') == before + 1
             from unittest.mock import patch
             markers_before = ctx.conn.execute(
                 "SELECT count(*) FROM conversation_log WHERE role='session_close'"

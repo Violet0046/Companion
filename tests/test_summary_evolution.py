@@ -8,8 +8,8 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
 from test_durable_flow import context
 from companion_ever.domain.enums import MemoryKind
-from companion_ever.services.summary_service import SummaryService,SummaryDocument,Profile,Relationship
-from companion_ever.storage.db import init_db
+from companion_ever.memory.summaries.service import SummaryService,SummaryDocument,Profile,Relationship
+from companion_ever.infrastructure.database.connection import init_db
 
 
 def empty():
@@ -22,8 +22,15 @@ def item(fact):
 
 
 def service(ctx):
+    from companion_ever.memory.scheduling import MemoryScheduler
+    from companion_ever.bootstrap.lifecycle import build_lifecycle
     svc=SummaryService(ctx.services.note.authorizer,ctx.repos.note,ctx.repos.block,ctx.llm)
     ctx.services.summary=svc;ctx.services.prompt.summary_service=svc
+    ctx.workflows.summary=svc.graph
+    bg=MemoryScheduler(ctx.cfg.background,ctx.services.note.authorizer,ctx.services.conversation,ctx.services.session_close,svc)
+    ctx.services.background=bg
+    ctx.services.session_close.on_memory_settled=bg.memory_settled
+    ctx.lifecycle=build_lifecycle(ctx.cfg,ctx.conn,ctx.services)
     return svc
 
 
@@ -75,7 +82,7 @@ def evolution(path):
         assert b not in json.dumps(seen[-1])
         assert any(e['operation']=='update' and e['before']['content']=='用户住在杭州' for e in seen[-1]['changes'])
         prompt=ctx.services.prompt.build('alice','one',query='早上好')['system_prompt']
-        assert '基于事实演化的摘要' in prompt and '用户现在住在苏州' in prompt
+        assert '用户画像与关系概况' in prompt and '用户现在住在苏州' in prompt
         mid=ctx.services.conversation.log_turn(user_id='alice',persona_id='one',turn_index=1,role='user',content='用户现在住在苏州')
         ctx.conn.execute('INSERT INTO note_evidence(note_id,message_id,quote) VALUES (?,?,?)',(a,mid,'用户现在住在苏州'))
         assert '用户现在住在苏州' in svc.prompt_text('alice','one')
@@ -219,7 +226,7 @@ def batches_and_reactivation(path):
         assert {change['note_id'] for payload in seen for change in payload['changes']}==expected
         old=ctx.services.note.create_note('alice','one',MemoryKind.FACT,'旧地址杭州')
         new=ctx.services.note.create_note('alice','one',MemoryKind.FACT,'新地址苏州')
-        from companion_ever.storage.note_link_repo import NoteLinkRepo
+        from companion_ever.memory.notes.links import NoteLinkRepo
         NoteLinkRepo(ctx.conn).create(new,old,'supersedes','alice','one',reason='明确迁居',job_id=None)
         drain(svc)
         assert old not in {f['id'] for f in seen[-1]['current_facts']}
@@ -233,14 +240,14 @@ def batches_and_reactivation(path):
 def migration(path):
     from importlib import resources
     conn=sqlite3.connect(path)
-    conn.executescript(resources.files('companion_ever.storage').joinpath('schema.sql').read_text(encoding='utf-8'))
+    conn.executescript(resources.files('companion_ever.infrastructure.database').joinpath('schema.sql').read_text(encoding='utf-8'))
     conn.execute("INSERT INTO user(id) VALUES ('alice')")
     for nid,kind in [('fact','fact'),('episode','episode')]:
         conn.execute("INSERT INTO note(id,user_id,persona_id,kind,content) VALUES (?,'alice','one',?,'kept')",(nid,kind))
     conn.execute("INSERT INTO memory_block(id,user_id,persona_id,block_type,fields_json) VALUES ('old','alice','one','user_profile','{\"old\":true}')")
     conn.execute('PRAGMA user_version=3');conn.commit();conn.close()
     conn=init_db(path)
-    assert conn.execute('PRAGMA user_version').fetchone()[0]==5
+    assert conn.execute('PRAGMA user_version').fetchone()[0]==6
     assert [tuple(r) for r in conn.execute('SELECT note_id,operation FROM fact_change')]==[('fact','bootstrap')]
     assert conn.execute('SELECT fields_json FROM memory_block').fetchone()[0]=='{"old":true}'
     conn.close();conn=init_db(path)
@@ -284,7 +291,7 @@ def stale_and_fenced(path):
 def api_scope(path):
     import time
     from fastapi.testclient import TestClient
-    from companion_ever.api.server import create_app
+    from companion_ever.entrypoints.web.server import create_app
     from companion_ever.config import WebConfig
     ctx=context(path)
     try:
@@ -347,9 +354,45 @@ def note_job_evidence(path):
         ctx.conn.close()
 
 
+def graph_branches(path):
+    from companion_ever.infrastructure.tracing import TraceStore,set_default_store
+    ctx=context(path);store=TraceStore(path.parent/'summary-graph-traces');set_default_store(store)
+    try:
+        svc=service(ctx)
+        assert ctx.workflows.summary is svc.graph
+        from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
+        class Model:
+            model='fake';last_reasoning=None;last_usage=None
+            def chat(self,messages,**kwargs):return ctx.llm.chat(messages,**kwargs)
+        svc.llm=TracedLLMClient(Model())
+        assert {'load_input','decide','reuse','clear','model','validate','repair','commit'}<=svc.graph.get_graph().nodes.keys()
+        nid=ctx.services.note.create_note('alice','one',MemoryKind.FACT,'A grounded preference')
+        generate(ctx);drain(svc)
+        record=store.list_traces(kind='summary')[0][1]
+        assert record['status']=='ok'
+        nodes=lambda data:[step['detail']['node'] for step in data['steps'] if step['name']=='graph.node']
+        assert nodes(record)==['load_input','decide','model','validate','commit']
+        ctx.repos.note.update(nid,importance=.7);before=ctx.llm.chat.call_count;drain(svc)
+        record=store.list_traces(kind='summary')[0][1]
+        assert nodes(record)==['load_input','decide','reuse','validate','commit'] and not record['llm_calls']
+        ctx.repos.note.archive(nid);drain(svc)
+        record=store.list_traces(kind='summary')[0][1]
+        assert nodes(record)==['load_input','decide','clear','validate','commit'] and ctx.llm.chat.call_count==before
+        ctx.repos.note.unarchive(nid)
+        model=ctx.llm.chat.side_effect;seen=[]
+        def correction(messages,**kwargs):
+            seen.append(1)
+            return '{bad json' if len(seen)==1 else model(messages[:2],**kwargs)
+        ctx.llm.chat.side_effect=correction;drain(svc)
+        record=store.list_traces(kind='summary')[0][1]
+        assert nodes(record)==['load_input','decide','model','validate','repair','model','validate','commit']
+        assert len(record['llm_calls'])==2 and record['status']=='ok'
+    finally:ctx.conn.close();set_default_store(None)
+
+
 if __name__=='__main__':
     with tempfile.TemporaryDirectory() as tmp:
         for name,test in [('evolution',evolution),('atomic',atomic_and_retry),('batches',batches_and_reactivation),('migration',migration),
-                          ('stale',stale_and_fenced),('api',api_scope),('note-job',note_job_evidence),('continuous',continuous_prompt_context)]:
+                          ('stale',stale_and_fenced),('api',api_scope),('note-job',note_job_evidence),('continuous',continuous_prompt_context),('graph',graph_branches)]:
             test(Path(tmp)/(name+'.db'))
     print('[OK] incremental evidence, continuous chat context, deletion retraction, atomic cursor, retries and migration')

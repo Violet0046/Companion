@@ -5,8 +5,8 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from companion_ever.services.memory_draft import generate_draft, validate_draft
-from companion_ever.services.memory_evaluation import evaluate, fingerprint
+from companion_ever.memory.extraction.draft import generate_draft, validate_draft
+from evaluation.memory import evaluate, fingerprint
 from evaluate_retrieval import run
 
 

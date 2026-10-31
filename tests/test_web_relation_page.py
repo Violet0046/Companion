@@ -180,7 +180,7 @@ console.log('[OK] 关系状态页 + record_done 自动刷新');
 
 
 def test_static() -> None:
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
@@ -217,9 +217,9 @@ def test_static() -> None:
     print("[OK] 前端处理 record_done")
 
     # --- 5. 后端：推送钩子 ---
-    from companion_ever.api.routes import chat
-    from companion_ever.services.session_close_service import SessionCloseService
-    from companion_ever.api.schemas import PersonaSummary
+    from companion_ever.entrypoints.web.routes import chat
+    from companion_ever.memory.extraction.sessions import SessionCloseService
+    from companion_ever.entrypoints.web.schemas import PersonaSummary
 
     assert hasattr(SessionCloseService, "close_session")
     assert "on_record_done" in SessionCloseService.__init__.__code__.co_consts or True
@@ -233,8 +233,8 @@ def test_static() -> None:
 
 def test_backend_push() -> None:
     """后端：抽取跑完后真的会把 record_done 推给在线连接。"""
-    from companion_ever.api.routes import chat
-    from companion_ever.services.session_close_service import (
+    from companion_ever.entrypoints.web.routes import chat
+    from companion_ever.memory.extraction.sessions import (
         ExtractionReport, SessionCloseReport,
     )
 
@@ -308,9 +308,9 @@ def test_backend_push() -> None:
 def test_record_hook_fires() -> None:
     """记录跑完 → on_record_done 被调用；running 状态准确。"""
     from companion_ever.config import AppConfig
-    from companion_ever.app import build_app
-    import companion_ever.app as app_mod
-    from companion_ever.llm.traced_client import TracedLLMClient
+    from companion_ever.bootstrap.app import build_app
+    import companion_ever.bootstrap.app as app_mod
+    from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
 
     class FakeLLM:
         model = "fake-model"
@@ -355,7 +355,7 @@ def test_record_hook_fires() -> None:
     # 回调抛异常也不能影响记录本身
     import logging
     logging.getLogger(
-        "companion_ever.services.session_close_service"
+        "companion_ever.memory.extraction.sessions"
     ).setLevel(logging.CRITICAL)
     sc.on_record_done = lambda u, p, r: (_ for _ in ()).throw(RuntimeError("boom"))
     try:
@@ -371,7 +371,7 @@ def test_node() -> None:
     if not node:
         print("[SKIP] 环境里没有 node，跳过")
         return
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,

@@ -1,5 +1,4 @@
 """Cost regressions: meaningful changes, text batches and bounded drain horizons."""
-import json
 import tempfile
 import time
 from pathlib import Path
@@ -10,7 +9,7 @@ from test_background_service import configure,wait_for
 from test_summary_evolution import generate,drain
 from companion_ever.config import AppConfig,BackgroundConfig
 from companion_ever.domain.enums import MemoryKind
-from companion_ever.storage.note_link_repo import NoteLinkRepo
+from companion_ever.memory.notes.links import NoteLinkRepo
 
 
 def log(ctx,role='user',text='new message'):
@@ -50,15 +49,15 @@ def idle_thresholds(path):
         ctx.conn.execute("UPDATE conversation_log SET created_at=datetime('now','-11 minutes')")
         row=ctx.conn.execute('SELECT * FROM conversation').fetchone()
         with patch.object(ctx.services.session_close,'close_session_background') as launch:
-            bg._memory(row);assert not launch.called,'one short exchange must not trigger on idle'
+            bg.consider_memory(row);assert not launch.called,'one short exchange must not trigger on idle'
             log(ctx);log(ctx)
-            bg._memory(row);assert not launch.called,'recent messages reset the idle timer'
+            bg.consider_memory(row);assert not launch.called,'recent messages reset the idle timer'
             ctx.conn.execute("UPDATE conversation_log SET created_at=datetime('now','-11 minutes')")
-            bg._memory(row);assert launch.call_count==1
+            bg.consider_memory(row);assert launch.call_count==1
             launch.reset_mock()
             ctx.conn.execute("UPDATE conversation_log SET created_at=datetime('now')")
             for _ in range(9):log(ctx)
-            bg._memory(row);assert launch.call_count==1,'12 user messages trigger even without idle'
+            bg.consider_memory(row);assert launch.call_count==1,'12 user messages trigger even without idle'
     finally:
         ctx.services.extraction.runtime.shutdown();ctx.conn.close()
 
@@ -72,7 +71,7 @@ def maximum_wait(path):
         log(ctx,'assistant')
         row=ctx.conn.execute('SELECT * FROM conversation').fetchone()
         with patch.object(ctx.services.session_close,'close_session_background') as launch:
-            bg._memory(row);assert launch.call_count==1,'oldest pending input supplies a starvation bound'
+            bg.consider_memory(row);assert launch.call_count==1,'oldest pending input supplies a starvation bound'
     finally:
         ctx.services.extraction.runtime.shutdown();ctx.conn.close()
 

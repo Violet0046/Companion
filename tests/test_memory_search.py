@@ -3,9 +3,9 @@ import tempfile
 import uuid
 from pathlib import Path
 from fastapi.testclient import TestClient
-from test_chat_workflow import _make_ctx
+from test_chat_service import _make_ctx
 from companion_ever.domain.enums import MemoryKind
-from companion_ever.services.memory_search import MemorySearch
+from companion_ever.memory.retrieval.query import MemorySearch
 
 
 def main():
@@ -66,7 +66,7 @@ def main():
                 link(hub,leaf,'supports')
             bounded=service.search('alice','one',MemorySearch(seed_ids=[hub],limit=50,max_hops=2))
             assert len(bounded.hits)<=50 and bounded.truncated
-            from companion_ever.api.server import create_app
+            from companion_ever.entrypoints.web.server import create_app
             from companion_ever.config import WebConfig
             ctx.cfg.idle_session_minutes=0
             with TestClient(create_app(ctx,WebConfig(pin='123'))) as client:

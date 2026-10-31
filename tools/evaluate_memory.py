@@ -7,8 +7,8 @@ from contextlib import nullcontext
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from companion_ever.services.memory_draft import generate_draft
-from companion_ever.services.memory_evaluation import evaluate, fingerprint, render_report, validate_suite
+from companion_ever.memory.extraction.draft import generate_draft
+from evaluation.memory import evaluate, fingerprint, prompt_fingerprint, render_report, validate_suite
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SUITE = ROOT / 'tests/fixtures/memory_cases.json'
@@ -44,6 +44,7 @@ def freeze(source, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--background',action='store_true',help='验证生产后台的流式/纠错/思考配置')
+    parser.add_argument('--flow',action='store_true',help='临时库中运行跨轮记忆/摘要/召回契约；仅支持 --reference 或 --model')
     parser.add_argument('--input', type=Path, default=DEFAULT_SUITE)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--freeze', action='store_true', help='冻结本地审阅案例，输出必须放在私人目录')
@@ -61,6 +62,7 @@ def main():
     if args.input.resolve() in destinations or (args.responses and args.responses.resolve() in destinations):
         parser.error('输出路径不能覆盖输入案例或已有模型响应')
     if args.freeze:
+        if args.flow:parser.error('--flow cannot freeze a single-draft suite')
         private_root = (ROOT / 'memory/reviews').resolve()
         if private_root not in args.output.resolve().parents:
             parser.error('私人冻结集必须写入被 Git 忽略的 memory/reviews/ 下')
@@ -69,6 +71,23 @@ def main():
         return 0
     if not (args.responses or args.model or args.reference):
         parser.error('选择 --responses、--model 或 --reference')
+    if args.flow:
+        if args.responses or args.freeze or not (args.reference or args.model):
+            parser.error('--flow requires --reference or --model')
+        from companion_ever.config import AppConfig
+        from evaluation.flows import run_flow_suite
+        source=ROOT/'tests/fixtures/memory_flows.json' if args.input==DEFAULT_SUITE else args.input
+        if source.resolve() in destinations:parser.error('output cannot overwrite the flow suite')
+        suite=json.loads(source.read_text(encoding='utf-8'))
+        if suite.get('provenance')=='private_review' and (ROOT/'memory/reviews').resolve() not in args.output.resolve().parents:
+            parser.error('private flow results must stay under memory/reviews')
+        if args.case:
+            if set(args.case)-{flow['id'] for flow in suite['flows']}:parser.error('unknown flow ID')
+            suite={**suite,'flows':[flow for flow in suite['flows'] if flow['id'] in args.case]}
+        cfg=AppConfig.from_env();cfg.extraction_timeout=args.timeout
+        result=run_flow_suite(suite,cfg,args.output,reference=args.reference)
+        print(f"Flow contracts: {result['passed']}/{result['total']} ({result['mode']})")
+        return int(result['passed']!=result['total'])
     suite = json.loads(args.input.read_text(encoding='utf-8'))
     validate_suite(suite)
     if args.case:
@@ -80,19 +99,21 @@ def main():
     if args.responses:
         responses = json.loads(args.responses.read_text(encoding='utf-8'))
     else:
-        responses = {'suite_sha256': fingerprint(suite), 'drafts': {}, 'measurements': {}}
+        responses = {'suite_sha256': fingerprint(suite),
+                    'prompt_sha256': prompt_fingerprint(),
+                    'drafts': {}, 'measurements': {}}
         write_json(args.output.with_suffix('.suite.json'), suite)
         if args.model:
             from companion_ever.config import AppConfig
-            from companion_ever.llm.openai_client import OpenAICompatibleClient
+            from companion_ever.infrastructure.llm.openai_client import OpenAICompatibleClient
             cfg = AppConfig.from_env()
             if not (cfg.llm.api_key and cfg.llm.base_url and cfg.llm.model):
                 parser.error('模型配置不完整')
             if not 0 < args.timeout < float('inf'):
                 parser.error('timeout 必须为有限正数')
             llm = OpenAICompatibleClient(cfg.llm.api_key, cfg.llm.base_url, cfg.llm.model, timeout=args.timeout)
-            from companion_ever.llm.traced_client import TracedLLMClient
-            from companion_ever.trace import TraceStore,trace_scope
+            from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
+            from companion_ever.infrastructure.tracing import TraceStore,trace_scope
             llm=TracedLLMClient(llm)
             trace_store=TraceStore(args.output.with_suffix('.traces'))
             responses['trace_dir']=str(trace_store.base_dir)
@@ -102,19 +123,22 @@ def main():
         response_path = args.output.with_suffix('.responses.json')
         class Recorder:
             response = None
+            calls = 0
 
             def chat(self, messages, **kwargs):
+                self.calls+=1
                 self.response = llm.chat(messages, **kwargs)
                 return self.response
 
         for case in suite['cases']:
             started = time.perf_counter()
             recorder = Recorder()
+            case_trace=None
             try:
                 options=({'stream':True,'total_timeout':args.timeout*3,'repair_attempts':1,
                           'background_thinking':cfg.background.model_thinking} if args.model and args.background else {})
                 with (trace_scope('memory_evaluation','evaluation','evaluation',store=trace_store,case_id=case['id'])
-                      if args.model else nullcontext()):
+                      if args.model else nullcontext()) as case_trace:
                     responses['drafts'][case['id']] = (generate_draft(case, recorder, timeout=args.timeout, max_retries=0,**options).model_dump()
                                                       if args.model else case['reference_draft'])
                 print(case['id'] + (': draft validated' if args.model else ': reference loaded'), flush=True)
@@ -124,9 +148,14 @@ def main():
                     responses['drafts'][case['id']].update(raw_response=recorder.response, validation_error=str(exc))
                 print(case['id'] + ': FAILED (' + type(exc).__name__ + ')', flush=True)
             measure = {'elapsed_seconds': round(time.perf_counter() - started, 3)}
-            usage = getattr(llm, 'last_usage', None) if args.model else None
-            if usage and 'error_type' not in responses['drafts'][case['id']]:
-                measure.update(prompt_tokens=usage.prompt_tokens, completion_tokens=usage.completion_tokens)
+            if args.model:
+                from companion_ever.infrastructure.llm.traced_client import summarize_calls
+                calls=getattr(case_trace,'calls',[]) or []
+                measure.update(model_calls=recorder.calls,usage=summarize_calls(calls))
+                if len(calls)==recorder.calls:
+                    usage=measure['usage']
+                    if usage['input_tokens_reported_calls']==len(calls):measure['prompt_tokens']=usage['input_tokens']
+                    if usage['output_tokens_reported_calls']==len(calls):measure['completion_tokens']=usage['output_tokens']
             responses['measurements'][case['id']] = measure
             write_json(response_path, responses)  # Keep completed cases even if interrupted later.
     report = evaluate(suite, responses)

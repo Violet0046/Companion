@@ -12,7 +12,6 @@
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -94,7 +93,7 @@ console.log('[OK] ' + cases.length + ' 个分隔条用例全过');
 
 
 def main() -> int:
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
 

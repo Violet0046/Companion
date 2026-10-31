@@ -10,13 +10,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from companion_ever.config import RetrievalConfig
 from companion_ever.domain.enums import MemoryKind
-from companion_ever.services.authz import Authorizer
-from companion_ever.services.memory_evaluation import fingerprint
-from companion_ever.services.memory_search import MemorySearch
-from companion_ever.services.retrieval_service import RetrievalService
-from companion_ever.storage.db import init_db
-from companion_ever.storage.note_repo import NoteRepo
-from companion_ever.storage.user_repo import UserRepo
+from companion_ever.characters.access import Authorizer
+from evaluation.memory import fingerprint
+from companion_ever.memory.retrieval.query import MemorySearch
+from companion_ever.memory.retrieval.service import RetrievalService
+from companion_ever.infrastructure.database.connection import init_db
+from companion_ever.memory.notes.repository import NoteRepo
+from companion_ever.characters.users import UserRepo
 
 
 def run(suite):
@@ -27,7 +27,7 @@ def run(suite):
             users.create('synthetic')
             for persona in ('main', 'other'):
                 users.add_persona('synthetic', persona)
-            service = RetrievalService(notes, Authorizer(users, notes), RetrievalConfig())
+            service = RetrievalService(notes, Authorizer(users), RetrievalConfig())
             mapping = {n['id']: notes.create(user_id='synthetic', persona_id=n.get('persona', 'main'),
                                             kind=MemoryKind(n['kind']), content=n['content']) for n in suite['notes']}
             reverse = {v: k for k, v in mapping.items()}

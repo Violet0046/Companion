@@ -13,14 +13,13 @@ from unittest.mock import patch
 from dataclasses import replace
 from pathlib import Path
 from fastapi.testclient import TestClient
-from companion_ever.app import build_app
+from companion_ever.bootstrap.app import build_app
 from companion_ever.config import AppConfig,WebConfig
-from companion_ever.api.server import create_app
-from companion_ever.services.task_runtime import runtime_for
-from companion_ever.storage.task_repo import TaskRepo
-from companion_ever.trace import TraceStore,set_default_store
+from companion_ever.entrypoints.web.server import create_app
+from companion_ever.runtime.tasks import runtime_for
+from companion_ever.infrastructure.tracing import TraceStore,set_default_store
 from companion_ever.domain.enums import MemoryKind
-from companion_ever.services.memory_search import MemorySearchResult
+from companion_ever.memory.retrieval.query import MemorySearchResult
 
 
 def verify_memory_graph(cfg,output):
@@ -120,7 +119,7 @@ def main():
         try:
             with TestClient(create_app(ctx,WebConfig())) as client:
                 health=client.get('/api/health').json()
-                assert health['auto_memory'] and health['schema_version']==5
+                assert health['auto_memory'] and health['schema_version']==6
                 while time.monotonic()-started<args.deadline:
                     memory=[dict(r) for r in ctx.conn.execute("SELECT id,status,last_error,retry_at FROM memory_job WHERE status!='succeeded'")]
                     summary=[dict(r) for r in ctx.conn.execute("SELECT id,status,last_error,retry_at FROM summary_job WHERE status!='succeeded'")]

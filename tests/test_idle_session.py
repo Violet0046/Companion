@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 import tempfile
@@ -34,9 +33,9 @@ class FakeLLM:
 
 def main() -> int:
     from companion_ever.config import AppConfig
-    from companion_ever.app import build_app
-    import companion_ever.app as app_mod
-    from companion_ever.llm.traced_client import TracedLLMClient
+    from companion_ever.bootstrap.app import build_app
+    import companion_ever.bootstrap.app as app_mod
+    from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
 
     tmpdir = tempfile.mkdtemp(prefix="idle_test_")
     llm = FakeLLM()

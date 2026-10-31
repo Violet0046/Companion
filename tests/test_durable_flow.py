@@ -4,9 +4,9 @@ import sqlite3
 import tempfile
 import threading
 from pathlib import Path
-from test_chat_workflow import _make_ctx
-from companion_ever.storage.db import init_db, _read_schema
-from companion_ever.services.chat_service import MESSAGE_BREAK
+from test_chat_service import _make_ctx
+from companion_ever.infrastructure.database.connection import init_db
+from companion_ever.conversations.chat import MESSAGE_BREAK
 
 
 def context(path):
@@ -34,7 +34,7 @@ def migration(path):
     try:
         assert not conn.execute('PRAGMA foreign_key_check').fetchall()
         assert conn.execute('SELECT message_id,content FROM thinking_log').fetchone()[:] == (2, 'reason')
-        from companion_ever.storage.conversation_repo import ConversationRepo
+        from companion_ever.conversations.repository import ConversationRepo
         mid = ConversationRepo(conn).log_turn(user_id='alice', persona_id='one', turn_index=1,
                                               role='assistant', content='second bubble')
         assert mid > 50
@@ -67,14 +67,24 @@ def receipt_and_memory(path):
         assert chat.chat('alice', 'one', 'next', 'request2') == 'one\n\ntwo'
         assert ctx.llm.chat.call_count == count
         sent = ctx.llm.chat.call_args[0][0]
-        assert sum(m['content'] == 'next' for m in sent) == 1
+        # 本轮输入只在 system 的「当前这一轮」里出现一次，不再作为独立消息
+        assert sent[0]['content'].count('用户本轮说的话**：next') == 1, (
+            "本轮输入应当只被送一次"
+        )
+        assert not any(m['content'] == 'next' for m in sent[1:]), (
+            "本轮输入不应再作为独立消息出现"
+        )
         for size in (1, 2, 7):
-            raw = 'split one' + MESSAGE_BREAK + 'split two'
+            raw = 'split one\nsame bubble<message_break>split two\n\nsame second'
             ctx.llm.stream_chat = lambda messages, size=size: iter(raw[i:i+size] for i in range(0,len(raw),size))
             generation, _ = chat.receive('alice','one',f'chunk-size-{size}')
             events = list(chat.reply_events(generation))
-            assert [e['message']['content'] for e in events if e['type']=='message_done'] == ['split one','split two']
+            assert [e['message']['content'] for e in events if e['type']=='message_done'] == ['split one\nsame bubble','split two\n\nsame second']
             assert '<message_break>' not in ''.join(e['content'] for e in events if e['type']=='delta')
+        ctx.llm.stream_chat = lambda messages: iter(['line one\n', 'line two\n\nparagraph'])
+        generation, _ = chat.receive('alice', 'one', 'ordinary newlines')
+        events = list(chat.reply_events(generation))
+        assert [e['message']['content'] for e in events if e['type']=='message_done'] == ['line one\nline two\n\nparagraph']
         svc = ctx.services.extraction
         job = svc.jobs.enqueue('alice', 'one')
         ctx.services.conversation.log_turn(user_id='alice',persona_id='one',turn_index=100,
@@ -92,7 +102,7 @@ def receipt_and_memory(path):
         first = svc.jobs.claim(job['id'])
         ctx.conn.execute('UPDATE memory_job SET lease_expires_at=0 WHERE id=?', (job['id'],))
         conn = init_db(path, check_same_thread=False)
-        from companion_ever.storage.memory_job_repo import MemoryJobRepo
+        from companion_ever.memory.extraction.jobs import MemoryJobRepo
         try:
             recovered = MemoryJobRepo(conn).claim(job['id'])
             assert recovered['through_message_id'] == job['through_message_id']
@@ -110,13 +120,14 @@ def receipt_and_memory(path):
 
 def interruption(path):
     from fastapi.testclient import TestClient
-    from companion_ever.api.server import create_app
+    from companion_ever.entrypoints.web.server import create_app
     from companion_ever.config import WebConfig
     ctx = context(path)
     release = threading.Event()
     exited = threading.Event()
     def stream(messages):
-        if messages[-1]['content'] == 'A':
+        # 本轮输入不在 messages 里，由 system 的「当前这一轮」承载
+        if '用户本轮说的话**：A' in messages[0]['content']:
             try:
                 yield 'kept' + MESSAGE_BREAK + 'unfinished'
                 release.wait(5)
@@ -163,7 +174,7 @@ def interruption(path):
 
 def backup(path):
     from types import SimpleNamespace
-    from companion_ever.cli.maintain_cmd import cmd_backup
+    from companion_ever.entrypoints.cli.maintain_cmd import cmd_backup
     # A deliberately old schema must be copied as-is, including committed WAL
     # pages, without initializing services or upgrading the source database.
     conn=sqlite3.connect(path)

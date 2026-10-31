@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def main() -> int:
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
@@ -70,9 +70,9 @@ def main() -> int:
     print("[OK] 定位后仍能上下翻历史")
 
     # --- 6. 后端要给出当天第一条消息的 id ---
-    from companion_ever.api.schemas import DateEntry
+    from companion_ever.entrypoints.web.schemas import DateEntry
     assert "first_id" in DateEntry.model_fields, "DateEntry 缺 first_id"
-    from companion_ever.storage.conversation_repo import ConversationRepo
+    from companion_ever.conversations.repository import ConversationRepo
     import inspect
     src = inspect.getsource(ConversationRepo.list_dates)
     assert "MIN(id)" in src and "MAX(id)" in src, "list_dates 没有取当天的首/末消息 id"

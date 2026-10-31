@@ -16,7 +16,6 @@
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -181,7 +180,7 @@ console.log('[OK] WS 消息流全流程正常');
 def main() -> int:
     import shutil
 
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     node = shutil.which("node")
     if not node:

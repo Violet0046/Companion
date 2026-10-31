@@ -10,13 +10,13 @@ from pathlib import Path
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from test_durable_flow import context
-from test_chat_workflow import _make_ctx
+from test_chat_service import _make_ctx
 from test_summary_evolution import service,generate
 from fake_memory import no_memory
-from companion_ever.api.server import create_app
+from companion_ever.entrypoints.web.server import create_app
 from companion_ever.config import WebConfig
-from companion_ever.storage.db import init_db,connect,apply_schema
-from companion_ever.storage.task_repo import TaskRepo
+from companion_ever.infrastructure.database.connection import init_db,connect,apply_schema
+from companion_ever.runtime.repository import TaskRepo
 from companion_ever.domain.enums import MemoryKind
 
 
@@ -167,7 +167,7 @@ def migration(path):
         history=TaskRepo(conn).recent('alice','one')
         assert history[0]['stage']=='legacy_snapshot' and history[0]['status']=='interrupted'
         assert '重试次数已用尽' in history[0]['error']
-        assert conn.execute('PRAGMA user_version').fetchone()[0]==5
+        assert conn.execute('PRAGMA user_version').fetchone()[0]==6
         assert len(list(path.parent.glob(path.name+'.bak-before-task-runtime-*')))==1
         assert not conn.execute('PRAGMA foreign_key_check').fetchall()
     finally:
@@ -177,8 +177,8 @@ def migration(path):
 def process_restart(path):
     child=r'''
 import sys,time,json
-from companion_ever.app import build_app
-import companion_ever.app as app
+from companion_ever.bootstrap.app import build_app
+import companion_ever.bootstrap.app as app
 from companion_ever.config import AppConfig
 class Model:
     def chat(self,messages,**kwargs):

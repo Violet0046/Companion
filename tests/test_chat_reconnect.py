@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from test_durable_flow import context
-from companion_ever.api.server import create_app
+from companion_ever.entrypoints.web.server import create_app
 from companion_ever.config import WebConfig
-from companion_ever.services.chat_service import MESSAGE_BREAK
+from companion_ever.conversations.chat import MESSAGE_BREAK
 
 
 def wait_status(client, gid, status):
@@ -78,7 +78,8 @@ def disconnected_cancel(path):
     release = threading.Event()
     exited = threading.Event()
     def stream(messages):
-        if messages[-1]['content'] == 'old':
+        # 本轮输入不在 messages 里，由 system 的「当前这一轮」承载
+        if '用户本轮说的话**：old' in messages[0]['content']:
             try:
                 yield 'old draft'
                 assert release.wait(5)
@@ -169,7 +170,7 @@ def queued_receipt_recovery(path):
 
 
 def lost_receipt(path):
-    from companion_ever.api.routes.chat import _Conn
+    from companion_ever.entrypoints.web.routes.chat import _Conn
     from fastapi import WebSocketDisconnect
     ctx = context(path)
     failed_send, release, exited = threading.Event(), threading.Event(), threading.Event()

@@ -1,37 +1,28 @@
-"""domain — 域层（纯数据 + 类型 + 异常）。
+"""domain — 共享内核：两个及以上业务模块共用的值对象与枚举。
 
-包含：
-- enums: MemoryKind, BlockType
-- entities: User, Note, Block, ConversationMessage, PersonaBasics
-- persona_templates: 内置人设模板
-- errors: 异常（占位）
+只放"跨模块传递"的东西：
+- entities: User、Note、Block、ConversationMessage
+- enums: MemoryKind、LinkType、BlockType
+
+只属于单个业务模块的规则不放这里，避免共享包变成垃圾桶：
+- 关系方向契约（RELATION_KINDS / valid_relation）→ memory/relations.py
+- 角色模板（PERSONA_TEMPLATES）→ characters/templates.py
+
+本包不依赖任何业务模块，也不含业务逻辑与数据库访问。
 """
 from __future__ import annotations
 
-from .entities import Block, ConversationMessage, Note, PersonaBasics, User
-from .enums import BlockType, MemoryKind
-from .persona_templates import (
-    PERSONA_TEMPLATES,
-    get_template,
-    list_templates,
-    template_to_json,
-    validate_template_fields,
-)
+from .entities import Block, ConversationMessage, Note, User
+from .enums import BlockType, LinkType, MemoryKind
 
 __all__ = [
-    # enums
-    "MemoryKind",
-    "BlockType",
     # entities
     "User",
     "Note",
     "Block",
     "ConversationMessage",
-    "PersonaBasics",
-    # templates
-    "PERSONA_TEMPLATES",
-    "get_template",
-    "template_to_json",
-    "list_templates",
-    "validate_template_fields",
+    # enums
+    "MemoryKind",
+    "LinkType",
+    "BlockType",
 ]

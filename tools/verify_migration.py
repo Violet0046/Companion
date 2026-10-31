@@ -6,7 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-from companion_ever.storage.db import init_db
+from companion_ever.infrastructure.database.connection import init_db
 from companion_ever.config import AppConfig
 
 

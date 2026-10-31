@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import tempfile
 from test_web_ws_flow import STUB
-from companion_ever.api.server import WEB_DIR
+from companion_ever.entrypoints.web.server import WEB_DIR
 
 
 EVENTS=r"""

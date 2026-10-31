@@ -8,11 +8,11 @@ from unittest.mock import patch
 from test_durable_flow import context
 from test_kind_storage import draft, proposal
 from companion_ever.domain.enums import MemoryKind
-from companion_ever.services.memory_search import MemorySearchResult
-from companion_ever.services.memory_tools import MemoryTools, ToolRequest
-from companion_ever.llm.traced_client import TracedLLMClient
-from companion_ever.storage.note_link_repo import NoteLinkRepo
-from companion_ever.trace import TraceStore, set_default_store
+from companion_ever.memory.retrieval.query import MemorySearchResult
+from companion_ever.memory.extraction.tools import MemoryTools, ToolRequest
+from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
+from companion_ever.memory.notes.links import NoteLinkRepo
+from companion_ever.infrastructure.tracing import TraceStore, set_default_store
 
 
 def request(name, **arguments):
@@ -100,6 +100,8 @@ def active_reconciliation(path):
             out=svc.run({'user_id':'alice','persona_id':'one'})
         assert out['job_status']=='succeeded',out['errors']
         assert out['model_calls']==3 and out['tool_rounds']==2 and out['tool_calls']==2
+        # 候选必须先出现在载荷里，模型才可能对它做 confirm
+        assert old in {n['id'] for n in seen[1]['existing_notes']}, seen[1]['existing_notes']
         assert out['facts_created']==1 and out['note_ids']['p1']==old
         assert ctx.conn.execute("SELECT count(*) FROM note WHERE kind='fact'").fetchone()[0]==1
         assert ctx.conn.execute('SELECT count(*) FROM note_evidence WHERE note_id=?',(old,)).fetchone()[0]==2

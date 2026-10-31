@@ -2,7 +2,7 @@
 
 两个约定：
 
-1. `## 当前时间信息` 要说清楚"现在"、"隔了多久"、"这一轮该怎么开场"
+1. `## 当前这一轮` 要说清楚"现在"、"隔了多久"、"本轮用户说的话"、"这一轮该怎么开场"
    —— 曾经的 bug：那一行"用户上次对话的起始时间"让模型以为现在还是凌晨，
    回答出错误的当前时间。
 
@@ -31,9 +31,9 @@ class FakeLLM:
 
 def main() -> int:
     from companion_ever.config import AppConfig
-    from companion_ever.app import build_app
-    import companion_ever.app as app_mod
-    from companion_ever.llm.traced_client import TracedLLMClient
+    from companion_ever.bootstrap.app import build_app
+    import companion_ever.bootstrap.app as app_mod
+    from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
 
     app_mod.create_llm_client = lambda cfg: TracedLLMClient(FakeLLM())
 
@@ -66,7 +66,7 @@ def main() -> int:
     history = r["messages"][1:]
 
     # ---------- 1. 时间段结构 ----------
-    assert "## 当前时间信息" in system
+    assert "## 当前这一轮" in system
     assert "**现在**" in system, "缺少『现在』"
     assert "用户上一次说话" in system, "缺少『用户上一次说话』"
     assert "**这一轮**" in system, "缺少『这一轮』"
@@ -77,6 +77,29 @@ def main() -> int:
     )
     assert "注意：这不是当前消息时间" not in system
     print("[OK] 时间段结构正确（现在 / 隔了多久 / 这一轮怎么开场）")
+
+    # ---------- 1b. 本轮用户输入只出现一次，且只在 system 里 ----------
+    marker = "本轮输入的独特标记"
+    current_id = ctx.services.conversation.log_turn(
+        user_id="alice", persona_id="苏苏", turn_index=9,
+        role="user", content=marker,
+    )
+    r2 = ctx.services.prompt.build(
+        "alice", "苏苏", query=marker, current_message_id=current_id)
+    system2 = r2["messages"][0]["content"]
+    msgs2 = r2["messages"]
+    assert f"- **用户本轮说的话**：{marker}" in system2, (
+        "本轮用户输入必须在 system 里显式标注——"
+        "模型要回答哪一句不能靠猜（历史上曾出现两条连续 user 消息）"
+    )
+    # 只出现一次：system 里标注了，messages 里就不能再放一遍
+    assert system2.count(marker) == 1, "本轮输入在 system 里出现了多次"
+    assert not any(marker in m["content"] for m in msgs2[1:]), (
+        "本轮输入又出现在 messages 里了——同一句话被送了两遍"
+    )
+    # 历史停在本轮之前
+    assert msgs2[-1]["role"] == "assistant", "历史应以助手上一条回复结尾"
+    print("[OK] 本轮用户输入只在 system 里出现一次，历史停在本轮之前")
 
     # ---------- 2. 历史格式：user 带时间戳，assistant 不带 ----------
     user_msgs = [m for m in history if m["role"] == "user"]

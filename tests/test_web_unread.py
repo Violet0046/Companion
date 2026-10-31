@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from test_web_ws_flow import STUB
 from test_durable_flow import context
-from companion_ever.api.server import WEB_DIR,create_app
+from companion_ever.entrypoints.web.server import WEB_DIR,create_app
 from companion_ever.config import WebConfig
 
 

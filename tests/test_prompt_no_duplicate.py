@@ -22,7 +22,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from companion_ever.config import AppConfig, LLMConfig
-from companion_ever.app import build_app
+from companion_ever.bootstrap.app import build_app
 
 
 def _make_ctx(db_path: str):
@@ -76,7 +76,7 @@ def test_history_not_duplicated():
             )
 
         # ③ system_prompt 仍包含其余 5 段
-        assert "## 当前时间信息" in sp
+        assert "## 当前这一轮" in sp
         assert "## 人设基础" in sp
         assert "## 你对用户的了解" not in sp  # Historical block summaries no longer enter model context.
         assert "## 行为指引" in sp

@@ -1,13 +1,13 @@
-"""domain/entities.py — 领域实体（dataclass）。
+"""domain/entities.py — 跨业务模块共享的值对象（dataclass）。
 
-四个核心实体 + 一个 PersonBasics 包装：
+四个核心实体：
 - User: 用户 + 拥有的 persona_ids 列表
 - Note: 经历或事实，正文与情境元信息独立保存
 - Block: memory block（fields 已 JSON 解析）
 - ConversationMessage: 对话原文消息
-- PersonaBasics: 角色基础配置的内容包装
 
 每个实体都有 to_llm_dict() 方法——只把 LLM 需要的字段送出去。
+只属于单个业务模块的规则不放这里；见 domain/__init__.py 的边界说明。
 """
 from __future__ import annotations
 
@@ -54,12 +54,6 @@ class Note:
     time_basis: str = ''
     revision: int = 1
     pinned: bool = False
-
-    def content_as_text(self) -> str:
-        """把 content 序列化为字符串（用于写入 DB）。"""
-        if isinstance(self.content, dict):
-            return json.dumps(self.content, ensure_ascii=False)
-        return self.content
 
     def to_llm_dict(self) -> dict:
         """给 LLM 的简化视图（去掉时间戳、归档标记、衰减分等）。"""
@@ -116,24 +110,4 @@ class ConversationMessage:
         return {"role": self.role, "content": self.content}
 
 
-@dataclass
-class PersonaBasics:
-    """角色基础配置的内容包装（dict[str, Any]）。"""
-
-    fields: dict[str, Any] = field(default_factory=dict)
-
-    def to_json(self) -> str:
-        return json.dumps(self.fields, ensure_ascii=False, indent=2)
-
-    @classmethod
-    def from_json(cls, s: str) -> "PersonaBasics":
-        """从 JSON 字符串构造（解析失败时返回空 dict）。"""
-        if not s:
-            return cls(fields={})
-        try:
-            return cls(fields=json.loads(s))
-        except (json.JSONDecodeError, TypeError):
-            return cls(fields={"_raw": s})
-
-
-__all__ = ["User", "Note", "Block", "ConversationMessage", "PersonaBasics"]
+__all__ = ["User", "Note", "Block", "ConversationMessage"]

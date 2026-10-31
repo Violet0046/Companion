@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 
 def _make_ctx(db_path: str):
-    from test_chat_workflow import _make_ctx as build
+    from test_chat_service import _make_ctx as build
     # WebSocket 的生产者跑在后台线程里，DB 连接要允许跨线程
     return build(db_path, check_same_thread=False)
 
@@ -33,7 +33,7 @@ def _make_ctx(db_path: str):
 
 def test_ws_sends_thinking_event():
     from fastapi.testclient import TestClient
-    from companion_ever.api.server import create_app
+    from companion_ever.entrypoints.web.server import create_app
     from companion_ever.config import WebConfig
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
@@ -97,7 +97,7 @@ def test_ws_sends_thinking_event():
 # ============ 2 & 3. 前端静态检查 ============
 
 def test_frontend_jump_latest_and_switch_placement():
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")

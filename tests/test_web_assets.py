@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def main() -> int:
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     assert WEB_DIR.is_dir(), f"静态目录不存在: {WEB_DIR}"
 
@@ -58,12 +58,12 @@ def main() -> int:
             used.add(marker)
 
     # 用 app 的 OpenAPI 拿全量路由（包含 server.py 自己定义的，如 /api/health）
-    from companion_ever.api.server import create_app
+    from companion_ever.entrypoints.web.server import create_app
     from companion_ever.config import WebConfig
     # Route introspection must not initialize/migrate the user's .env database.
     import tempfile
     from pathlib import Path
-    from test_chat_workflow import _make_ctx
+    from test_chat_service import _make_ctx
     with tempfile.TemporaryDirectory(prefix='web-assets-') as tmp:
         ctx=_make_ctx(str(Path(tmp)/'test.db'),check_same_thread=False)
         try:
@@ -77,7 +77,7 @@ def main() -> int:
         if sp:
             server_paths.add(sp)
     # WebSocket 路由不在 OpenAPI 里
-    from companion_ever.api.routes import chat as chat_routes
+    from companion_ever.entrypoints.web.routes import chat as chat_routes
     for r in chat_routes.router.routes:
         sp = getattr(r, "path", None)
         if sp:

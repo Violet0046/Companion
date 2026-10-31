@@ -3,8 +3,8 @@ import json
 import sqlite3
 import tempfile
 from pathlib import Path
-from companion_ever.storage.db import _read_schema, init_db
-from companion_ever.storage.migrations import migrate
+from companion_ever.infrastructure.database.connection import _read_schema, init_db
+from companion_ever.infrastructure.database.migrations import migrate
 from companion_ever.domain.enums import BlockType
 
 
@@ -31,7 +31,7 @@ def verify(path):
     old.close()
     conn=init_db(path)
     try:
-        assert conn.execute('PRAGMA user_version').fetchone()[0]==5
+        assert conn.execute('PRAGMA user_version').fetchone()[0]==6
         assert [tuple(r) for r in conn.execute('SELECT * FROM memory_block ORDER BY id')]==expected
         assert conn.execute('SELECT id FROM note').fetchone()[0]=='memory'
         assert conn.execute('SELECT id FROM persona_definition').fetchone()[0]=='persona'

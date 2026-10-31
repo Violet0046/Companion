@@ -42,8 +42,8 @@ def test_repo_groups_by_local_date():
 
     UTC 20:00 在东八区是第二天凌晨 0 点 —— 按 UTC 分组会算错一天。
     """
-    from companion_ever.storage.conversation_repo import ConversationRepo
-    from companion_ever.storage.db import init_db
+    from companion_ever.conversations.repository import ConversationRepo
+    from companion_ever.infrastructure.database.connection import init_db
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
@@ -81,7 +81,7 @@ def test_repo_groups_by_local_date():
 
 
 def test_api_converts_timestamps():
-    from companion_ever.api.routes.memory import _s
+    from companion_ever.entrypoints.web.routes.memory import _s
 
     assert _s("2026-10-28 14:47:29", 8) == "2026-10-28 22:47:29"
     assert _s("2026-10-28 14:47:29", 0) == "2026-10-28 14:47:29"
@@ -92,7 +92,7 @@ def test_api_converts_timestamps():
 def test_close_session_is_async():
     """/api/session/close 必须后台执行、立刻返回。"""
     import inspect
-    from companion_ever.api.routes import chat as chat_routes
+    from companion_ever.entrypoints.web.routes import chat as chat_routes
 
     # 只看 HTTP 路由（WS 那条 close_session 消息仍然是同步的，
     # 因为它要把抽取结果回报给客户端）
@@ -102,7 +102,7 @@ def test_close_session_is_async():
     )
     assert "close_session," not in src, "/api/session/close 还在同步调用 close_session"
 
-    from companion_ever.services.session_close_service import SessionCloseService
+    from companion_ever.memory.extraction.sessions import SessionCloseService
     svc_src = inspect.getsource(SessionCloseService)
     assert "def close_session_background" in svc_src
     assert "_closing" in svc_src, "缺少「正在记录」的守卫（会重复触发抽取）"
@@ -110,7 +110,7 @@ def test_close_session_is_async():
 
 
 def test_frontend_uses_async_record():
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     assert "pollRecordDone" in js, "前端没有轮询等待记录完成"

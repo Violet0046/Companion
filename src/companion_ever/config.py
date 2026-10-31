@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Mapping
 
 
 
@@ -35,6 +35,7 @@ class LLMConfig:
     model: str = ""
     timeout: float = 60.0
     provider: str = "openai_compat"
+    stream_usage: bool = True
 
     @classmethod
     def from_any(cls, value: "LLMConfig | dict | None") -> "LLMConfig":
@@ -166,7 +167,7 @@ class AppConfig:
         # SQLite 本身是 serialized 模式（threadsafety=3），跨线程安全。
         self.check_same_thread = check_same_thread
         # 空闲多久自动判定为"上一个 session 已结束"（分钟）。
-        # 0 = 关闭自动判定（只能手动 /quit）。
+        # 0 = 关闭这一空闲边界判定；独立记忆调度仍由 background 配置控制。
         self.idle_session_minutes = idle_session_minutes
         if not 0 < extraction_timeout < float('inf'):
             raise ValueError('extraction_timeout 必须为有限正数')
@@ -227,6 +228,7 @@ class AppConfig:
                 # 模型名优先用 COMPANION_LLM_MODEL，回退到 OPENAI_MODEL（兼容）
                 model=env_source.get("COMPANION_LLM_MODEL") or env_source.get("OPENAI_MODEL", ""),
                 timeout=float(env_source.get("OPENAI_TIMEOUT", "60")),
+                stream_usage=env_source.get('COMPANION_STREAM_USAGE','1').lower() not in ('0','false','off'),
             ),
         )
 

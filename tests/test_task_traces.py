@@ -8,9 +8,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
-from companion_ever.trace import TraceStore, trace_scope, current_trace, set_default_store
-from companion_ever.llm.traced_client import TracedLLMClient
-from companion_ever.services.structured_generation import checked_json
+from companion_ever.infrastructure.tracing import TraceStore, trace_scope, current_trace, set_default_store
+from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
+from companion_ever.runtime.structured import checked_json
 
 
 def main():
@@ -66,7 +66,7 @@ def main():
         assert store.artifact_path(path,'validation-01.error').read_text(encoding='utf-8')=='not valid JSON'
         assert json.loads(store.artifact_path(path,'validation-02.parsed').read_text(encoding='utf-8'))['accepted']
         import contextlib,io
-        from companion_ever.cli import main as cli_main
+        from companion_ever.entrypoints.cli import main as cli_main
         output=io.StringIO()
         with contextlib.redirect_stdout(output):
             assert cli_main(['trace','--dir',str(store.base_dir),'show',child.trace_id,'--artifact','validation-01.error'])==0
@@ -76,8 +76,8 @@ def main():
         # latest partial output must still be on disk, with honest running status.
         code='''
 import os,sys
-from companion_ever.trace import TraceStore,trace_scope
-from companion_ever.llm.traced_client import TracedLLMClient
+from companion_ever.infrastructure.tracing import TraceStore,trace_scope
+from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
 class Killed:
     model='fake'
     def stream_chat(self,messages,**kwargs):

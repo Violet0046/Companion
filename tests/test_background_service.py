@@ -9,15 +9,14 @@ from test_durable_flow import context
 from test_summary_evolution import service,empty,item
 from test_kind_storage import draft,proposal
 from companion_ever.config import BackgroundConfig,WebConfig
-from companion_ever.services.background_service import BackgroundService
-from companion_ever.api.server import create_app
+from companion_ever.entrypoints.web.server import create_app
 from companion_ever.domain.enums import MemoryKind
 
 
 def configure(ctx,**options):
     ctx.cfg.background=BackgroundConfig(**options)
-    svc=service(ctx);bg=BackgroundService(ctx);ctx.services.background=bg
-    ctx.services.session_close.on_memory_settled=bg.memory_settled
+    svc=service(ctx)
+    bg=ctx.services.background
     active=0;maximum=0;lock=threading.Lock()
     def model(messages,**kwargs):
         nonlocal active,maximum

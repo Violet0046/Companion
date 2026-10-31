@@ -66,9 +66,9 @@ class ReasoningFieldLLM(BaseLLM):
 
 def _build(tmpdir: str, llm):
     from companion_ever.config import AppConfig
-    from companion_ever.app import build_app
-    import companion_ever.app as app_mod
-    from companion_ever.llm.traced_client import TracedLLMClient
+    from companion_ever.bootstrap.app import build_app
+    import companion_ever.bootstrap.app as app_mod
+    from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
 
     app_mod.create_llm_client = lambda cfg: TracedLLMClient(llm)
 

@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def test_light_theme():
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
     root = css.split(":root {")[1].split("}")[0]
@@ -45,7 +45,7 @@ def test_light_theme():
 
 def test_thread_safe_db():
     """多线程同时用数据库不能报错。"""
-    from companion_ever.storage.db import init_db
+    from companion_ever.infrastructure.database.connection import init_db
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
@@ -91,7 +91,7 @@ def test_thread_safe_db():
 
 
 def test_thread_local_conn_is_per_thread():
-    from companion_ever.storage.db import ThreadLocalConnection, init_db
+    from companion_ever.infrastructure.database.connection import ThreadLocalConnection, init_db
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name

@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from companion_ever.services.memory_draft import generate_draft, validate_draft
+from companion_ever.memory.extraction.draft import generate_draft, validate_draft
 
 
 def main():

@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def main() -> int:
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
 
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
@@ -85,7 +85,7 @@ def main() -> int:
     print("[OK] 页面路由和各页渲染函数都在")
 
     # --- 8. 后端：上次记录时间 ---
-    from companion_ever.api.schemas import PersonaSummary
+    from companion_ever.entrypoints.web.schemas import PersonaSummary
     assert "last_record_at" in PersonaSummary.model_fields, (
         "PersonaSummary 缺 last_record_at（角色资料页要显示「上次记录」）"
     )

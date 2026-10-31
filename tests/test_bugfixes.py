@@ -1,7 +1,7 @@
 """三个严重 bug 的回归测试。
 
 1. get_messages_between 无边界时必须取**最近**的 N 条（不是最早的）
-2. /quit 必须直接进 close 节点，**不能调 LLM**
+2. 类似退出命令的内容作为普通聊天，不隐式关闭或整理
 3. 自然语言查询（"我最近面试怎么样了"）必须能召回到相关记忆
 
 这三个 bug 都是"看不见"类型的——功能看起来正常，实际行为是错的。
@@ -39,9 +39,9 @@ class CountingLLM:
 
 def _build(tmpdir: str, llm):
     from companion_ever.config import AppConfig
-    from companion_ever.app import build_app
-    import companion_ever.app as app_mod
-    from companion_ever.llm.traced_client import TracedLLMClient
+    from companion_ever.bootstrap.app import build_app
+    import companion_ever.bootstrap.app as app_mod
+    from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
 
     app_mod.create_llm_client = lambda cfg: TracedLLMClient(llm)
 
@@ -94,33 +94,12 @@ def main() -> int:
     assert "这是最新的一句" in hist[-1]["content"], "prompt 里的历史不是最新的"
     print("[OK] Bug1: prompt 里的历史是最新的")
 
-    # ---------- Bug 2: /quit 不能走 chat 节点（不产生"回复"）----------
-    result = ctx.workflows.chat.invoke({
-        "user_id": "alice",
-        "persona_id": "舒舒",
-        "user_input": "/quit",
-        "next_turn_index": 1000,
-    })
-    assert result.get("close_report") is not None, "/quit 没有触发 close 节点"
-    # chat 节点没跑 -> 结果里没有 response
-    assert "response" not in result, (
-        "/quit 仍然走了 chat 节点（返回了 response）—— 白跑了一次 LLM"
-    )
-    # 且没有任何一次 LLM 调用收到过"聊天用"的 system prompt
-    chat_system_marker = "## 当前时间信息"
-    chat_calls = [
-        m for m in llm.seen_messages
-        if m and isinstance(m[0], dict) and chat_system_marker in str(m[0].get("content", ""))
-    ]
-    assert not chat_calls, (
-        f"/quit 触发了 {len(chat_calls)} 次聊天 LLM 调用（应该 0 次）"
-    )
-    # /quit 本身也不该被当成一句话写进对话日志
-    quit_rows = ctx.conn.execute(
-        "SELECT COUNT(*) FROM conversation_log WHERE content = '/quit'"
-    ).fetchone()[0]
-    assert quit_rows == 0, f"/quit 被写进 conversation_log 了（{quit_rows} 条）"
-    print("[OK] Bug2: /quit 直接进 close 节点，0 次聊天 LLM 调用，不写日志")
+    before_calls = llm.calls
+    for text in ('/quit', '/exit'):
+        assert ctx.services.chat.chat('alice', '舒舒', text)
+    assert llm.calls == before_calls + 2
+    assert [row[0] for row in ctx.conn.execute("SELECT content FROM conversation_log WHERE role='user' AND content IN ('/quit','/exit') ORDER BY id")] == ['/quit', '/exit']
+    assert ctx.conn.execute("SELECT count(*) FROM conversation_log WHERE role='session_close'").fetchone()[0] == 0
 
     # ---------- Bug 3: 自然语言查询要能召回 ----------
     from companion_ever.domain.enums import MemoryKind

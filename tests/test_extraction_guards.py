@@ -7,8 +7,7 @@ from unittest.mock import MagicMock
 
 from test_durable_flow import context
 from companion_ever.config import AppConfig
-from companion_ever.domain.enums import BlockType
-from companion_ever.llm.openai_client import OpenAICompatibleClient
+from companion_ever.infrastructure.llm.openai_client import OpenAICompatibleClient
 
 
 def evidence(path):
@@ -102,7 +101,7 @@ def timeout_options():
 
 def manual_retry(path):
     from fastapi.testclient import TestClient
-    from companion_ever.api.server import create_app
+    from companion_ever.entrypoints.web.server import create_app
     from companion_ever.config import WebConfig
     ctx = context(path)
     finished = threading.Event()

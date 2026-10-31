@@ -23,24 +23,24 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from companion_ever.services.authz import Authorizer
-from companion_ever.services.conversation_service import ConversationService
-from companion_ever.services.extraction_service import ExtractionService
-from companion_ever.services.session_close_service import (
+from companion_ever.characters.access import Authorizer
+from companion_ever.conversations.messages import ConversationService
+from companion_ever.memory.extraction.service import ExtractionService
+from companion_ever.memory.extraction.sessions import (
     SessionCloseReport,
     SessionCloseService,
 )
-from companion_ever.services.note_service import NoteService
-from companion_ever.services.block_service import BlockService
-from companion_ever.services.persona_service import PersonaService
+from companion_ever.memory.notes.service import NoteService
+from companion_ever.memory.summaries.blocks import BlockService
+from companion_ever.characters.service import PersonaService
+from companion_ever.characters.repository import PersonaRepo
 from companion_ever.domain.enums import MemoryKind
-from companion_ever.llm.openai_client import OpenAICompatibleClient
-from companion_ever.storage.block_repo import BlockRepo
-from companion_ever.storage.conversation_repo import ConversationRepo
-from companion_ever.storage.db import init_db
-from companion_ever.storage.note_repo import NoteRepo
-from companion_ever.storage.user_repo import UserRepo
-from companion_ever.domain.persona_templates import template_to_json
+from companion_ever.memory.summaries.block_repository import BlockRepo
+from companion_ever.conversations.repository import ConversationRepo
+from companion_ever.infrastructure.database.connection import init_db
+from companion_ever.memory.notes.repository import NoteRepo
+from companion_ever.characters.users import UserRepo
+from companion_ever.characters.templates import template_to_json
 
 
 def _make_stack(db_path: str, llm=None):
@@ -52,16 +52,17 @@ def _make_stack(db_path: str, llm=None):
     note_repo = NoteRepo(conn)
     block_repo = BlockRepo(conn)
     conv_repo = ConversationRepo(conn)
-    authorizer = Authorizer(user_repo, note_repo)
+    authorizer = Authorizer(user_repo)
     note_svc = NoteService(authorizer, note_repo)
     block_svc = BlockService(authorizer, block_repo)
-    persona_svc = PersonaService(user_repo, block_repo, note_svc, authorizer)
+    persona_svc = PersonaService(user_repo, PersonaRepo(conn), authorizer,
+                                 on_created=(block_repo.initialize_persona,))
     conv_svc = ConversationService(authorizer, conv_repo)
     if llm is None:
         # mock LLM：返回符合 schema 的合法 JSON
         # 包含一条 fact（用于测试 notes 写入路径）
         llm = MagicMock()
-        from test_kind_storage import draft, proposal
+        from test_kind_storage import proposal
         from fake_memory import no_memory
         def reply(messages, **kwargs):
             case=json.loads(messages[-1]['content'])

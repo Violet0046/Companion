@@ -81,7 +81,7 @@ def test_markdown_functional() -> bool:
         print("[SKIP] 环境里没有 node，跳过 markdown 功能测试")
         return False
 
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
 
     snippet = "\n\n".join([
@@ -112,7 +112,7 @@ def test_markdown_functional() -> bool:
 
 def test_markdown_wired_in():
     """前端确实用上了渲染器。"""
-    from companion_ever.api.server import WEB_DIR
+    from companion_ever.entrypoints.web.server import WEB_DIR
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
 

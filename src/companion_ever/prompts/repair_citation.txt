@@ -1,0 +1,1 @@
+citations.quote 必须逐字取自 current_facts 中同一 note_id 的 content，不能引用旧摘要、changes 里的引文或聊天原话。

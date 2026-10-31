@@ -30,10 +30,10 @@ class FakeLLM:
 
 def _build(tmpdir: str):
     from companion_ever.config import AppConfig
-    from companion_ever.app import build_app
-    import companion_ever.app as app_mod
+    from companion_ever.bootstrap.app import build_app
+    import companion_ever.bootstrap.app as app_mod
 
-    from companion_ever.llm.traced_client import TracedLLMClient
+    from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
 
     # 与生产路径一致：create_llm_client 返回的是包了 trace 的客户端
     app_mod.create_llm_client = lambda cfg: TracedLLMClient(FakeLLM())
@@ -47,7 +47,7 @@ def _build(tmpdir: str):
 
 
 def main() -> int:
-    from companion_ever.trace import TraceStore, default_trace_dir
+    from companion_ever.infrastructure.tracing import TraceStore, default_trace_dir
 
     tmpdir = tempfile.mkdtemp(prefix="trace_test_")
     ctx = _build(tmpdir)
@@ -94,7 +94,9 @@ def main() -> int:
     assert "你在干嘛呢" in req, "request 产物里没有用户输入"
     assert "## 人设基础" in req, "request 产物里没有 system prompt"
     assert "[1] system" in req, "request 产物缺少 role 标记"
-    assert "[2] user" in req, "request 产物缺少 user 消息"
+    assert "用户本轮说的话**：你在干嘛呢" in req, (
+        "request 产物里没有本轮用户输入（它由 system 的「当前这一轮」承载）"
+    )
     print(f"[OK] request 产物 {len(req):,} 字符，含 system prompt + 用户输入")
 
     # ---------- 6. response 产物 ----------
@@ -128,7 +130,7 @@ def main() -> int:
     )
     print(f"[OK] 不变量确认历史已是最近的（无违规: {sorted(rules) or '无'}）")
 
-    # ---------- 8. /quit 的抽取链路也被追踪 ----------
+    # ---------- 8. 显式维护调用的抽取链路也被追踪 ----------
     ctx.services.session_close.close_session("alice", "舒舒")
     rows3 = store.list_traces(user_id="alice", kind="extraction", limit=5)
     assert len(rows3) >= 1, "抽取链路没有产生 trace"
@@ -137,7 +139,7 @@ def main() -> int:
     for expected in ("db.log_session_close", "extraction.workflow"):
         assert expected in ext_names, f"抽取 trace 缺少 step: {expected}（实际 {ext_names}）"
     assert ext_data["steps"][0]["detail"].get("marker_id"), "抽取 trace 缺少 marker_id"
-    print(f"[OK] /quit 抽取链路也被追踪: {ext_names}")
+    print(f"[OK] 维护抽取链路也被追踪: {ext_names}")
 
     ctx.conn.close()
     print("[ALL] trace 诊断系统测试通过")
