@@ -50,6 +50,11 @@ def main() -> int:
         if "x" in declared:
             dw, dh = (int(v) for v in declared.split("x"))
             assert (w, h) == (dw, dh), f"{name} 实际 {w}x{h}，manifest 声明 {declared}"
+            # 尺寸必须是标准值——有些启动器只认 192/512，
+            # 找不到就退回系统占位图标（一个灰团子）。
+            assert declared in ("192x192", "512x512"), (
+                f"manifest 声明的图标尺寸 {declared} 不是标准值，启动器可能找不到"
+            )
         # 必须是不透明的满幅图（PNG 颜色类型 2 = RGB）。
         # 带 alpha 的图，iOS 会把透明角合成成黑色——旧图标就是这么出黑边的。
         color_type = raw[25]
