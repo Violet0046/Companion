@@ -2,9 +2,12 @@ r"""新建角色对话框的前端逻辑测试
 
 把 app.js 里的 templateValues / buildDefinition 抽出来，用 node 跑真实逻辑：
 
-- 选模板 → 表单值：列表拍平成"、"，文本原样，模板没有的字段留空
-- 表单值 → persona_basics：空值不写进去；列表按、分隔拆开并去空格
+- 选模板 → 表单值：列表字段给数组，文本字段给字符串，模板没有的字段留空
+- 表单值 → persona_basics：空值不写进去；列表逐条去空格、滤掉空的
 - 往返：模板 → 表单值 → 定义，应当还原成原模板（用户占位符由后端替换，前端不管）
+
+列表字段在界面上是"一条一个标签"的输入（回车成标签），所以表单值是数组而不是
+"、连接的字符串——这里守住这个契约。
 
 环境里没有 node 时跳过功能部分，只做静态检查。
 """
@@ -44,24 +47,24 @@ function check(label, got, expect) {
   }
 }
 
-// 1. 模板 → 表单值：列表拍平、缺失留空
+// 1. 模板 → 表单值：列表给数组、文本给字符串
 const values = templateValues(FIELDS, TEMPLATE);
-check('模板预填-列表拍平', values.personality, '温柔、热情、活泼');
+check('模板预填-列表是数组', values.personality, ['温柔', '热情', '活泼']);
 check('模板预填-文本原样', values.background, '18岁舞蹈系女大学生');
-check('模板预填-缺失字段留空', values.values === undefined ? '' : values.values, '真诚、忠诚');
+check('模板预填-列表是副本', values.personality === TEMPLATE.personality, false);
 
 // 2. 模板缺字段时不能残留上一个模板的值
 const partial = templateValues(FIELDS, {name: 'X'});
-check('缺字段留空', partial.personality, '');
-check('缺字段留空-文本', partial.background, '');
+check('缺字段-列表留空', partial.personality, []);
+check('缺字段-文本留空', partial.background, '');
 
 // 3. 表单值 → 定义
 const def = buildDefinition(FIELDS, {
-  name: '  小林  ', identity: '同学', personality: '安静、 细心 ,',
-  background: '', values: '真诚',
+  name: '  小林  ', identity: '同学', personality: ['安静', ' 细心 ', ''],
+  background: '', values: ['真诚'],
 });
 check('定义-去空格', def.name, '小林');
-check('定义-列表拆分', def.personality, ['安静', '细心']);
+check('定义-列表逐条去空格、滤空', def.personality, ['安静', '细心']);
 check('定义-空值不写', 'background' in def, false);
 check('定义-单元素列表', def.values, ['真诚']);
 
@@ -72,8 +75,18 @@ check('全空表单', buildDefinition(FIELDS, {}), {});
 const round = buildDefinition(FIELDS, templateValues(FIELDS, TEMPLATE));
 check('往返一致', round, TEMPLATE);
 
+// 6. 列表字段不该被当成字符串处理（反向：给了字符串就当空）
+check('列表给字符串不写', buildDefinition(FIELDS, {personality: 'a、b'}), {});
+
+// 7. 一行里粘了好几条要拆开
+check('拆多条-顿号', splitEntries('温柔、热情'), ['温柔', '热情']);
+check('拆多条-混合标点', splitEntries('安静, 细心，活泼'), ['安静', '细心', '活泼']);
+check('拆多条-去空白', splitEntries('  温柔  '), ['温柔']);
+check('拆多条-空输入', splitEntries(''), []);
+check('拆多条-全是空', splitEntries(' , ， '), []);
+
 if (fail) { console.error(fail + ' 个用例失败'); process.exit(1); }
-console.log('[OK] ' + 9 + ' 个新建角色表单用例全过');
+console.log('[OK] ' + 17 + ' 个新建角色表单用例全过');
 """
 
 
@@ -106,6 +119,7 @@ def test_persona_form_logic() -> bool:
     snippet = "\n\n".join([
         extract_fn(js, "templateValues"),
         extract_fn(js, "buildDefinition"),
+        extract_fn(js, "splitEntries"),
         HARNESS,
     ])
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
@@ -129,20 +143,28 @@ def test_persona_form_logic() -> bool:
 
 
 def test_persona_form_wired_in():
-    """静态检查：对话框与三个入口都接上了。"""
+    """静态检查：对话框、标签输入与三个入口都接上了。"""
     from companion_ever.entrypoints.web.server import WEB_DIR
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
     for fn in ("openCreatePersona", "pickTemplate", "collectPersonaDefinition",
-               "savePersona", "deletePersona", "restorePersona"):
+               "savePersona", "deletePersona", "restorePersona",
+               "addChip", "setChips", "chipValues", "initChipInput", "autoGrow"):
         assert f"function {fn}(" in js, f"app.js 里没有 {fn}"
     assert "cell-new-persona" in js and "openCreatePersona" in js, "新建角色格子没接上"
     assert "btn-persona-delete" in js, "资料页没有删除按钮"
     assert "persona-restore" in js, "没有恢复入口"
-    for node_id in ("dialog-persona", "tpl-list", "pf-persona-id", "pf-fields",
-                    "btn-persona-save", "btn-persona-cancel", "btn-persona-close"):
+    # 角色标识不再单开字段——角色名就是标识
+    assert "pf-persona-id" not in js and "pf-persona-id" not in html, "角色标识字段应该去掉"
+    for node_id in ("dialog-persona", "tpl-list", "pf-fields",
+                    "btn-persona-save", "btn-persona-cancel"):
         assert f'id="{node_id}"' in html, f"index.html 里没有 {node_id}"
-    print("[OK] 新建角色对话框、删除按钮、恢复入口都已接上")
+    # 右上角不放叉号——底部的"取消"加上点遮罩已经够了
+    assert "btn-persona-close" not in html, "右上角不该再有叉号"
+    for cls in ("chip-input", "chip-item", "chip-entry", "toast-top"):
+        assert cls in css, f"styles.css 里没有 {cls}"
+    print("[OK] 新建角色对话框、标签输入、删除与恢复入口都已接上")
 
 
 if __name__ == "__main__":

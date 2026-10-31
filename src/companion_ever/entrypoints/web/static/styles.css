@@ -357,11 +357,14 @@ body {
   position: fixed; left: 50%; bottom: calc(28px + var(--safe-b));
   transform: translateX(-50%);
   background: #2b2e34; color: #fff;
-  padding: 10px 18px; border-radius: 999px; font-size: 13.5px; z-index: 80;
+  padding: 10px 18px; border-radius: 999px; font-size: 13.5px; z-index: 100;
   box-shadow: 0 8px 28px #0000001f;
   animation: toast-in .24s cubic-bezier(.32,.72,0,1);
   max-width: 88vw; text-align: center;
 }
+/* 对话框打开时提示挪到顶部——否则被面板挡在下面，根本看不见 */
+.toast.toast-top { bottom: auto; top: calc(14px + var(--safe-t)); animation: toast-in-top .24s cubic-bezier(.32,.72,0,1); }
+@keyframes toast-in-top { from { opacity: 0; transform: translate(-50%, -14px); } to { opacity: 1; transform: translate(-50%, 0); } }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 14px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
 /* ---------- 桌面端 ---------- */
@@ -840,8 +843,32 @@ body {
 .dlg-input:focus, .dlg-textarea:focus {
   outline: none; border-color: var(--accent-soft); background: var(--surface);
 }
-.dlg-textarea { min-height: 62px; resize: vertical; line-height: 1.5; }
+/* 背景、说话风格这类长文本：随内容自动长高，不出内部滚动条 */
+.dlg-textarea { min-height: 40px; max-height: 34vh; resize: none; line-height: 1.5; overflow-y: auto; }
 .dlg-field-label { font-size: 12.5px; color: var(--text-dim); margin: 0 0 4px; display: block; }
+
+/* 角色设定里的列表字段（性格/价值观/习惯…）：一条一个标签，可换行 */
+.chip-input {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  background: var(--bg-soft); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 7px 9px; margin-bottom: 8px;
+}
+.chip-input:focus-within { border-color: var(--accent-soft); background: var(--surface); }
+.chip-item {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: var(--accent-dim); color: var(--text);
+  border-radius: 999px; padding: 3px 5px 3px 10px; font-size: 13px; line-height: 1.4;
+}
+.chip-x {
+  border: none; background: none; cursor: pointer;
+  color: var(--text-dim); font-size: 15px; line-height: 1; padding: 0 4px;
+}
+.chip-entry {
+  flex: 1 1 96px; min-width: 96px; border: none; background: none;
+  font: inherit; font-size: 14px; color: var(--text); padding: 3px 0;
+}
+.chip-entry:focus { outline: none; }
+.chip-entry::placeholder { color: var(--text-muted); }
 
 .tpl-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .tpl-card {

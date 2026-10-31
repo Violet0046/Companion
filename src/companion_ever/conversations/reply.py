@@ -5,6 +5,7 @@ from companion_ever.utils.text import (
     extract_thinking,
     strip_format_prefix,
     strip_invisible,
+    strip_tool_calls,
 )
 
 
@@ -27,6 +28,10 @@ def split_assistant_reply(
     body, think = extract_thinking(text)
     body, _ = strip_format_prefix(body)
     body = strip_invisible(body).strip()
+    # 聊天没有工具，模型自编的 tool_call 块是垃圾；正文为空时用块里的文本兜底
+    body, fallback = strip_tool_calls(body)
+    if not body and fallback:
+        body = fallback
 
     # 模型单独返回的思考字段（优先于从正文里解析）
     if reasoning and reasoning.strip():

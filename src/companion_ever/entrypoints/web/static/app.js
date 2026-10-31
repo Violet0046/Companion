@@ -84,6 +84,9 @@ function toast(msg, ms = 2600) {
   const el = $('toast');
   el.textContent = msg;
   el.classList.remove('hidden');
+  // 对话框开着时提示挪到顶部——否则被面板挡在下面，根本看不见
+  const dlg = $('dialog-persona');
+  el.classList.toggle('toast-top', !!(dlg && !dlg.classList.contains('hidden')));
   clearTimeout(el._t);
   el._t = setTimeout(() => el.classList.add('hidden'), ms);
 }
@@ -492,7 +495,6 @@ function openCreatePersona() {
   const dlg = $('dialog-persona');
   if (!dlg) return;
   dlg.classList.remove('hidden');
-  $('pf-persona-id').value = '';
   PF.activeTemplate = '';
   api('/api/persona-templates').then((data) => {
     PF.fields = data.fields || [];
@@ -515,25 +517,30 @@ function renderTemplateCards() {
   });
 }
 
-/** 模板内容 → 表单值（列表拍平成、分隔的字符串）。纯函数，不碰 DOM。 */
+/** 模板内容 → 表单值。列表字段给数组，文本字段给字符串。纯函数，不碰 DOM。 */
 function templateValues(fields, template) {
   const values = {};
   fields.forEach((f) => {
     const v = template ? template[f.key] : null;
-    values[f.key] = v == null ? '' : (Array.isArray(v) ? v.join('、') : String(v));
+    values[f.key] = f.type === 'list'
+      ? (Array.isArray(v) ? v.slice() : [])
+      : (v == null ? '' : String(v));
   });
   return values;
 }
 
-/** 表单值 → persona_basics。空值不写进去；列表按、分隔拆开。纯函数，不碰 DOM。 */
+/** 表单值 → persona_basics。空值不写进去。纯函数，不碰 DOM。 */
 function buildDefinition(fields, values) {
   const out = {};
   fields.forEach((f) => {
-    const raw = (values[f.key] || '').trim();
-    if (!raw) return;
-    out[f.key] = f.type === 'list'
-      ? raw.split(/[、,，]/).map((s) => s.trim()).filter(Boolean)
-      : raw;
+    const raw = values[f.key];
+    if (f.type === 'list') {
+      const items = (Array.isArray(raw) ? raw : []).map((s) => String(s).trim()).filter(Boolean);
+      if (items.length) out[f.key] = items;
+      return;
+    }
+    const text = (raw == null ? '' : String(raw)).trim();
+    if (text) out[f.key] = text;
   });
   return out;
 }
@@ -549,23 +556,95 @@ function pickTemplate(id) {
   const values = templateValues(PF.fields, tpl.fields || {});
   PF.fields.forEach((f) => {
     const el = $('pf-' + f.key);
-    if (el) el.value = values[f.key];
+    if (!el) return;
+    if (f.type === 'list') setChips(el, values[f.key]);
+    else { el.value = values[f.key]; autoGrow(el); }
   });
-  const idInput = $('pf-persona-id');
-  if (idInput && !idInput.value) idInput.value = tpl.name || id;
+}
+
+/* --- 列表字段：一条一个标签，输入回车成标签 --- */
+
+/** 一行里粘了好几条：按、分隔拆开。纯函数。 */
+function splitEntries(raw) {
+  return (raw || '').split(/[、,，]/).map((s) => s.trim()).filter(Boolean);
+}
+
+function addChip(box, value) {
+  const chip = document.createElement('span');
+  chip.className = 'chip-item';
+  chip.dataset.value = value;
+  const text = document.createElement('span');
+  text.textContent = value;
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.className = 'chip-x';
+  x.textContent = '×';
+  x.setAttribute('aria-label', '删除 ' + value);
+  chip.appendChild(text);
+  chip.appendChild(x);
+  box.insertBefore(chip, box.querySelector('.chip-entry'));
+}
+
+function setChips(box, values) {
+  box.querySelectorAll('.chip-item').forEach((c) => c.remove());
+  (values || []).forEach((v) => addChip(box, v));
+}
+
+function chipValues(box) {
+  return Array.from(box.querySelectorAll('.chip-item')).map((c) => c.dataset.value);
+}
+
+function initChipInput(box) {
+  const entry = box.querySelector('.chip-entry');
+  if (!entry) return;
+  const commit = () => {
+    const items = splitEntries(entry.value);
+    if (!items.length) return;
+    items.forEach((v) => addChip(box, v));
+    entry.value = '';
+  };
+  entry.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Backspace' && !entry.value) {
+      const chips = box.querySelectorAll('.chip-item');
+      if (chips.length) chips[chips.length - 1].remove();
+    }
+  });
+  entry.addEventListener('blur', commit);
+  box.addEventListener('click', (e) => {
+    if (e.target.classList.contains('chip-x')) {
+      e.target.closest('.chip-item').remove();
+    } else if (e.target === box) {
+      entry.focus();
+    }
+  });
+}
+
+/** 长文本随内容长高（CSS 的 max-height 兜底，超了内部滚动）。 */
+function autoGrow(el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
 }
 
 function renderPersonaFields() {
   const box = $('pf-fields');
   if (!box) return;
   box.innerHTML = PF.fields.map((f) => {
-    const hint = f.type === 'list' ? '（用、分隔）' : '';
-    const label = `<label class="dlg-field-label" for="pf-${escAttr(f.key)}">${esc(f.label)}${f.required ? ' *' : ''}${hint}</label>`;
-    const input = f.type === 'list'
-      ? `<input id="pf-${escAttr(f.key)}" class="dlg-input" autocomplete="off">`
-      : `<textarea id="pf-${escAttr(f.key)}" class="dlg-textarea" rows="2"></textarea>`;
-    return label + input;
+    const label = `<label class="dlg-field-label" for="pf-${escAttr(f.key)}">${esc(f.label)}${f.required ? ' *' : ''}</label>`;
+    if (f.type === 'list') {
+      return label + `<div class="chip-input" id="pf-${escAttr(f.key)}">`
+        + `<input class="chip-entry" placeholder="输入一条，回车添加" autocomplete="off"></div>`;
+    }
+    return label
+      + `<textarea id="pf-${escAttr(f.key)}" class="dlg-textarea" rows="1" autocomplete="off"></textarea>`;
   }).join('');
+  PF.fields.forEach((f) => {
+    const el = $('pf-' + f.key);
+    if (!el) return;
+    if (f.type === 'list') initChipInput(el);
+    else el.addEventListener('input', () => autoGrow(el));
+  });
 }
 
 /** 表单 → persona_basics。 */
@@ -573,16 +652,19 @@ function collectPersonaDefinition() {
   const values = {};
   PF.fields.forEach((f) => {
     const el = $('pf-' + f.key);
-    if (el) values[f.key] = el.value || '';
+    if (!el) return;
+    values[f.key] = f.type === 'list' ? chipValues(el) : (el.value || '');
   });
   return buildDefinition(PF.fields, values);
 }
 
 async function savePersona() {
-  const personaId = ($('pf-persona-id').value || '').trim();
-  if (!personaId) { toast('给角色起个标识'); return; }
   const definition = collectPersonaDefinition();
-  if (!definition.name || !definition.identity) { toast('名字和一句话身份都要填'); return; }
+  if (!definition.name) { toast('给角色起个名字'); return; }
+  if (!definition.identity) { toast('写一句这个角色是谁'); return; }
+  // 角色标识就是角色名——不再单开一个字段
+  const personaId = String(definition.name).trim();
+  if (personaId.includes(',')) { toast('名字里不能有逗号'); return; }
   const user = S.user;
   try {
     await api(`/api/persona/${enc(user)}`, {
@@ -2345,9 +2427,12 @@ $('pin-submit').onclick = async () => {
 $('pin-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pin-submit').click(); });
 
 /* 新建角色对话框 */
-$('btn-persona-close').onclick = () => $('dialog-persona').classList.add('hidden');
 $('btn-persona-cancel').onclick = () => $('dialog-persona').classList.add('hidden');
 $('btn-persona-save').onclick = savePersona;
+// 点遮罩关闭（右上角不放叉号——底部的"取消"已经够了）
+$('dialog-persona').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) $('dialog-persona').classList.add('hidden');
+});
 
 /* 往上滑到顶 → 加载更早的 */
 $('chat').addEventListener('scroll', () => {

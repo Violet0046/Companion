@@ -9,7 +9,6 @@ from companion_ever.utils.text import strip_invisible
 from companion_ever.runtime.errors import describe_error
 
 MESSAGE_BREAK = "<message_break>"
-MULTI_MESSAGE_PROMPT = "你可以视情况连续发送1至3条简短消息，不必凑数量。若分多条，只在完整消息之间插入<message_break>，分隔符前后不要求换行；普通换行仅用于同一条消息内的排版。不要在思考块中使用该分隔符。普通回复视为一条消息。"
 
 
 class ChatService:
@@ -55,7 +54,6 @@ class ChatService:
                 result=self.prompt_service.build(generation['user_id'],generation['persona_id'],query=trigger,
                                                  current_message_id=generation['trigger_message_id'])
                 messages=list(result['messages'])
-                messages[0]={**messages[0],'content':messages[0]['content']+'\n'+MULTI_MESSAGE_PROMPT}
                 if not self.generations.active(gid):
                     yield {'type':'cancelled','generation_id':gid}
                     return

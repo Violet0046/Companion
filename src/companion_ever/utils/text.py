@@ -25,6 +25,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Iterable
 
@@ -123,6 +124,55 @@ def strip_thinking(text: str) -> str:
     不限于某一种模型：识别 think / thinking / reasoning 三种标签。
     """
     return THINK_PATTERN.sub("", text).strip()
+
+
+# 聊天没有工具，但模型偶尔会自编一个 <tool_call> 块（工具名还是乱的）。
+# 标签里常夹零宽字符，匹配时要能容忍。
+TOOL_CALL_PATTERN = re.compile(
+    r"<[\s]*tool_call[\s]*>(.*?)</[\s]*tool_call[\s]*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _tool_call_text(block: str) -> str | None:
+    """从 tool_call 块里取出 arguments.text——有的模型把回复放在那儿。"""
+    try:
+        data = json.loads(block.strip())
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    args = data.get("arguments")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except (ValueError, TypeError):
+            return None
+    if isinstance(args, dict):
+        text = args.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return None
+
+
+def strip_tool_calls(text: str) -> tuple[str, str | None]:
+    """剔除模型误吐的 <tool_call> 块。
+
+    聊天没有工具，这种块对用户是垃圾。它里面的 arguments.text 往往才是
+    真正的回复——正文被清空时用它兜底。
+
+    Returns:
+        (清理后的正文, 兜底回复 or None)
+    """
+    blocks = TOOL_CALL_PATTERN.findall(text)
+    if not blocks:
+        return text, None
+    body = TOOL_CALL_PATTERN.sub("", text).strip()
+    for block in blocks:
+        fallback = _tool_call_text(block)
+        if fallback:
+            return body, fallback
+    return body, None
 
 
 def strip_invisible(text: str) -> str:

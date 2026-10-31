@@ -65,8 +65,8 @@ def references_resolve():
         f"模板里的小节只有 {sorted(sections)}"
     )
     # 反向也要成立：数据型小节若没人引用，说明指引漏了说明。
-    # 行为指引本身是指令，不需要被引用。
-    standalone = {"行为指引"}
+    # 行为指引与回复格式本身是指令，不需要被引用。
+    standalone = {"行为指引", "回复格式"}
     unreferenced = sections - references - standalone
     assert not unreferenced, (
         f"chat_system.txt 定义了小节 {sorted(unreferenced)}，"
@@ -123,14 +123,14 @@ def templates_load():
             assert phrase not in text, f"{name} 仍含旧表述 {phrase}"
 
 
-def history_section_comes_last():
-    """历史会话必须是最后一节——它描述的正是下方消息列表里的那段历史。
+def closing_sections_come_last():
+    """最后两节是「历史会话」和「回复格式」。
 
-    放在行为指引之后，读起来才是连续的：先讲怎么答，再讲历史在哪。
+    顺序有讲究：先给数据（当前这一轮、人设、记忆、摘要），
+    最后才讲"历史在哪、怎么读"和"怎么回"。
     """
     order = [line[3:].strip() for line in CHAT_SYSTEM.splitlines() if line.startswith("## ")]
-    assert order[-1] == "历史会话", f"历史会话应在最后，实际顺序: {order}"
-    assert order[-2] == "行为指引", f"历史会话应紧跟行为指引之后，实际顺序: {order}"
+    assert order[-2:] == ["历史会话", "回复格式"], f"结尾小节顺序不对: {order}"
     assert order[0] == "当前这一轮", f"当前这一轮应在最前，实际顺序: {order}"
 
 
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     compose_keeps_filled_sections()
     templates_load()
     templates_share_one_style()
-    history_section_comes_last()
+    closing_sections_come_last()
     chat_template_explains_the_vocabulary()
     protocol_text_lives_in_templates()
     print("[OK] 提示词模板结构：引用指向真实小节、占位符已知、空小节连标题消失、"
