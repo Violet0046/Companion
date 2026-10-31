@@ -59,3 +59,10 @@ Thumbs.db
 # ===== Scratch 脚本 =====
 # 临时诊断脚本与评测产物（scratch_*.py / *.md / *.responses.json / *.suite.json）
 scratch_*
+
+# ===== 只在本地跑，不上云端 =====
+# 云端只需要跑服务；开发与测试全在本地完成。
+# 文件仍留在本地磁盘上（工具照常用），只是不再进仓库。
+# 想恢复跟踪：删掉下面两行，再 git add -f tests tools
+tests/
+tools/
