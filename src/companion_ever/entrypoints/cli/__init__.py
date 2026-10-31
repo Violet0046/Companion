@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from companion_ever.config import AppConfig, LLMConfig
-from companion_ever.bootstrap.app import build_app
+from companion_ever.bootstrap.app import AppContext, build_app
 from companion_ever.characters.templates import build_definition, list_templates
 from companion_ever.utils.text import strip_format_prefix
 from companion_ever.entrypoints.cli.maintain_cmd import cmd_backup
@@ -31,7 +31,7 @@ from companion_ever.entrypoints.cli.trace_cmd import (
 )
 
 
-def _build_app(db_path: Optional[str], llm_cfg: Optional[LLMConfig] = None) -> "AppContext":
+def _build_app(db_path: Optional[str] = None, llm_cfg: Optional[LLMConfig] = None) -> AppContext:
     """构造 AppContext（CLI 用）。
 
     优先级（从高到低）：
