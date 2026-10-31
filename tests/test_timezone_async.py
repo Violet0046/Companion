@@ -116,7 +116,7 @@ def test_frontend_uses_async_record():
     assert "pollRecordDone" in js, "前端没有轮询等待记录完成"
     assert "await api('/api/session/close'" in js, "前端还在同步等记录完成"
     assert "Promise.allSettled" in js, "会话加载不该用 Promise.all（一个失败全挂）"
-    assert "m.role === 'assistant'" in js, "未读数应该只数她的回复"
+    assert "m.role === 'assistant'" in js, "未读数应该只数 TA 的回复"
     assert "tab-badge-msg" in js, "底部 Tab 没有未读角标"
     print("[OK] 前端：异步记录 + 错误不再被吞 + 未读只数回复")
 

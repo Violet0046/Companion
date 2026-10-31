@@ -66,7 +66,7 @@ const S = {
   sinceLastSep: 0,
   /* 顶栏显示的名字（等回复时会临时变成"对方正在输入…"） */
   personaTitle: '',
-  /* 正在等她回复 */
+  /* 正在等 TA 回复 */
   typing: false,
   /* 发送看门狗的定时器 */
   sendTimer: null,
@@ -142,7 +142,7 @@ async function api(path, opts = {}) {
 const base = () => `/api/persona/${encodeURIComponent(S.user)}/${encodeURIComponent(S.persona)}`;
 
 /* ============================================================
-   页面层：消息 / 通讯录 / 我 / 会话 / 角色资料 / 她的记忆
+   页面层：消息 / 通讯录 / 我 / 会话 / 角色资料 / TA 的记忆
    页面入口与渲染
    ============================================================ */
 
@@ -948,7 +948,7 @@ function renderProfile(user, persona, info) {
     </div>
     <div class="group">
       <div class="row" id="row-chat"><span>继续聊天</span><span class="row-val">现在就开始 <span class="chev">›</span></span></div>
-      <div class="row" id="row-memory"><span>她的记忆</span><span class="row-val">${(info && info.note_count) || 0} 条 <span class="chev">›</span></span></div>
+      <div class="row" id="row-memory"><span>TA 的记忆</span><span class="row-val">${(info && info.note_count) || 0} 条 <span class="chev">›</span></span></div>
       <div class="row" id="row-dates"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>
       <div class="row" id="row-relation"><span>关系状态</span><span class="row-val">${esc(relStage(info))} <span class="chev">›</span></span></div>
     </div>
@@ -975,7 +975,7 @@ function relationHtml(info) {
   const rel = blocks.find((b) => b.block_type === 'relationship_state');
   const prof = blocks.find((b) => b.block_type === 'user_profile');
   if (!rel && !prof) {
-    return '<div class="empty">还没有关系数据<br/>多聊几句，她就会开始记你们之间的事了</div>';
+    return '<div class="empty">还没有关系数据<br/>多聊几句，TA 就会开始记你们之间的事了</div>';
   }
   let html = '';
   if (rel) {
@@ -1010,7 +1010,7 @@ function relationHtml(info) {
   return html;
 }
 
-/** 打开关系状态页（和「她的记忆」「聊天记录」一样的子页面） */
+/** 打开关系状态页（和「TA 的记忆」「聊天记录」一样的子页面） */
 async function openRelation(user, persona) {
   S.relationPersona = { user, persona };
   showView('relation');
@@ -1242,7 +1242,7 @@ function finishRecord(user, persona, info, toastIt) {
   loadConvs();
 }
 
-/* ---------- 她的记忆 ---------- */
+/* ---------- TA 的记忆 ---------- */
 
 async function openMemory(user, persona) {
   S.memoryPersona = { user, persona };
@@ -1765,12 +1765,12 @@ function renderMarkdown(src) {
 
 /* ---------- 思考过程 ---------- */
 
-/** 生成"她当时在想什么"折叠块 */
+/** 生成"TA 当时在想什么"折叠块 */
 function buildThinkBlock(thinking) {
   const det = document.createElement('details');
   det.className = 'think';
   const sum = document.createElement('summary');
-  sum.textContent = '她当时在想什么';
+  sum.textContent = 'TA 当时在想什么';
   const body = document.createElement('div');
   body.className = 'think-body';
   body.textContent = thinking;
@@ -1909,7 +1909,7 @@ function closeSearch() {
 async function doSearch(q) {
   const box = $('search-results');
   if (!q.trim()) {
-    box.innerHTML = '<div class="empty">输入关键词，搜索过去的聊天和她记得的事…</div>';
+    box.innerHTML = '<div class="empty">输入关键词，搜索过去的聊天和 TA 记得的事…</div>';
     return;
   }
   try {
@@ -1923,7 +1923,7 @@ async function doSearch(q) {
     hits.forEach((h) => { (groups[h.kind] || (groups[h.kind] = [])).push(h); });
 
     let html = '';
-    const label = { message: '聊天记录', memory: '她记得的' };
+    const label = { message: '聊天记录', memory: 'TA 记得的' };
     Object.keys(groups).forEach((kind) => {
       if (!groups[kind].length) return;
       html += `<div class="drawer-label" style="margin:12px 0 6px">${label[kind] || kind}（${groups[kind].length}）</div>`;
@@ -1931,7 +1931,7 @@ async function doSearch(q) {
         const text = esc(h.content).replace(re, (m) => `<mark>${m}</mark>`);
         const meta = h.kind === 'memory'
           ? `${esc(h.memory_kind || '')}`
-          : `${esc(h.role === 'user' ? '我' : '她')} · ${fmtTime(h.created_at)}`;
+          : `${esc(h.role === 'user' ? '我' : 'TA')} · ${fmtTime(h.created_at)}`;
         const jump = h.kind === 'message' ? ` data-jump="${h.id}"` : '';
         html += `<div class="hit" data-kind="${h.kind}"${jump}>
           <div class="hit-head"><span class="hit-meta">${meta}</span></div>
@@ -2416,7 +2416,7 @@ $('toggle-thinking').addEventListener('change', async (e) => {
     } else {
       rerenderKeepScroll();
     }
-    toast(S.showThinking ? '会显示她的思考过程' : '不显示思考过程');
+    toast(S.showThinking ? '会显示 TA 的思考过程' : '不显示思考过程');
   } catch (err) { toast('设置失败'); }
 });
 

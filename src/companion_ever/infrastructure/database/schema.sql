@@ -98,7 +98,7 @@ CREATE INDEX IF NOT EXISTS idx_log_user_persona
 --
 -- 为什么分开存：
 --   conversation_log 的内容要送进 prompt（模型看的），思考过程是纯污染
---   （占历史 token 的 90%+）；但它对用户展示很有价值（能看到"她在想什么"）。
+--   （占历史 token 的 90%+）；但它对用户展示很有价值（能看到"TA 在想什么"）。
 --   同一份数据两种用途 → 必须分开存。
 --
 -- 为什么不用第二张完整的 conversation_log：

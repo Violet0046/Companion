@@ -1,6 +1,8 @@
-# Companion Ever Memory
+# 同行（Companion Ever Memory）
 
 带长期记忆的 AI 伴侣原型：Python 服务、SQLite 本地存储、Web/PWA 界面，联网调用配置的模型。支持多角色私聊、流式多条回复、后台恢复、两层笔记及独立摘要。当前仍依赖电脑或服务器；独立手机 App、群聊、主动聊天和语义检索尚未实现。
+
+Web 端应用名叫「同行」，界面里一律用「TA」指代角色——角色可以是任何性别，界面不该替它假定。
 
 按业务模块的重构方案与进度见 [架构](docs/ARCHITECTURE.md)。角色、会话和记忆已分别迁入 `characters/`、`conversations/`、`memory/`；笔记、检索、整理、摘要和业务触发规则在记忆模块内分开组织。Web 只调用业务入口和订阅结果，离线评测位于 `tools/evaluation/`；公共运行层与基础设施继续收敛。
 

@@ -23,7 +23,7 @@ class CloseSessionIn(BaseModel):
 
 
 class CloseSessionOut(BaseModel):
-    """结束 session 的结果——告诉前端"她记住了什么"。
+    """结束 session 的结果——告诉前端"TA 记住了什么"。
 
     started=True 表示**已经丢到后台执行**，请求立刻就返回了
     （抽取是一次完整 LLM 调用，要几十秒，不能让用户在那儿干等）。
@@ -123,7 +123,7 @@ class PersonaCreateIn(BaseModel):
 
 
 class PersonaSummary(BaseModel):
-    """角色总览——前端顶栏 + "她记得什么"面板用。"""
+    """角色总览——前端顶栏 + "TA 记得什么"面板用。"""
 
     user_id: str
     persona_id: str

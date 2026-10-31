@@ -22,7 +22,7 @@ class FakeLLM:
     model = "fake-model"
 
     def chat(self, messages, **kwargs) -> str:
-        return "<think>心里想：她今天心情不错</think>嘿嘿，在想你呀"
+        return "<think>心里想：你今天心情不错</think>嘿嘿，在想你呀"
 
     def stream_chat(self, messages, **kwargs):
         yield "嘿嘿，在想你呀"

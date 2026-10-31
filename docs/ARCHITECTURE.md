@@ -165,6 +165,7 @@ Web 端原先没有角色管理入口——创建只能走 CLI `setup`，`deacti
 - 聊天模型看到的笔记元数据有词汇表：`kind`（fact 长期事实 / episode 具体经历）、`reality`（user_report 自述现实 / shared_fiction 共同想象 / uncertain 待核实）、`event_time`、`importance` —— 不解释的话模型只能猜。
 - 聊天模板的小节顺序有讲究：先给数据（当前这一轮 → 人设基础 → 相关记忆 → 用户画像与关系概况 → 行为指引），最后两节才是「历史会话」和「回复格式」——先讲历史在哪怎么读，再讲怎么回。
 - **聊天没有工具**：模型偶尔会自编一个 `<tool_call>` 块（工具名还是乱的，标签里还夹零宽字符）。入库正文与流式输出都把它整段剔除；若模型只吐了 tool_call，块里 `arguments.text` 才是真正的回复，由它兜底。见 `utils/text.py:strip_tool_calls` 与 `conversations/stream_filter.py:_hide_tool_calls`。
+- **界面不预设角色性别**：Web 端应用名叫「同行」，指代一律用「TA」。角色可以是任何性别，界面不该替它假定；同理，提示词里也不出现对角色的性别称呼。
 
 ### 已落地的执行与入口收敛约定
 

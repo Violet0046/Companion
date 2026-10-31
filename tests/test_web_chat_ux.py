@@ -48,7 +48,7 @@ def test_ws_sends_thinking_event():
 
         # 模拟推理模型：正文里带 <think> 块
         def fake_stream(messages, **kw):
-            yield "<think>她问我话，我该撒娇一点</think>"
+            yield "<think>你问我话，我该撒娇一点</think>"
             yield "宝宝好呀～"
 
         ctx.llm.stream_chat = fake_stream
@@ -122,7 +122,7 @@ def test_frontend_jump_latest_and_switch_placement():
     i_session = html.find("btn-close-session")
     assert i_switch > 0 and i_wiki > 0, "找不到开关或记忆条目"
     assert i_session < i_switch < i_wiki, (
-        "「显示她的思考过程」应该放在「让她记住」之后、记忆条目之前，"
+        "「显示思考过程」应该放在「手动记一次」之后、记忆条目之前，"
         f"现在 session={i_session} switch={i_switch} wiki={i_wiki}"
     )
 

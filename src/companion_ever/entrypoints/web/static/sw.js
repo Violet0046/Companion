@@ -53,7 +53,7 @@ self.addEventListener('fetch', (e) => {
 self.addEventListener('push', (e) => {
   let data = {};
   try { data = e.data ? e.data.json() : {}; } catch (err) { data = {}; }
-  const title = data.title || '她';
+  const title = data.title || '同行';
   const options = {
     body: data.body || '',
     icon: '/icon-192.png',
