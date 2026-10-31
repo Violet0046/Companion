@@ -66,11 +66,11 @@ def _make_stack(db_path: str, llm=None):
         from fake_memory import no_memory
         def reply(messages, **kwargs):
             case=json.loads(messages[-1]['content'])
-            matching=[m for m in case['messages'] if m['role']=='user' and m['id'] in case['new_message_ids'] and '我叫周艺科' in m['content']]
+            matching=[m for m in case['messages'] if m['role']=='user' and m['id'] in case['new_message_ids'] and '我叫小明' in m['content']]
             if not matching:
                 return no_memory(messages)
             result=json.loads(no_memory(messages))
-            result['proposals']=[proposal(matching[0]['id'],'我叫周艺科',content='用户叫周艺科')]
+            result['proposals']=[proposal(matching[0]['id'],'我叫小明',content='用户叫小明')]
             result['skipped']=[s for s in result['skipped'] if s['message_id']!=matching[0]['id']]
             return json.dumps(result)
         llm.chat.side_effect = reply
@@ -109,7 +109,7 @@ def test_full_sentinel_flow_extracts_session():
         # 2. 多轮对话
         s["conv_svc"].log_turn(
             user_id="alice", persona_id="舒舒",
-            turn_index=1, role="user", content="你好，我叫周艺科",
+            turn_index=1, role="user", content="你好，我叫小明",
         )
         s["conv_svc"].log_turn(
             user_id="alice", persona_id="舒舒",
@@ -149,14 +149,14 @@ def test_full_sentinel_flow_extracts_session():
         cnt = s["conv_svc"].count("alice", "舒舒")
         assert cnt == 4, f"count 应是 4 条真实对话, 实际 {cnt}"
 
-        # 8. 验证至少创建了一条 note（用户说"叫周艺科"）
+        # 8. 验证至少创建了一条 note（用户说"叫小明"）
         notes = s["note_svc"].find_notes(
             user_id="alice", persona_id="舒舒",
             kinds=[MemoryKind.FACT],
         )
         assert len(notes) >= 1, "应至少有一条 profile_fact 笔记（名字抽取）"
         # 验证内容包含名字
-        assert any("周艺科" in n.content for n in notes)
+        assert any("小明" in n.content for n in notes)
 
         print("[OK] 完整 Sentinel 流程通过")
         conn.close()

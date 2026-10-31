@@ -46,8 +46,8 @@ def test_history_not_duplicated():
 
         # 写 2 轮对话（内容带唯一标记，方便检测）
         turns = [
-            (1, "user", "UNIQUE_MSG_A_我叫周艺科"),
-            (1, "assistant", "UNIQUE_MSG_B_你好周艺科"),
+            (1, "user", "UNIQUE_MSG_A_我叫小明"),
+            (1, "assistant", "UNIQUE_MSG_B_你好小明"),
             (2, "user", "UNIQUE_MSG_C_我今天很累"),
             (2, "assistant", "UNIQUE_MSG_D_早点休息"),
         ]

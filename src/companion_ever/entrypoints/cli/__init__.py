@@ -71,7 +71,7 @@ def cmd_setup(args) -> int:
 
         # 2. 准备 definition
         if args.template:
-            # 用模板时，把模板里写死的"周艺科"替换成实际 user_id
+            # 用模板时，把模板里的 {user} 占位符替换成实际 user_id
             definition = build_definition(args.template, args.user)
             print(f"[--] Using template '{args.template}' (with user='{args.user}')")
         elif args.definition:

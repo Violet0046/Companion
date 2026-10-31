@@ -29,13 +29,13 @@ class ThinkLLM:
         self.calls += 1
         return (
             "<think>The user is asking about the interview. "
-            "I should reference the note about 广联达.</think>"
-            "[2026-10-28 00:01:28] 宝宝，广联达那边有消息了吗～"
+            "I should reference the note about 星海科技.</think>"
+            "[2026-10-28 00:01:28] 宝宝，星海科技那边有消息了吗～"
         )
 
     def stream_chat(self, messages, **kwargs):
         self.calls += 1
-        yield "<think>在想广联达</think>宝宝，广联达那边有消息了吗～"
+        yield "<think>在想星海科技</think>宝宝，星海科技那边有消息了吗～"
 
 
 def main() -> int:
@@ -62,7 +62,7 @@ def main() -> int:
     )
 
     # ---------- 跑一轮对话 ----------
-    ctx.services.chat.chat("alice", "苏苏", "广联达那边有消息了吗")
+    ctx.services.chat.chat("alice", "苏苏", "星海科技那边有消息了吗")
 
     # ---------- 1. conversation_log 里是干净正文 ----------
     msgs = ctx.services.conversation.get_recent_messages("alice", "苏苏", limit=10)
@@ -71,7 +71,7 @@ def main() -> int:
     body = assistant[-1].content
     assert "<think>" not in body, f"conversation_log 里混进了 think: {body[:80]}"
     assert not body.startswith("["), f"conversation_log 里混进了模仿前缀: {body[:60]}"
-    assert "广联达" in body, "正文丢了"
+    assert "星海科技" in body, "正文丢了"
     print(f"[OK] conversation_log 只存干净正文: {body[:44]}")
 
     # ---------- 2. thinking_log 里存着思考过程 ----------
@@ -80,12 +80,12 @@ def main() -> int:
     )
     assert tmap, "thinking_log 里没有思考记录"
     think = list(tmap.values())[0]
-    assert "广联达" in think, f"思考记录内容不对: {think[:80]}"
+    assert "星海科技" in think, f"思考记录内容不对: {think[:80]}"
     assert "<think>" not in think, "thinking_log 里不该保留 <think> 标签本身"
     print(f"[OK] thinking_log 存了思考过程: {think[:56]}...")
 
     # ---------- 3. prompt 里绝不能有 think ----------
-    r = ctx.services.prompt.build("alice", "苏苏", query="广联达")
+    r = ctx.services.prompt.build("alice", "苏苏", query="星海科技")
     whole = "".join(m["content"] for m in r["messages"])
     assert "<think>" not in whole, "prompt 里混进了 <think>"
     assert "The user is asking about the interview" not in whole, (
@@ -114,7 +114,7 @@ def main() -> int:
     assert not tmap2, "清空后不该还有思考记录"
     # 正文不受影响
     msgs2 = ctx.services.conversation.get_recent_messages("alice", "苏苏", limit=10)
-    assert "广联达" in [m.content for m in msgs2 if m.role == "assistant"][0]
+    assert "星海科技" in [m.content for m in msgs2 if m.role == "assistant"][0]
     print("[OK] 一键清空思考记录，正文不受影响")
 
     ctx.conn.close()

@@ -7,7 +7,7 @@ import json
 from companion_ever.characters.access import Authorizer
 from companion_ever.characters.repository import PersonaRepo
 from companion_ever.characters.templates import (
-    TEMPLATE_FIELDS, build_definition, template_cards)
+    TEMPLATE_FIELDS, USER_PLACEHOLDER, build_definition, template_cards)
 from companion_ever.infrastructure.database.connection import transaction
 from companion_ever.characters.users import UserRepo
 
@@ -45,6 +45,8 @@ class PersonaService:
         persona_id = persona_id.strip()
         if not isinstance(definition, str) or not definition.strip():
             raise ValueError('角色设定不能为空')
+        # {user} 占位符替换成实际 user_id——模板与自定义设定走同一条路。
+        definition = definition.replace(USER_PLACEHOLDER, user_id)
         with transaction(self.persona_repo.conn):
             if not self.user_repo.exists(user_id):
                 raise ValueError(f"User '{user_id}' 不存在")

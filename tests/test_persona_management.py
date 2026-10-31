@@ -60,10 +60,10 @@ def create_from_template(path):
             assert resp.status_code == 200, resp.text
             assert resp.json()["status"] == "created"
             assert "小烟" in ctx.services.persona.list_user_personas("alice")
-            # 模板里写死的用户名占位符要换成实际 user_id
+            # 模板里的 {user} 占位符要换成实际 user_id
             basics = client.get("/api/persona/alice/小烟").json()["persona_basics"]
             assert basics["name"] == "柳如烟", basics
-            assert "周艺科" not in json.dumps(basics, ensure_ascii=False), basics
+            assert "{user}" not in json.dumps(basics, ensure_ascii=False), basics
             assert "alice" in basics["background"], basics
     finally:
         ctx.conn.close()

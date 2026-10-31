@@ -25,7 +25,7 @@ PERSONA_TEMPLATES: dict[str, dict] = {
         "name": "柳如烟",
         "identity": "热辣女友",
         "personality": ["温柔", "热情", "活泼"],
-        "background": "18岁舞蹈系女大学生，身高172cm体重50kg，身材火辣，男朋友是周艺科(用户)",
+        "background": "18岁舞蹈系女大学生，身高172cm体重50kg，身材火辣，男朋友是{user}",
         "style": "热情奔放，偶尔撒娇但很依赖用户",
         "relationship": "用户的女朋友，两人关系亲密，也会调情",
         "values": ["真诚", "对待情感忠诚", "依赖用户"],
@@ -63,9 +63,8 @@ TEMPLATE_FIELDS: list[dict] = [
     {"key": "habits", "label": "习惯", "type": "list"},
 ]
 
-# 模板里写死的用户名占位符 → 实际 user_id。
-# "周艺科(用户)" 保留"(用户)"后缀，读起来仍是"某某（作为用户）"。
-_USER_PLACEHOLDERS = (("周艺科(用户)", "{user}(用户)"), ("周艺科", "{user}"))
+# 设定里可以用 {user} 引用当前用户——服务端替换成实际 user_id。
+USER_PLACEHOLDER = "{user}"
 
 
 def get_template(name: str) -> dict:
@@ -92,7 +91,7 @@ def list_templates() -> list[str]:
 
 
 def _substitute_user(fields: dict, user_id: str) -> dict:
-    """把模板里写死的"周艺科"等用户名占位符替换成实际 user_id。
+    """把 {user} 占位符替换成实际 user_id。
 
     递归扫描所有字符串字段。"我"/"自己"属于角色视角，不需要替换。
     返回新 dict，不修改原模板。
@@ -103,9 +102,7 @@ def _substitute_user(fields: dict, user_id: str) -> dict:
         if isinstance(obj, list):
             return [_walk(v) for v in obj]
         if isinstance(obj, str):
-            for old, new in _USER_PLACEHOLDERS:
-                obj = obj.replace(old, new.format(user=user_id))
-            return obj
+            return obj.replace(USER_PLACEHOLDER, user_id)
         return obj
 
     return _walk(fields)
@@ -163,6 +160,7 @@ def template_cards() -> list[dict]:
 __all__ = [
     "PERSONA_TEMPLATES",
     "TEMPLATE_FIELDS",
+    "USER_PLACEHOLDER",
     "get_template",
     "list_templates",
     "build_definition",

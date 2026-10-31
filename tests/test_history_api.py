@@ -57,7 +57,7 @@ def main() -> int:
             "INSERT INTO conversation_log (user_id, persona_id, turn_index, role, content, created_at, conversation_id, sender_kind, sender_id) "
             "VALUES ('alice','苏苏',?,?,?,?,?,'user','alice')",
             (i + 1, "user" if i % 2 == 0 else "assistant",
-             f"消息内容 第{i}条 广联达 面试", "2026-10-27 10:00:00", cid),
+             f"消息内容 第{i}条 星海科技 面试", "2026-10-27 10:00:00", cid),
         )
     for i in range(60):
         conn.execute(
@@ -68,7 +68,7 @@ def main() -> int:
         )
     conn.execute(
         "INSERT INTO note (id, user_id, persona_id, kind, content, importance) "
-        "VALUES ('n1','alice','苏苏','episode','用户收到了广联达录用意向', 0.9)"
+        "VALUES ('n1','alice','苏苏','episode','用户收到了星海科技录用意向', 0.9)"
     )
 
     # 起服务
@@ -119,11 +119,11 @@ def main() -> int:
     print("[OK] 按日期：/dates 列表 + /history?date= 精确取当天")
 
     # ---------- 4. 搜索 ----------
-    hits = get(BASE + "/search?q=" + urllib.parse.quote("广联达"))
+    hits = get(BASE + "/search?q=" + urllib.parse.quote("星海科技"))
     kinds = {h["kind"] for h in hits}
     assert "message" in kinds, "应搜到聊天记录"
     assert "memory" in kinds, "应搜到记忆条目"
-    hits2 = get(BASE + "/search?q=" + urllib.parse.quote("广联达") + "&scope=messages")
+    hits2 = get(BASE + "/search?q=" + urllib.parse.quote("星海科技") + "&scope=messages")
     assert all(h["kind"] == "message" for h in hits2), "scope=messages 应只返回聊天记录"
     print(f"[OK] 搜索：聊天记录 + 记忆条目（{len(hits)} 条），scope 过滤正常")
 
