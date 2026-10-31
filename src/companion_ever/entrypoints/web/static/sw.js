@@ -4,16 +4,14 @@
    局域网 http://192.168.x.x:8000 下这里会注册失败，属于预期。
    ============================================================ */
 
-const CACHE = 'ce-shell-v3';
+const CACHE = 'ce-shell-v4';
 const SHELL = [
   '/',
   '/index.html',
   '/app.js',
   '/styles.css',
   '/manifest.webmanifest',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/icon-512-maskable.png',
+  '/icon.png',
 ];
 
 self.addEventListener('install', (e) => {
@@ -57,8 +55,8 @@ self.addEventListener('push', (e) => {
   const title = data.title || '同行';
   const options = {
     body: data.body || '',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
+    icon: '/icon.png',
+    badge: '/icon.png',
     tag: data.tag || 'ce',
     renotify: true,
     data: { url: '/' },

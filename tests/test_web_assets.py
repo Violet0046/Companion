@@ -22,7 +22,7 @@ def main() -> int:
     # --- 1. 必需文件都在 ---
     required = [
         "index.html", "app.js", "styles.css",
-        "manifest.webmanifest", "sw.js", "icon-192.png", "icon-512.png",
+        "manifest.webmanifest", "sw.js", "icon.png",
     ]
     missing = [f for f in required if not (WEB_DIR / f).exists()]
     assert not missing, f"缺少静态文件: {missing}"
@@ -33,21 +33,31 @@ def main() -> int:
     for key in ("name", "start_url", "display", "icons", "theme_color"):
         assert key in manifest, f"manifest 缺少 {key}"
     assert manifest["display"] == "standalone", "manifest 应该是 standalone（独立窗口）"
-    sizes = {i["sizes"] for i in manifest["icons"]}
-    assert "192x192" in sizes and "512x512" in sizes, f"图标尺寸不全: {sizes}"
-    print(f"[OK] manifest 合法（display={manifest['display']}, 图标 {sorted(sizes)}）")
+    assert manifest["icons"], "manifest 没有图标"
+    print(f"[OK] manifest 合法（display={manifest['display']}，"
+          f"图标 {[i['sizes'] for i in manifest['icons']]}）")
 
-    # --- 3. 图标是有效 PNG ---
-    for name in ("icon-192.png", "icon-512.png"):
+    # --- 3. 图标是有效 PNG，尺寸与 manifest 声明一致 ---
+    for icon in manifest["icons"]:
+        name = icon["src"].lstrip("/")
         raw = (WEB_DIR / name).read_bytes()
         assert raw[:8] == b"\x89PNG\r\n\x1a\n", f"{name} 不是合法 PNG"
         # IHDR 里的宽高
         w = int.from_bytes(raw[16:20], "big")
         h = int.from_bytes(raw[20:24], "big")
         assert w == h, f"{name} 不是正方形（{w}x{h}）"
-        expected = int(name.split("-")[1].split(".")[0])
-        assert w == expected, f"{name} 尺寸不对（{w}，应为 {expected}）"
-    print("[OK] 图标是有效 PNG 且尺寸正确")
+        declared = icon.get("sizes", "")
+        if "x" in declared:
+            dw, dh = (int(v) for v in declared.split("x"))
+            assert (w, h) == (dw, dh), f"{name} 实际 {w}x{h}，manifest 声明 {declared}"
+        # 必须是不透明的满幅图（PNG 颜色类型 2 = RGB）。
+        # 带 alpha 的图，iOS 会把透明角合成成黑色——旧图标就是这么出黑边的。
+        color_type = raw[25]
+        assert color_type == 2, (
+            f"{name} 带透明通道（PNG 颜色类型 {color_type}）——"
+            f"iOS 会把透明角合成成黑边"
+        )
+    print("[OK] 图标是有效 PNG、尺寸与 manifest 一致、且不透明")
 
     # --- 4. app.js 里引用的 API 路径都存在 ---
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
