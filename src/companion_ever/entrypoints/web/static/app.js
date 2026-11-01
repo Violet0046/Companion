@@ -2549,14 +2549,7 @@ $('login-form').onsubmit = async (event) => {
     if (oldSubscription && !await oldSubscription.unsubscribe()) throw new Error('旧设备通知未关闭，请重试登录');
     $('gate-error').textContent = '';
     await boot();
-  } catch (error) {
-    const message = error.status ? error.message : '暂时无法连接，请稍后重试';
-    $('gate-error').textContent = message;
-    // 服务端只说"登录需要 HTTPS"的话，人是不知道怎么改的——直接给出本地做法。
-    if (message.includes('HTTPS')) {
-      $('gate-hint').textContent = '本机测试：把 COMPANION_WEB_SECURE_COOKIE 设为 0 后重启服务';
-    }
-  }
+  } catch (error) { $('gate-error').textContent = error.status ? error.message : '暂时无法连接，请稍后重试'; }
   finally { button.disabled = false; }
 };
 $('password-form').onsubmit = async (event) => {

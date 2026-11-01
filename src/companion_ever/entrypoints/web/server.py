@@ -138,9 +138,6 @@ def create_app(
             "ok": True,
             "auth_required": True,
             "auth_mode": "account",
-            # 本机 HTTP 测试要 COMPANION_WEB_SECURE_COOKIE=0；这里报出来，
-            # 免得登录失败时只能猜是"登录需要 HTTPS"还是别的原因。
-            "secure_cookie": app.state.web_cfg.secure_cookie,
             "frontend_version": app.state.frontend_version,
             "idle_minutes": idle,
             "auto_memory": app.state.ctx.cfg.background.enabled,
