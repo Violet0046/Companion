@@ -1,5 +1,6 @@
 """assistant 回复的拆分与清洗。"""
 from __future__ import annotations
+import re
 
 from companion_ever.utils.text import (
     extract_thinking,
@@ -41,4 +42,16 @@ def split_assistant_reply(
     return body, (think or None)
 
 
-__all__ = ["split_assistant_reply"]
+def split_messages(body: str) -> list[str]:
+    """Explicit boundaries win; blank-line fallback applies only to unstructured text."""
+    if '<message_break>' in body:
+        parts = body.split('<message_break>')
+    elif re.search(r'(?m)^\s*(?:```|~~~|#{1,6}\s|[-*+]\s|\d+[.)、]\s|>|\|)', body):
+        return [body.strip()] if body.strip() else []
+    else:
+        parts = re.split(r'\n[ \t]*\n+', body.replace('\r\n','\n'))
+    parts = [p.strip() for p in parts if p.strip()]
+    return parts[:2] + ['\n\n'.join(parts[2:])] if len(parts)>3 else parts
+
+
+__all__ = ["split_assistant_reply", "split_messages"]

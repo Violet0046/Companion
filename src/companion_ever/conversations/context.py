@@ -14,7 +14,7 @@ from companion_ever.runtime.invariants import (
 )
 from companion_ever.memory.notes.service import NoteService
 from companion_ever.memory.summaries.blocks import BlockService
-from companion_ever.prompts import CHAT_SYSTEM, compose
+from companion_ever.prompts import CHAT_SYSTEM, compose, load
 from companion_ever.utils.time import describe_gap, format_now, parse_sqlite_ts
 
 
@@ -154,6 +154,22 @@ class PromptService:
             "messages": messages,
         }
 
+    def build_proactive(self, user_id, persona_id, *, test=False):
+        """Proactive context uses persona, bounded real history and the last successful summaries."""
+        self.authorizer.require_persona(user_id, persona_id)
+        history = self._get_recent_messages(user_id, persona_id, self.history_max_messages)
+        derived = self.summary_service.prompt_text(user_id, persona_id) if self.summary_service else ''
+        last_user = next((m for m in reversed(history) if m.role == 'user'), None)
+        now = format_now(self.tz_offset_hours)
+        last = _utc_ts_to_local(last_user.created_at, self.tz_offset_hours) if last_user else '无'
+        system = self._render_system_prompt(
+            self._get_persona_basics(user_id, persona_id), None, [], derived,
+            turn_section=f'- **现在**：{now}\n- **本轮触发**：系统安排的一次主动联系，用户没有发送新消息。\n- **最近用户发言时间**：{last}（这是历史，不是本轮输入）。',
+            proactive=True, test=test,
+        )
+        return {'system_prompt': system, 'messages': [{'role':'system','content':system}]
+                + [{'role':m.role, 'content':self._render_message(m)} for m in history]}
+
     def _check_invariants(
         self,
         user_id: str,
@@ -284,6 +300,7 @@ class PromptService:
         related_notes: list | None = None,
         derived: str = "",
         current_input: str = "",
+        *, turn_section: str | None = None, proactive: bool = False, test: bool = False,
     ) -> str:
         """按 chat_system.txt 渲染完整 system prompt。
 
@@ -298,11 +315,14 @@ class PromptService:
         同时仍作为最后一条 user 消息保留——那一条必须是这次要回答的，
         否则模型会顺着上一条 user 消息答错问题。
         """
-        return compose(CHAT_SYSTEM, {
-            'time_section': self._render_time_section(last_conv_at, current_input),
+        template = CHAT_SYSTEM + ('\n\n' + load('proactive_system.txt') if proactive else '')
+        return compose(template, {
+            'time_section': turn_section if turn_section is not None else self._render_time_section(last_conv_at, current_input),
             'persona_section': self._render_persona_basics(persona_basics),
             'notes_section': self._render_related_notes(related_notes or []),
             'summary_section': derived,
+            'decision_section': '- 这是用户要求的功能测试，请生成自然的主动消息，不输出 <no_contact>。' if test else
+                '- 如果没有合适理由，或历史中用户明确希望暂不打扰，完整正文仅输出 <no_contact>，不附加消息或解释。',
         })
 
     def _render_time_section(self, last_conv_at: str | None, current_input: str = "") -> str:

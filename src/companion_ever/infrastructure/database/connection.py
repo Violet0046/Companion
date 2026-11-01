@@ -56,7 +56,7 @@ def apply_schema(conn: sqlite3.Connection) -> None:
         migrate(conn)
     else:
         try:
-            conn.executescript('BEGIN IMMEDIATE;\n' + _read_schema() + '\nPRAGMA user_version=8;\nCOMMIT;')
+            conn.executescript('BEGIN IMMEDIATE;\n' + _read_schema() + '\nPRAGMA user_version=9;\nCOMMIT;')
         except BaseException:
             conn.rollback()
             raise

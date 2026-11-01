@@ -73,6 +73,7 @@ class TracedLLMClient:
         usage = usage_metrics(self.last_usage)
         record = {'id': 'call_' + uuid.uuid4().hex, 'started_at': started_at,
                   'layer': context.layer, 'model': self.model[:200],
+                   'purpose': context.purpose,
                   'status': 'ok' if error is None else 'aborted' if isinstance(error, (GeneratorExit, KeyboardInterrupt, SystemExit)) else 'error',
                   'duration_ms': round((time.perf_counter() - clock) * 1000, 2),
                   'user_id': context.user_id, 'persona_id': context.persona_id,

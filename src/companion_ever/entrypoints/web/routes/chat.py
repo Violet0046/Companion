@@ -17,10 +17,33 @@ from starlette.concurrency import run_in_threadpool
 from companion_ever.bootstrap.app import AppContext
 from companion_ever.infrastructure.llm.json_output import strip_thinking
 from companion_ever.entrypoints.web.deps import check_pin, resolve_target
-from companion_ever.entrypoints.web.schemas import ChatIn, CloseSessionIn, CloseSessionOut
+from companion_ever.entrypoints.web.schemas import ChatIn, CloseSessionIn, CloseSessionOut, ReadIn, ProactiveIn
 from companion_ever.memory.extraction.sessions import SessionCloseReport
 
 router = APIRouter()
+
+
+@router.post('/api/persona/{user_id}/{persona_id}/read')
+def mark_read(request: Request,user_id: str,persona_id: str,payload: ReadIn,x_pin: str=Header(default='')):
+    ctx=_authorized_ctx(request,user_id,persona_id,x_pin)
+    ctx.services.conversation.mark_read(user_id,persona_id,payload.message_id)
+    return {'ok':True}
+
+
+@router.get('/api/persona/{user_id}/{persona_id}/proactive')
+def get_proactive(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
+    ctx=_authorized_ctx(request,user_id,persona_id,x_pin)
+    if ctx.services.proactive is None:
+        return {'enabled':False}
+    return ctx.services.proactive.setting(user_id,persona_id)
+
+
+@router.put('/api/persona/{user_id}/{persona_id}/proactive')
+def set_proactive(request: Request,user_id: str,persona_id: str,payload: ProactiveIn,x_pin: str=Header(default='')):
+    ctx=_authorized_ctx(request,user_id,persona_id,x_pin)
+    if ctx.services.proactive is None:
+        raise HTTPException(503,'主动联系暂未启用')
+    return ctx.services.proactive.setting(user_id,persona_id,payload.enabled)
 
 
 def _authorized_ctx(request, user_id, persona_id, pin):
@@ -179,6 +202,10 @@ def broadcast(user_id: str, persona_id: str, payload: dict[str, Any]) -> None:
 
 def notify_summary_updated(user_id,persona_id):
     broadcast(user_id,persona_id,{'type':'summary_updated','user_id':user_id,'persona_id':persona_id})
+
+
+def notify_proactive_message(user_id,persona_id,message):
+    broadcast(user_id,persona_id,{'type':'proactive_message','user_id':user_id,'persona_id':persona_id,'message':message})
 
 
 def notify_record_done(

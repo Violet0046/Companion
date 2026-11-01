@@ -209,11 +209,24 @@ function markVisibleChatRead() {
   if (!replies.length) return;
   setReadMark(S.user,S.persona,Math.max(...replies.map(m => m.id)));
   const mark = readMark(S.user,S.persona);
+  reportRead(S.user,S.persona,mark);
   const conv = S.convs.find(c => c.user === S.user && c.persona === S.persona);
   if (conv && (conv.unreadThrough ?? conv.last?.id ?? 0) <= mark) {
     conv.unread = 0;
     renderConvs();
   }
+}
+
+const readReceipts = new Map();
+function reportRead(user,persona,id) {
+  const key=pkey(user,persona), state=readReceipts.get(key)||{sent:0,busy:false};
+  readReceipts.set(key,state);
+  if (state.busy || id<=state.sent) return;
+  state.busy=true;
+  api(`/api/persona/${enc(user)}/${enc(persona)}/read`,{method:'POST',body:JSON.stringify({message_id:id})})
+    .then(()=>{state.sent=Math.max(state.sent,id);})
+    .catch(()=>{})
+    .finally(()=>{state.busy=false;if (state.sent===id && S.user===user && S.persona===persona) markVisibleChatRead();});
 }
 
 async function fetchUnread(user,persona) {
@@ -945,6 +958,7 @@ function renderProfile(user, persona, info) {
       <div class="row" id="row-chat"><span>继续聊天</span><span class="row-val">现在就开始 <span class="chev">›</span></span></div>
       <div class="row" id="row-memory"><span>TA 的记忆</span><span class="row-val">${(info && info.note_count) || 0} 条 <span class="chev">›</span></span></div>
       <div class="row" id="row-dates"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>
+      <div class="row"><span>主动联系</span><button type="button" class="notification-action" id="btn-proactive" disabled>载入中…</button></div>
       ${S.debug ? '<div class="row" id="row-relation"><span>后台记忆</span><span class="row-val">任务状态 <span class="chev">›</span></span></div>' : ''}
     </div>
     <div class="dlg-danger">
@@ -958,6 +972,23 @@ function renderProfile(user, persona, info) {
   const maintenance = q('row-relation');
   if (S.debug && maintenance) maintenance.onclick = () => openRelation(user, persona);
   q('btn-persona-delete').onclick = () => deletePersona(user, persona);
+  const initiative=q('btn-proactive');
+  if (initiative) {
+    const path=`/api/persona/${enc(user)}/${enc(persona)}/proactive`;
+    api(path).then(state=>{
+      let enabled=state.enabled;
+      initiative.textContent=enabled?'关闭':'开启';initiative.disabled=false;
+      initiative.onclick=async()=>{
+        initiative.disabled=true;
+        try {
+          const next=await api(path,{method:'PUT',body:JSON.stringify({enabled:!enabled})});
+          enabled=next.enabled;initiative.textContent=enabled?'关闭':'开启';
+          toast(enabled?'已允许 TA 在白天主动联系，每天最多一次':'已关闭主动联系');
+        } catch(error) {toast(error.message||'设置失败');}
+        finally {initiative.disabled=false;}
+      };
+    }).catch(()=>{initiative.textContent='暂不可用';});
+  }
 }
 
 /* ---------- 后台记忆任务（仅调试入口） ---------- */
@@ -2247,6 +2278,13 @@ function handleWs(m) {
       else toast('出错了：' + taskFailureText(m.message), 4000);
       break;
     }
+    case 'proactive_message': {
+      refreshConv(m.user_id,m.persona_id);
+      if (m.user_id===S.user && m.persona_id===S.persona && S.viewMode==='live') {
+        loadHistory(true,{keepScroll:!wasAtBottom});
+      }
+      break;
+    }
     case 'summary_updated': {
       const user = m.user_id || S.user, persona = m.persona_id || S.persona;
       api(`/api/persona/${enc(user)}/${enc(persona)}`).then(info => {
@@ -2539,6 +2577,17 @@ window.addEventListener('pageshow', () => { if (S.user && S.persona) recoverRepl
 window.addEventListener('online', () => { if (S.user && S.persona) { connect(); recoverReply(true); } });
 
 if ('serviceWorker' in navigator) {
+  navigator.serviceWorker?.addEventListener?.('message', event => {
+    if (event.data?.type!=='notification_open' || $('app').classList.contains('hidden') || !S.user) return;
+    let url;
+    try {url=new URL(event.data.url,location.href);} catch(error) {return;}
+    if (url.origin!==new URL(location.href).origin || url.pathname!=='/') return;
+    const user=url.searchParams.get('user'), persona=url.searchParams.get('persona');
+    event.ports?.[0]?.postMessage({handled:true});
+    if (!user || !persona) {showView('messages');return;}
+    if (!S.users.some(item=>item.id===user && (item.personas||[]).includes(persona))) {toast('该会话暂不可用');return;}
+    openChat(user,persona).catch(()=>toast('暂时无法打开会话'));
+  });
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js', {updateViaCache: 'none'}).catch(() => { /* 非 HTTPS 会失败 */ });
   });

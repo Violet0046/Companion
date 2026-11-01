@@ -23,6 +23,13 @@ class ConversationService:
 
     # === 写入（3 个）===
 
+    def mark_read(self, user, persona, message_id):
+        self.authorizer.require_persona(user,persona)
+        self.conv_repo.mark_read(user,persona,message_id)
+
+    def should_notify(self, user, persona, message_id):
+        return self.authorizer.owns_persona(user,persona) and self.conv_repo.should_notify(user,persona,message_id)
+
     def log_turn(
         self,
         *,

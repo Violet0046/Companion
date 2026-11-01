@@ -1,6 +1,7 @@
 /* Read-only diagnostics. Rows, totals and exports always share the same filters. */
 const $=id=>document.getElementById(id);
 const names={chat:'聊天',extraction:'记忆整理',summary:'摘要更新'};
+const callName=r=>r.layer==='chat'&&r.purpose==='proactive'?'主动聊天':names[r.layer];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=n=>n===null||n===undefined?'未知':n.toLocaleString('zh-CN');
 const seconds=n=>(n/1000).toFixed(n>=10000?1:2)+' s';
@@ -28,12 +29,12 @@ function renderDetail(r){
   const metadata=[kv('开始时间',r.started_at.replace('T',' ')),kv('调用模型',r.model,true),kv('耗时',seconds(r.duration_ms)),
     kv('输入 token',fmt(r.input_tokens)),kv('输出 token',fmt(r.output_tokens)),kv('缓存命中输入 token',fmt(r.cached_input_tokens))].join('');
   const error=r.error?`<div class="notice"><strong>${esc(r.error.message)}</strong><div class="tiny">分类 ${esc(r.error.kind)} · 阶段 ${esc(r.error.stage)}${r.error.http_status?' · HTTP '+esc(r.error.http_status):''}</div></div>`:'';
-  $('detail').innerHTML=`<div class="detail-head"><div><h2>${esc(names[r.layer])} · 调用详情</h2><div class="tiny mono">${esc(r.id)}</div></div>${badge(r)}</div><div class="detail-body">${metadata}${error}<hr>${kv('用户 / 角色',r.user_id+' / '+r.persona_id,true)}${kv(r.job_id?'关联任务':'关联回复',r.job_id||r.generation_id||'—',true)}${r.attempt_id?kv('执行 ID',r.attempt_id,true):''}${kv('执行位置','第 '+r.attempt+' 次尝试 · 第 '+r.call_index+' 次模型调用')}${r.job_id?'<button class="plain" id="same-task">只看这个任务的调用</button>':''}<p class="hint">${r.input_tokens===null?'服务商没有返回完整用量，缺失值保留为未知。':'记录服务商返回的实际计数，不使用字符数估算。'}</p><details><summary>查看这条原始记录</summary><pre>${esc(JSON.stringify(r,null,2))}</pre></details></div><div class="sidenote hint">模型请求结果与任务最终写库结果分别记录。</div>`;
+  $('detail').innerHTML=`<div class="detail-head"><div><h2>${esc(callName(r))} · 调用详情</h2><div class="tiny mono">${esc(r.id)}</div></div>${badge(r)}</div><div class="detail-body">${metadata}${error}<hr>${kv('用户 / 角色',r.user_id+' / '+r.persona_id,true)}${kv(r.job_id?'关联任务':'关联回复',r.job_id||r.generation_id||'—',true)}${r.attempt_id?kv('执行 ID',r.attempt_id,true):''}${kv('执行位置','第 '+r.attempt+' 次尝试 · 第 '+r.call_index+' 次模型调用')}${r.job_id?'<button class="plain" id="same-task">只看这个任务的调用</button>':''}<p class="hint">${r.input_tokens===null?'服务商没有返回完整用量，缺失值保留为未知。':'记录服务商返回的实际计数，不使用字符数估算。'}</p><details><summary>查看这条原始记录</summary><pre>${esc(JSON.stringify(r,null,2))}</pre></details></div><div class="sidenote hint">模型请求结果与任务最终写库结果分别记录。</div>`;
   if($('same-task'))$('same-task').onclick=()=>{state.job_id=r.job_id;state.layer='all';state.status='all';$('status-filter').value='all';loadCalls();};
 }
 function renderRows(){
   if(!records.some(r=>r.id===selected))selected=records[0]?.id||null;
-  $('rows').innerHTML=records.length?records.map(r=>`<tr data-id="${esc(r.id)}" tabindex="0" class="${r.id===selected?'selected':''}"><td class="mono">${esc(r.started_at)}</td><td>${esc(names[r.layer])}<div class="tiny">第 ${r.attempt} 次尝试 / 调用 ${r.call_index}</div></td><td>${badge(r)}</td><td class="mono">${seconds(r.duration_ms)}</td><td class="mono pair">${fmt(r.input_tokens)} / ${fmt(r.output_tokens)}</td></tr>`).join(''):'<tr><td colspan="5"><div class="empty">没有符合条件的调用</div></td></tr>';
+  $('rows').innerHTML=records.length?records.map(r=>`<tr data-id="${esc(r.id)}" tabindex="0" class="${r.id===selected?'selected':''}"><td class="mono">${esc(r.started_at)}</td><td>${esc(callName(r))}<div class="tiny">第 ${r.attempt} 次尝试 / 调用 ${r.call_index}</div></td><td>${badge(r)}</td><td class="mono">${seconds(r.duration_ms)}</td><td class="mono pair">${fmt(r.input_tokens)} / ${fmt(r.output_tokens)}</td></tr>`).join(''):'<tr><td colspan="5"><div class="empty">没有符合条件的调用</div></td></tr>';
   document.querySelectorAll('tr[data-id]').forEach(row=>{const select=()=>{selected=row.dataset.id;renderRows();};row.onclick=select;row.onkeydown=e=>{if(e.key==='Enter'){select();}};});
   $('file-lines').innerHTML=records.map((r,i)=>`<div class="file-line"><span>${i+1}</span><code>${esc(JSON.stringify(r))}</code></div>`).join('');
   renderDetail(records.find(r=>r.id===selected));

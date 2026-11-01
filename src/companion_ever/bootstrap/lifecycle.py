@@ -4,7 +4,7 @@ import threading
 
 
 class ApplicationLifecycle:
-    def __init__(self, conn, tasks, generations, memory, conversations, sessions, *, idle_minutes=120, interval=15):
+    def __init__(self, conn, tasks, generations, memory, conversations, sessions, *, idle_minutes=120, interval=15, proactive=None, notifications=None):
         self.conn = conn
         self.tasks = tasks
         self.generations = generations
@@ -13,6 +13,8 @@ class ApplicationLifecycle:
         self.sessions = sessions
         self.idle_minutes = idle_minutes
         self.interval = interval
+        self.proactive=proactive
+        self.notifications=notifications
         self._lock = threading.Lock()
         self._tick_lock = threading.Lock()
         self._stop = threading.Event()
@@ -26,6 +28,8 @@ class ApplicationLifecycle:
                 return
             self.tasks.start()
             self.generations.start()
+            if self.notifications is not None:
+                self.notifications.start()
             stop = threading.Event()
             self._stop = stop
             self._thread = threading.Thread(target=self._run, args=(stop,), daemon=True, name='application-scan')
@@ -47,8 +51,12 @@ class ApplicationLifecycle:
         """一次宿主扫描；单条链路故障不阻断其他恢复入口。"""
         with self._tick_lock:
             try:
-                for name, action in (('回复恢复', self.generations.recover),
-                                     ('记忆调度', self.memory.tick), ('空闲边界', self._idle_sessions)):
+                actions=[('回复恢复', self.generations.recover),('记忆调度', self.memory.tick), ('空闲边界', self._idle_sessions)]
+                if self.proactive is not None:
+                    actions.append(('主动联系',self.proactive.tick))
+                if self.notifications is not None:
+                    actions.append(('通知投递',self.notifications.tick))
+                for name, action in actions:
                     if self._stop.is_set():
                         break
                     try:
@@ -61,6 +69,8 @@ class ApplicationLifecycle:
     def stop(self):
         with self._lock:
             self._stop.set()
+            if self.notifications is not None:
+                self.notifications.shutdown()
             thread = self._thread
             # Fence writes before returning; neither path waits for a model.
             try:
@@ -76,4 +86,5 @@ def build_lifecycle(cfg, conn, services):
     """仅在装配阶段把业务入口连接到宿主。"""
     return ApplicationLifecycle(conn, services.extraction.runtime, services.generation,
                                 services.background, services.conversation, services.session_close,
-                                idle_minutes=cfg.idle_session_minutes)
+                                idle_minutes=cfg.idle_session_minutes,
+                                proactive=services.proactive, notifications=services.notifications)

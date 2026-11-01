@@ -2,7 +2,8 @@
 from companion_ever.infrastructure.tracing import call_context
 import logging
 import uuid
-from companion_ever.conversations.reply import split_assistant_reply
+from companion_ever.conversations.reply import split_assistant_reply, split_messages
+from companion_ever.conversations.stream_filter import visible_prefix
 from companion_ever.conversations.generation_repository import GenerationRepo
 from companion_ever.infrastructure.database.connection import transaction
 from companion_ever.utils.text import strip_invisible
@@ -45,7 +46,7 @@ class ChatService:
             return
         completed=False
         chunks=None
-        with call_context('chat',generation['user_id'],generation['persona_id'],generation_id=gid):
+        with call_context('chat',generation['user_id'],generation['persona_id'],generation_id=gid,purpose='reply'):
             try:
                 # The host can prime this event under its execution lock,
                 # fencing claim against shutdown before any model request.
@@ -68,11 +69,17 @@ class ChatService:
                     pending+=chunk
                     while MESSAGE_BREAK in pending:
                         part,pending=pending.split(MESSAGE_BREAK,1)
+                        if not visible_prefix(''.join(body_parts)+part+MESSAGE_BREAK).endswith(MESSAGE_BREAK):
+                            body_parts.append(part+MESSAGE_BREAK)
+                            yield {'type':'delta','content':part+MESSAGE_BREAK,'generation_id':gid}
+                            continue
                         body_parts.append(part)
                         if part:
                             yield {'type':'delta','content':part,'generation_id':gid}
                         raw=''.join(body_parts)
                         body,thinking=split_assistant_reply(raw,getattr(self.llm_client,'last_reasoning',None))
+                        if not body.strip():
+                            continue
                         saved=self.generations.save_message(gid,index,body,thinking)
                         if saved is None:
                             yield {'type':'cancelled','generation_id':gid}
@@ -103,11 +110,15 @@ class ChatService:
                     if pending:
                         yield {'type':'delta','content':pending,'generation_id':gid}
                     body,thinking=split_assistant_reply(raw,getattr(self.llm_client,'last_reasoning',None))
-                    saved=self.generations.save_message(gid,index,body,thinking)
-                    if saved is None:
-                        yield {'type':'cancelled','generation_id':gid}
-                        return
-                    yield {'type':'message_done','message':saved,'raw':raw,'generation_id':gid}
+                    parts = split_messages(body) if index==0 else [body]
+                    if not parts:
+                        raise ValueError('模型未生成可保存的正文')
+                    for offset,part in enumerate(parts):
+                        saved=self.generations.save_message(gid,index+offset,part,thinking if offset==0 else None)
+                        if saved is None:
+                            yield {'type':'cancelled','generation_id':gid}
+                            return
+                        yield {'type':'message_done','message':saved,'raw':raw if len(parts)==1 else part,'generation_id':gid}
                 elif index==0:
                     raise ValueError('模型返回了空回复')
                 self.generations.finish(gid)

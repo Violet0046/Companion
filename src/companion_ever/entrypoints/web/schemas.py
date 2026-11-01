@@ -104,6 +104,14 @@ class SearchHit(BaseModel):
     importance: Optional[float] = None
 
 
+class ReadIn(BaseModel):
+    message_id: int = Field(ge=0)
+
+
+class ProactiveIn(BaseModel):
+    enabled: bool
+
+
 class SettingsOut(BaseModel):
     """用户设置。"""
 

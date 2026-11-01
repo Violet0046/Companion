@@ -7,7 +7,7 @@ import re
 
 def migrate(conn):
     version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > 8:
+    if version > 9:
         raise ValueError('数据库版本比当前程序新，拒绝降级运行')
     if version < 1:
         _migrate_jobs(conn)
@@ -25,6 +25,35 @@ def migrate(conn):
         _remove_note_pinning(conn)
     if conn.execute('PRAGMA user_version').fetchone()[0] < 8:
         _add_notifications(conn)
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 9:
+        _add_proactive(conn)
+
+
+def _add_proactive(conn):
+    from importlib import resources
+    from companion_ever.infrastructure.database.connection import transaction
+    changes = {
+        'conversation': [('last_read_message_id', 'INTEGER NOT NULL DEFAULT 0')],
+        'generation': [('origin', "TEXT NOT NULL DEFAULT 'reply' CHECK(origin IN ('reply','proactive'))"),
+                       ('scheduled_at', 'REAL NOT NULL DEFAULT 0'), ('expires_at', 'REAL'),
+                       ('context_message_id', 'INTEGER REFERENCES conversation_log(id)'),
+                       ('test_mode', 'INTEGER NOT NULL DEFAULT 0')],
+        'user_settings': [('proactive_enabled', 'INTEGER NOT NULL DEFAULT 0')],
+    }
+    with transaction(conn):
+        for table, fields in changes.items():
+            columns = {r['name'] for r in conn.execute(f'PRAGMA table_info({table})')}
+            for name, definition in fields:
+                if name not in columns:
+                    conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {definition}')
+        schema = resources.files('companion_ever.infrastructure.database').joinpath('notification_schema.sql').read_text(encoding='utf-8')
+        statement = ''
+        for line in schema.splitlines(True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                conn.execute(statement)
+                statement = ''
+        conn.execute('PRAGMA user_version=9')
 
 
 def _add_notifications(conn):

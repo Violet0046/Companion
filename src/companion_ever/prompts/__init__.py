@@ -41,8 +41,12 @@ def compose(template: str, values: dict[str, str]) -> str:
     填充用一次性替换，插入的正文不会被再次扫描（JSON 正文里的 {} 不受影响）。
     """
     blocks: list[str] = []
+    sections = {}
     for section in ("\n" + template).split("\n## ")[1:]:
         title, _, body = section.partition("\n")
+        sections[title] = body
+    # Appended mode templates override named sections without duplicating the base prompt.
+    for title, body in sections.items():
         filled = _PLACEHOLDER.sub(
             lambda m: values.get(m.group(1), m.group(0)), body
         ).strip("\n")

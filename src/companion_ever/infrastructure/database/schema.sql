@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS memory_block (
 -- 用途：每次对话追加一行
 CREATE TABLE IF NOT EXISTS conversation (
  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES user(id), persona_id TEXT NOT NULL,
- memory_start_message_id INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ memory_start_message_id INTEGER NOT NULL DEFAULT 0, last_read_message_id INTEGER NOT NULL DEFAULT 0,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  UNIQUE(user_id,persona_id)
 );
 CREATE TABLE IF NOT EXISTS generation (
@@ -77,7 +78,10 @@ CREATE TABLE IF NOT EXISTS generation (
  trigger_message_id INTEGER NOT NULL REFERENCES conversation_log(id),
  status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','cancelled')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, started_at TEXT, completed_at TEXT,
- lease_expires_at REAL, last_error TEXT
+ lease_expires_at REAL, last_error TEXT,
+ origin TEXT NOT NULL DEFAULT 'reply' CHECK(origin IN ('reply','proactive')),
+ scheduled_at REAL NOT NULL DEFAULT 0, expires_at REAL,
+ context_message_id INTEGER REFERENCES conversation_log(id), test_mode INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS conversation_log (
  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES user(id), persona_id TEXT NOT NULL,
@@ -125,6 +129,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     user_id        TEXT NOT NULL REFERENCES user(id),
     persona_id     TEXT NOT NULL,
     show_thinking  INTEGER NOT NULL DEFAULT 1,   -- 1 = 界面展示思考过程
+    proactive_enabled INTEGER NOT NULL DEFAULT 0,
     updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, persona_id)
 );

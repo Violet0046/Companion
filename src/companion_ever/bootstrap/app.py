@@ -39,6 +39,7 @@ from companion_ever.bootstrap.lifecycle import ApplicationLifecycle, build_lifec
 from companion_ever.notifications.repository import NotificationRepo
 from companion_ever.notifications.service import NotificationService
 from companion_ever.infrastructure.web_push import WebPushSender
+from companion_ever.conversations.proactive import ProactiveService
 
 
 @dataclass
@@ -69,6 +70,7 @@ class Services:
     summary: SummaryService
     background: MemoryScheduler
     notifications: NotificationService | None = None
+    proactive: ProactiveService | None = None
 
 
 @dataclass
@@ -179,6 +181,10 @@ def build_app(cfg: AppConfig) -> AppContext:
     background_svc = MemoryScheduler(cfg.background, authorizer, conversation_svc, session_close_svc, summary_svc)
     session_close_svc.on_memory_settled = background_svc.memory_settled
 
+    notifications_svc=NotificationService(NotificationRepo(conn), authorizer, WebPushSender(), cfg.push_subject,
+                                          delivery_allowed=conversation_svc.should_notify)
+    proactive_svc=ProactiveService(chat_svc.generations, authorizer, setting_repo, prompt_svc, llm,
+                                    notifications_svc, tz_offset_hours=cfg.tz_offset_hours)
     services = Services(
         note=note_svc,
         block=block_svc,
@@ -188,12 +194,13 @@ def build_app(cfg: AppConfig) -> AppContext:
         settings=setting_svc,
         prompt=prompt_svc,
         chat=chat_svc,
-        generation=GenerationService(chat_svc, setting_svc),
+        generation=GenerationService(chat_svc, setting_svc, proactive=proactive_svc),
         extraction=extraction_svc,
         session_close=session_close_svc,
         summary=summary_svc,
         background=background_svc,
-        notifications=NotificationService(NotificationRepo(conn), authorizer, WebPushSender(), cfg.push_subject),
+        notifications=notifications_svc,
+        proactive=proactive_svc,
     )
     workflows = Workflows(extraction=extraction_svc.graph,summary=summary_svc.graph)
 

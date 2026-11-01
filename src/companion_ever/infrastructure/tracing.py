@@ -24,6 +24,7 @@ class CallContext:
     job_id: str | None = None
     attempt_id: str | None = None
     attempt: int = 1
+    purpose: str | None = None
     calls: list = field(default_factory=list)
     _index: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)

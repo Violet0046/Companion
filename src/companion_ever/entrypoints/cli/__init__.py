@@ -234,6 +234,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="做一份完整的数据库备份（含 WAL 内容）",
     )
 
+    proactive = sub.add_parser('proactive', help='主动联系检查、延迟触发和任务状态')
+    actions = proactive.add_subparsers(dest='proactive_cmd', required=True)
+    for action in ('check','trigger'):
+        command=actions.add_parser(action)
+        command.add_argument('--user',required=True)
+        command.add_argument('--persona',required=True)
+        command.add_argument('--test',action='store_true',help='测试模式跳过免打扰和次数限制，实际调用模型并保存消息')
+        if action=='trigger':
+            command.add_argument('--delay',type=int,default=0)
+            command.add_argument('--request-id',default=None,help='重复提交同一 ID 返回原任务')
+    status=actions.add_parser('status')
+    status.add_argument('--task',required=True)
+
     # serve（Web / PWA）
     p_serve = sub.add_parser(
         "serve",
@@ -267,6 +280,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         run_server(host=args.host, port=args.port, db_path=args.db)
         return 0
+    elif args.cmd == 'proactive':
+        from companion_ever.entrypoints.cli.proactive_cmd import cmd_proactive
+        return cmd_proactive(args)
     else:
         parser.print_help()
         return 1

@@ -26,12 +26,14 @@ class GenerationService:
     仍是跨线程/进程的执行依据，内存注册表只避免本实例重复创建执行线程。
     """
 
-    def __init__(self, chat_service, setting_service):
+    def __init__(self, chat_service, setting_service, *, proactive=None):
         self.chat = chat_service
         self.repo = chat_service.generations
         self.conn = self.repo.conn
         self.authorizer = chat_service.conversation_service.authorizer
         self.settings = setting_service
+        self.proactive = proactive
+        self.on_proactive_message = None
         self._lock = threading.Lock()
         self._executions: dict[str, _Execution] = {}
         self._closing = False
@@ -72,7 +74,7 @@ class GenerationService:
             for output in outputs:
                 output.pop('thinking', None)
         return {**generation, 'messages': outputs,
-                'can_retry': generation['status'] == 'failed' and not outputs}
+                'can_retry': generation['origin']=='reply' and generation['status'] == 'failed' and not outputs}
 
     def latest(self, user, persona):
         self.authorizer.require_persona(user, persona)
@@ -155,7 +157,8 @@ class GenerationService:
     def _events(self, generation):
         """输出可投递的事件；模型原文和思考标签不进入正文增量。"""
         gid = generation['id']
-        events = self.chat.reply_events(generation)
+        events = (self.proactive.reply_events(generation) if generation['origin']=='proactive' and self.proactive is not None
+                  else self.chat.reply_events(generation))
         filt = ThinkFilter()
         try:
             for event in events:
@@ -198,6 +201,8 @@ class GenerationService:
                 if execution.cancelled:
                     break
                 self._publish(execution, event)
+                if generation['origin']=='proactive' and event['type']=='message_done' and self.on_proactive_message:
+                    self._deliver(lambda item: self.on_proactive_message(generation['user_id'],generation['persona_id'],item['message']),event)
         except Exception:
             logging.getLogger(__name__).exception('回复生成失败')
             try:

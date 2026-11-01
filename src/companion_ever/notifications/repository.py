@@ -1,6 +1,7 @@
 """Persistence owned by notifications; network requests never run in transactions."""
 import time
 import uuid
+import json
 
 from companion_ever.infrastructure.database.connection import transaction
 
@@ -50,3 +51,35 @@ class NotificationRepo:
                 raise ValueError('请等待 30 秒后再发送测试通知')
             self.conn.execute('UPDATE push_subscription SET last_test_at=? WHERE user_id=? AND endpoint=?', (now, user, endpoint))
             return row
+
+    def enqueue(self, user, persona, gid, message_id, payload):
+        now=time.time()
+        for row in self.conn.execute('SELECT endpoint FROM push_subscription WHERE user_id=?', (user,)).fetchall():
+            self.conn.execute('INSERT OR IGNORE INTO push_delivery(generation_id,message_id,user_id,persona_id,endpoint,payload_json,retry_at,expires_at) '
+                'VALUES (?,?,?,?,?,?,?,?)', (gid,message_id,user,persona,row['endpoint'],json.dumps(payload,ensure_ascii=False),now+5,now+900))
+
+    def claim_delivery(self):
+        with transaction(self.conn):
+            now=time.time()
+            self.conn.execute("UPDATE push_delivery SET status='skipped',last_error='通知已过期' WHERE status IN ('queued','running') AND expires_at<=?", (now,))
+            self.conn.execute("UPDATE push_delivery SET status='failed',last_error=coalesce(last_error,'投递尝试次数已用尽') "
+                "WHERE attempt>=3 AND (status='queued' OR (status='running' AND lease_until<=?))", (now,))
+            self.conn.execute("UPDATE push_delivery SET status='queued',lease_token=NULL WHERE status='running' AND lease_until<=?", (now,))
+            row=self.conn.execute("SELECT * FROM push_delivery WHERE status='queued' AND retry_at<=? ORDER BY id LIMIT 1", (now,)).fetchone()
+            if row is None:
+                return None
+            token=uuid.uuid4().hex
+            self.conn.execute("UPDATE push_delivery SET status='running',lease_token=?,lease_until=?,attempt=attempt+1 WHERE id=?", (token,now+60,row['id']))
+            return {**dict(row),'lease_token':token,'attempt':row['attempt']+1}
+
+    def has_delivery(self):
+        now=time.time()
+        return bool(self.conn.execute("SELECT 1 FROM push_delivery WHERE (status='queued' AND retry_at<=?) "
+                                     "OR (status='running' AND lease_until<=?) LIMIT 1", (now,now)).fetchone())
+
+    def finish_delivery(self, job, status, error=None):
+        self.conn.execute("UPDATE push_delivery SET status=?,last_error=?,retry_at=?,lease_token=NULL,lease_until=NULL "
+            "WHERE id=? AND status='running' AND lease_token=?", (status,error,time.time()+30*job['attempt'],job['id'],job['lease_token']))
+
+    def deliveries(self, gid):
+        return [dict(r) for r in self.conn.execute('SELECT status,attempt,last_error FROM push_delivery WHERE generation_id=? ORDER BY id', (gid,))]

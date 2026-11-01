@@ -22,6 +22,15 @@ class SettingRepo:
             return {"show_thinking": True}
         return {"show_thinking": bool(row["show_thinking"])}
 
+    def proactive_enabled(self, user, persona):
+        row = self.conn.execute('SELECT proactive_enabled FROM user_settings WHERE user_id=? AND persona_id=?', (user, persona)).fetchone()
+        return bool(row and row[0])
+
+    def set_proactive(self, user, persona, enabled):
+        self.conn.execute('INSERT INTO user_settings(user_id,persona_id,proactive_enabled) VALUES (?,?,?) '
+            'ON CONFLICT(user_id,persona_id) DO UPDATE SET proactive_enabled=excluded.proactive_enabled,updated_at=CURRENT_TIMESTAMP',
+            (user, persona, int(enabled)))
+
     def set_show_thinking(
         self, *, user_id: str, persona_id: str, show: bool,
     ) -> dict[str, Any]:

@@ -43,6 +43,17 @@ class ConversationRepo:
             (user_id, persona_id, after_id)).fetchone()
         return {'count': row[0], 'latest_id': row[1]}
 
+    def mark_read(self, user, persona, message_id):
+        self.conn.execute('UPDATE conversation SET last_read_message_id=max(last_read_message_id,?) '
+            'WHERE user_id=? AND persona_id=? AND EXISTS (SELECT 1 FROM conversation_log '
+            "WHERE id=? AND conversation_id=conversation.id AND role='assistant')", (message_id,user,persona,message_id))
+
+    def should_notify(self, user, persona, message_id):
+        return bool(self.conn.execute('SELECT 1 FROM conversation c JOIN conversation_log m ON m.conversation_id=c.id '
+            "WHERE c.user_id=? AND c.persona_id=? AND m.id=? AND m.role='assistant' AND c.last_read_message_id<m.id "
+            "AND NOT EXISTS (SELECT 1 FROM conversation_log newer WHERE newer.conversation_id=c.id AND newer.role='user' AND newer.id>m.id)",
+            (user,persona,message_id)).fetchone())
+
     def list_conversations(self):
         return [dict(row) for row in self.conn.execute('SELECT * FROM conversation')]
 

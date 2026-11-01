@@ -4,7 +4,7 @@
    局域网 http://192.168.x.x:8000 下这里会注册失败，属于预期。
    ============================================================ */
 
-const CACHE = 'ce-shell-v7';
+const CACHE = 'ce-shell-v8';
 const SHELL = [
   '/',
   '/index.html',
@@ -68,7 +68,7 @@ self.addEventListener('push', (e) => {
     badge: '/icon.png',
     tag: data.tag || 'ce',
     renotify: false,
-    data: { url: '/' },
+    data: { url: notificationURL(data.url) },
   };
   e.waitUntil(self.registration.showNotification(title, options));
 });
@@ -86,10 +86,27 @@ self.addEventListener('notificationclick', (e) => {
   const destination = notificationURL(e.notification.data?.url);
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-      .then((list) => {
+      .then(async (list) => {
         const c = list.find((x) => 'focus' in x && 'navigate' in x && new URL(x.url).origin === self.location.origin);
-        if (c) return c.navigate(destination).then(client => client?.focus());
+        if (c) {
+          await c.focus();
+          const handled=await wakeConversation(c,destination);
+          if (handled) return;
+          return c.navigate(destination).then(client => client?.focus());
+        }
         if (self.clients.openWindow) return self.clients.openWindow(destination);
       })
   );
 });
+
+function wakeConversation(client,url) {
+  if (typeof MessageChannel==='undefined' || !client.postMessage) return Promise.resolve(false);
+  return new Promise(resolve=>{
+    const channel=new MessageChannel();
+    const finish=value=>{clearTimeout(timer);channel.port1.close();channel.port2.close();resolve(value);};
+    const timer=setTimeout(()=>finish(false),1500);
+    channel.port1.onmessage=event=>finish(event.data?.handled===true);
+    try {client.postMessage({type:'notification_open',url},[channel.port2]);}
+    catch(error) {finish(false);}
+  });
+}
