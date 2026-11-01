@@ -15,6 +15,8 @@ from companion_ever.infrastructure.database.connection import transaction
 COOKIE = 'companion_session'
 IDLE_SECONDS = 30 * 86400
 MAX_SECONDS = 90 * 86400
+MIN_PASSWORD = 6
+MAX_PASSWORD = 128
 PASSWORDS = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1)
 
 
@@ -36,8 +38,8 @@ def login_name(value):
 
 
 def hash_password(password):
-    if not 15 <= len(password) <= 128:
-        raise ValueError('密码需要 15–128 个字符，可以使用长句子')
+    if not MIN_PASSWORD <= len(password) <= MAX_PASSWORD:
+        raise ValueError(f'密码需要 {MIN_PASSWORD}–{MAX_PASSWORD} 个字符')
     return PASSWORDS.hash(password)
 
 

@@ -2,7 +2,7 @@
 import getpass
 from pathlib import Path
 
-from companion_ever.accounts.service import AccountService
+from companion_ever.accounts.service import AccountService, MIN_PASSWORD
 from companion_ever.config import AppConfig
 from companion_ever.infrastructure.database.connection import init_db
 
@@ -20,7 +20,7 @@ def cmd_account(args):
             for row in service.list_accounts():
                 print(f"{row['id']}\t{row['login_name'] or '未绑定'}\t{'停用' if row['disabled'] else '启用'}")
         elif action in ('create', 'reset-password'):
-            password = getpass.getpass('密码（至少 15 个字符，输入不回显）: ')
+            password = getpass.getpass(f'密码（至少 {MIN_PASSWORD} 个字符，输入不回显）: ')
             if password != getpass.getpass('再次输入: '):
                 raise ValueError('两次密码不一致')
             if action == 'create':

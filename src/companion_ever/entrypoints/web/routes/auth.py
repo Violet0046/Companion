@@ -6,20 +6,20 @@ from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebS
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from companion_ever.accounts.service import AuthError, COOKIE, MAX_SECONDS
+from companion_ever.accounts.service import AuthError, COOKIE, MAX_PASSWORD, MAX_SECONDS, MIN_PASSWORD
 
 router = APIRouter(prefix='/api/auth')
 
 
 class LoginIn(BaseModel):
     username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=MAX_PASSWORD)
     endpoint: str = Field(default='', max_length=4096)
 
 
 class PasswordIn(BaseModel):
-    current_password: str = Field(min_length=1, max_length=128)
-    new_password: str = Field(min_length=15, max_length=128)
+    current_password: str = Field(min_length=1, max_length=MAX_PASSWORD)
+    new_password: str = Field(min_length=MIN_PASSWORD, max_length=MAX_PASSWORD)
 
 
 class LogoutIn(BaseModel):

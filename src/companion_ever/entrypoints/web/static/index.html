@@ -28,9 +28,10 @@
         <button id="login-submit" class="btn-primary" type="submit">登录</button>
       </form>
       <form id="password-form" class="hidden">
+        <!-- minlength/maxlength 要和 accounts.service.MIN_PASSWORD / MAX_PASSWORD 保持一致 -->
         <input class="account-input" id="password-current" type="password" autocomplete="current-password" maxlength="128" placeholder="当前密码" aria-label="当前密码" required>
-        <input class="account-input" id="password-new" type="password" autocomplete="new-password" minlength="15" maxlength="128" placeholder="新密码（至少 15 个字符）" aria-label="新密码" required>
-        <input class="account-input" id="password-confirm" type="password" autocomplete="new-password" minlength="15" maxlength="128" placeholder="再次输入新密码" aria-label="确认新密码" required>
+        <input class="account-input" id="password-new" type="password" autocomplete="new-password" minlength="6" maxlength="128" placeholder="新密码（至少 6 个字符）" aria-label="新密码" required>
+        <input class="account-input" id="password-confirm" type="password" autocomplete="new-password" minlength="6" maxlength="128" placeholder="再次输入新密码" aria-label="确认新密码" required>
         <button id="password-submit" class="btn-primary" type="submit">保存新密码</button>
         <button id="password-cancel" class="account-link" type="button">返回</button>
       </form>
