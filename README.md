@@ -26,14 +26,17 @@ Copy-Item .env.example .env
 
 - Web 界面里可以新建角色：选内置模板或自己填字段；角色资料页可以删除角色——删除只是停用，记忆和聊天记录都留着，能在「已删除的角色」里恢复。
 - 消息先保存，服务器独立生成；手机切后台后，返回页面可恢复正式回复。
+- PIN 提交和页面启动时均通过受保护接口验证；公开健康检查不验证 PIN，启动日志不输出凭据。
 - 记忆自动整理：积累 12 条用户新消息，或空闲 10 分钟且至少 3 条；少量积压最长约 24 小时兜底。
 - 整理链路由 LangGraph 编排，模型可只读检索旧笔记及其证据/关系，再统一校验和原子写入。
 - 摘要同样由 LangGraph 编排复用、清空、生成及有限纠错；两条后台链路共享原有任务与事务机制。
-- 三层模型调用在原 trace 中记录实际 token、缓存计数与耗时；当前保留原聊天提示词结构。
+- 三层模型调用按日记录基本信息、实际 token、缓存计数与耗时；不保存提示词、原始回复或节点产物。
 - 用户画像和关系概况从 fact 操作独立演化：首次自动生成，后续累计 8 条实质变化或等待 6 小时；涉及摘要引用的纠正优先，纯证据/元数据变化免模型处理。
 - 摘要更新期间或失败时，聊天沿用上次成功版本；近期用户的明确纠正优先，新摘要成功后整体替换。
 - 正常页面隐藏维护按钮；网址添加 `?debug` 可手动触发及查看任务诊断。
+- `?debug` 下「我 → 模型调用记录」可查看、筛选和下载轻量记录；顶部 token 与累计调用耗时跟随当前筛选变化。
 - `kind=episode/fact` 是唯一记忆分类；`reality` 独立表示用户自述、共同想象或尚未核实。
+- 固定笔记功能已移除，笔记按相关性检索；旧库启动时迁至 schema v7，仅移除固定标记，保留笔记内容及关联数据。
 
 旧笔记迁移时的 `reality` 保留为 `uncertain`，摘要可能因此显示“待核实”。这不表示任务尚未完成，也不会通过自动迁移猜测旧内容的现实情境。
 
@@ -44,7 +47,7 @@ Copy-Item .env.example .env
 | [架构与阅读顺序](docs/ARCHITECTURE.md) | 当前调用链、表与代码职责 |
 | [记忆规则](docs/MEMORY_POLICY.md) | 笔记、证据、关系、摘要与召回契约 |
 | [后台任务](docs/BACKGROUND_TASKS.md) | 自动触发、消息恢复、重试、迁移与维护 |
-| [链路诊断](docs/TRACING.md) | 完整模型请求、原始回复、校验与执行记录 |
+| [调用诊断](docs/TRACING.md) | 轻量调用记录、筛选统计与任务执行状态 |
 | [验证与工具](docs/MEMORY_EVALUATION.md) | 测试、评测、迁移检查及保留工具的用途 |
 | [待 review 项](REVIEW_NOTES.md) | 仍存在的问题和未决定的方向 |
 
@@ -53,7 +56,7 @@ Copy-Item .env.example .env
 ```powershell
 .\.venv\Scripts\python.exe tools/check.py
 .\.venv\Scripts\python.exe -m companion_ever maintain backup
-.\.venv\Scripts\python.exe -m companion_ever trace list --last 10
+Get-Content memory/calls/*.jsonl -Tail 10
 ```
 
-测试使用临时数据库和假模型；前端回归需要 Node.js。常规验证不调用收费 API。`memory/` 保存私人数据库、备份、trace 和评测产物，`.env` 保存私有配置。
+测试使用临时数据库和假模型；前端回归需要 Node.js。常规验证不调用收费 API。`memory/` 保存私人数据库、备份、轻量调用记录和评测产物，`.env` 保存私有配置。旧 trace 的生成与查看逻辑已删除，已有历史文件保留，新记录位于数据库同级 `calls/`。

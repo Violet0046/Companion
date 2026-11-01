@@ -53,7 +53,6 @@ class Note:
     event_time: Optional[str] = None
     time_basis: str = ''
     revision: int = 1
-    pinned: bool = False
 
     def to_llm_dict(self) -> dict:
         """给 LLM 的简化视图（去掉时间戳、归档标记、衰减分等）。"""

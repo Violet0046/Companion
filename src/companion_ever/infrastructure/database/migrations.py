@@ -7,7 +7,7 @@ import re
 
 def migrate(conn):
     version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > 6:
+    if version > 7:
         raise ValueError('数据库版本比当前程序新，拒绝降级运行')
     if version < 1:
         _migrate_jobs(conn)
@@ -21,6 +21,20 @@ def migrate(conn):
         _add_task_attempts(conn)
     if conn.execute('PRAGMA user_version').fetchone()[0] < 6:
         _constrain_persona_definitions(conn)
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 7:
+        _remove_note_pinning(conn)
+
+
+def _remove_note_pinning(conn):
+    """仅删除固定标记，保留笔记、关系、证据、摘要及历史流水。"""
+    from companion_ever.infrastructure.database.connection import transaction
+    with transaction(conn):
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(note)')}
+        if 'pinned' in columns:
+            conn.execute('ALTER TABLE note DROP COLUMN pinned')
+        if conn.execute('PRAGMA foreign_key_check').fetchone():
+            raise ValueError('删除固定标记将破坏外键，schema v7 迁移已回滚')
+        conn.execute('PRAGMA user_version=7')
 
 
 def _constrain_persona_definitions(conn):

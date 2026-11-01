@@ -132,7 +132,6 @@ class OpenAICompatibleClient:
             stream=True,
             **kwargs,
         )
-        parts: list[str] = []
         reasoning_parts: list[str] = []
         finish_reason=None
         first_frame=True;first_content=True
@@ -153,14 +152,9 @@ class OpenAICompatibleClient:
                 if rc:
                     reasoning_parts.append(rc)
                     self.last_reasoning = "".join(reasoning_parts)
-                    from companion_ever.infrastructure.tracing import current_trace
-                    trace=current_trace()
-                    if trace is not None:
-                        trace.model_reasoning(self.last_reasoning)
                 if delta.content:
                     if first_content:
                         checkpoint('model_first_content');first_content=False
-                    parts.append(delta.content)
                     yield delta.content
         finally:
             stream.close()

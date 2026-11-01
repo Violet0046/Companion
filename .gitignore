@@ -33,6 +33,7 @@ memory/reviews/
 memory/*.bak*
 .commit_msg.txt
 traces/
+calls/
 *.db-journal
 *.sqlite
 *.sqlite3
@@ -67,3 +68,4 @@ scratch_*
 tests/
 tools/
 docs/
+TONGXING_DEPLOYMENT_HANDOFF.md

@@ -16,12 +16,13 @@ import contextlib
 import socket
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from companion_ever.bootstrap.app import AppContext, build_app
 from companion_ever.config import AppConfig, WebConfig
+from companion_ever.entrypoints.web.deps import check_pin
 
 # 静态资源目录：src/companion_ever/entrypoints/web/static/
 WEB_DIR = Path(__file__).resolve().parent / "static"
@@ -74,16 +75,17 @@ def create_app(
         response=await call_next(request)
         if request.url.path.startswith('/api/'):
             response.headers['Cache-Control']='no-store'
-        elif request.url.path in ('/','/index.html','/app.js','/styles.css'):
+        elif request.url.path in ('/','/index.html','/app.js','/styles.css','/calls.html','/calls.js'):
             response.headers['Cache-Control']='no-cache'
         return response
 
     # --- 路由 ---
-    from companion_ever.entrypoints.web.routes import chat, memory, persona
+    from companion_ever.entrypoints.web.routes import chat, memory, persona, calls
 
     app.include_router(chat.router)
     app.include_router(persona.router)
     app.include_router(memory.router)
+    app.include_router(calls.router)
 
     # 记录（抽取记忆）跑完后，服务端**主动推送** record_done 给前端。
     # 前端收到就刷新关系状态 / 记忆 / 计数——不用「退出重进」才能看到变化。
@@ -109,6 +111,12 @@ def create_app(
             "memory_idle_seconds": app.state.ctx.cfg.background.memory_idle_seconds,
             "schema_version": app.state.ctx.conn.execute('PRAGMA user_version').fetchone()[0],
         })
+
+    @app.post("/api/auth/check", include_in_schema=False)
+    def authenticate(x_pin: str = Header(default="")) -> dict:
+        """验证访问凭据；公开健康检查不承担登录校验。"""
+        check_pin(x_pin, web_cfg)
+        return {"ok": True}
 
     # manifest 要用 application/manifest+json，否则 PWA 安装不了
     @app.get("/manifest.webmanifest", include_in_schema=False)
@@ -234,7 +242,7 @@ def run_server(
     else:
         print("  手机访问:   （未找到可用的局域网地址）")
     if web_cfg.pin:
-        print(f"  访问 PIN:   {web_cfg.pin}")
+        print("  访问 PIN:   已设置")
     else:
         print("  访问 PIN:   未设置（任何人同网段都能访问）")
     print("  手机浏览器打开后 → 菜单里选「添加到主屏幕」")

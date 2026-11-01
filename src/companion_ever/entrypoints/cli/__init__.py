@@ -23,12 +23,6 @@ from companion_ever.bootstrap.app import AppContext, build_app
 from companion_ever.characters.templates import build_definition, list_templates
 from companion_ever.utils.text import strip_format_prefix
 from companion_ever.entrypoints.cli.maintain_cmd import cmd_backup
-from companion_ever.entrypoints.cli.trace_cmd import (
-    cmd_trace_list,
-    cmd_trace_prune,
-    cmd_trace_show,
-    cmd_trace_show_raw,
-)
 
 
 def _build_app(db_path: Optional[str] = None, llm_cfg: Optional[LLMConfig] = None) -> AppContext:
@@ -195,8 +189,6 @@ def cmd_show(args) -> int:
         ctx.close()
 
 
-
-
 def build_parser() -> argparse.ArgumentParser:
     """构造 argparse。"""
     parser = argparse.ArgumentParser(
@@ -250,27 +242,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default=None, help="监听地址，默认 0.0.0.0")
     p_serve.add_argument("--port", type=int, default=None, help="端口，默认 8000")
 
-    # trace（诊断：看模型究竟看到了什么）
-    p_trace = sub.add_parser("trace", help="trace 诊断（看每轮链路 + 模型实际收到的内容）")
-    p_trace.add_argument('--dir',dest='trace_dir',help='直接指定 trace 目录；默认使用数据库同级 traces/')
-    trace_sub = p_trace.add_subparsers(dest="trace_cmd", required=True)
-
-    t_list = trace_sub.add_parser("list", help="列出最近的 trace")
-    t_list.add_argument("--user", default=None, help="按用户过滤")
-    t_list.add_argument("--persona", default=None, help="按角色过滤")
-    t_list.add_argument("--kind", default=None, choices=["chat", "extraction", "memory_attempt", "summary", "memory_evaluation"], help="按类型过滤")
-    t_list.add_argument("--last", type=int, default=20, help="显示最近 N 条（默认 20）")
-
-    t_show = trace_sub.add_parser("show", help="看某一轮的链路")
-    t_show.add_argument("trace_id", help="trace_id（可只给前缀）")
-    t_show.add_argument("--request", action="store_true", help="直接打印模型实际收到的请求")
-    t_show.add_argument("--response", action="store_true", help="直接打印模型实际返回的内容")
-    t_show.add_argument('--artifact',help='查看指定产物，如 llm-01.payload、llm-02.response、validation-01.error')
-    t_show.add_argument("--max-chars", type=int, default=0, help="最多打印多少字符（0 = 不限）")
-
-    t_prune = trace_sub.add_parser("prune", help="清理旧 trace")
-    t_prune.add_argument("--days", type=int, default=7, help="保留最近 N 天（默认 7）")
-
     return parser
 
 
@@ -296,18 +267,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         run_server(host=args.host, port=args.port, db_path=args.db)
         return 0
-    elif args.cmd == "trace":
-        if args.trace_cmd == "list":
-            return cmd_trace_list(args)
-        elif args.trace_cmd == "show":
-            if args.request or args.response or args.artifact:
-                return cmd_trace_show_raw(args)
-            return cmd_trace_show(args)
-        elif args.trace_cmd == "prune":
-            return cmd_trace_prune(args)
-        else:
-            print("[FAIL] 未知 trace 子命令")
-            return 1
     else:
         parser.print_help()
         return 1

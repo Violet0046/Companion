@@ -5,7 +5,6 @@ import threading
 import uuid
 from companion_ever.runtime.repository import TaskRepo
 from companion_ever.runtime.errors import describe_error,LeaseLostError
-from companion_ever.infrastructure.tracing import record_step
 
 
 _local=threading.local()
@@ -23,7 +22,6 @@ def checkpoint(stage=None,**detail):
         task.check()
         if stage:
             task.event(stage,detail)
-            record_step('task.'+stage,**detail)
 
 
 class TaskExecution:

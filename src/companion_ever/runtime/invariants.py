@@ -19,7 +19,7 @@ class Violation:
 
 def strict_mode() -> bool:
     """严格模式：违反不变量时抛异常（开发期用）。"""
-    return os.environ.get("COMPANION_TRACE_STRICT", "0").strip().lower() in (
+    return os.environ.get("COMPANION_INVARIANT_STRICT", "0").strip().lower() in (
         "1", "true", "on", "yes",
     )
 

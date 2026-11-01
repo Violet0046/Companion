@@ -48,7 +48,6 @@ class NoteOut(BaseModel):
     reality: str = 'uncertain'
     event_time: Optional[str] = None
     time_basis: str = ''
-    pinned: bool = False
     source_quote: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

@@ -34,7 +34,7 @@ def row_to_note(row: sqlite3.Row) -> Note:
         importance=row['importance'], decay_score=row['decay_score'], is_archived=bool(row['is_archived']),
         created_at=row['created_at'], updated_at=row['updated_at'], last_accessed_at=row['last_accessed_at'],
         reality=row['reality'], event_time=row['event_time'], time_basis=row['time_basis'],
-        revision=row['revision'], pinned=bool(row['pinned']),
+        revision=row['revision'],
     )
 
 
@@ -63,16 +63,6 @@ class NoteRepo:
             'SELECT e.message_id,e.quote FROM note_evidence e JOIN conversation_log m ON m.id=e.message_id '
             'WHERE e.note_id=? AND m.user_id=? AND m.persona_id=?' + role + ' ORDER BY e.message_id DESC LIMIT ?',
             (note_id, user_id, persona_id, limit))]
-
-    def set_pinned(self, note_id, pinned):
-        self.conn.execute('UPDATE note SET pinned=?,revision=revision+1 WHERE id=?', (int(pinned), note_id))
-
-    def pinned(self, user_id, persona_id):
-        return [row_to_note(row) for row in self.conn.execute(
-            'SELECT n.* FROM note n WHERE user_id=? AND persona_id=? AND pinned=1 AND is_archived=0 '
-            "AND NOT EXISTS (SELECT 1 FROM note_link l JOIN note newer ON newer.id=l.from_id WHERE l.to_id=n.id "
-            "AND l.link_type='supersedes' AND newer.is_archived=0) ORDER BY importance DESC,id LIMIT 8",
-            (user_id, persona_id))]
 
     def get(self, note_id: str) -> Optional[Note]:
         """获取单条笔记。

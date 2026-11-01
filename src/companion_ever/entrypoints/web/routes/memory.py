@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 from companion_ever.bootstrap.app import AppContext
 from companion_ever.entrypoints.web.deps import check_pin
@@ -203,7 +203,7 @@ def list_notes(
         NoteOut(
             id=n.id,
             kind=n.kind.value,
-            reality=n.reality, event_time=n.event_time, time_basis=n.time_basis, pinned=n.pinned,
+            reality=n.reality, event_time=n.event_time, time_basis=n.time_basis,
             content=n.content if isinstance(n.content, str) else json.dumps(n.content, ensure_ascii=False),
             importance=n.importance,
             source_quote=n.source_quote,
@@ -212,17 +212,6 @@ def list_notes(
         )
         for n in notes
     ]
-
-
-@router.patch('/api/persona/{user_id}/{persona_id}/notes/{note_id}/pin')
-def pin_note(request: Request,user_id: str,persona_id: str,note_id: str,
-             pinned: bool=Body(...,embed=True),x_pin: str=Header(default='')):
-    ctx, _ = _ctx_and_cfg(request,x_pin)
-    try:
-        ctx.services.note.set_pinned(user_id,persona_id,note_id,pinned)
-    except ValueError as exc:
-        raise HTTPException(404,str(exc)) from exc
-    return {'id':note_id,'pinned':pinned}
 
 
 @router.get("/api/persona/{user_id}/{persona_id}/blocks", response_model=list[BlockOut])

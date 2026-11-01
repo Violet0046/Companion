@@ -33,7 +33,8 @@ from companion_ever.characters.repository import PersonaRepo
 from companion_ever.conversations.generation_repository import GenerationRepo
 from companion_ever.memory.extraction.jobs import MemoryJobRepo
 from companion_ever.memory.summaries.repository import SummaryRepo
-from companion_ever.infrastructure.tracing import TraceStore, default_trace_dir, set_default_store
+from companion_ever.infrastructure.tracing import CallLogStore, default_call_dir
+from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
 from companion_ever.bootstrap.lifecycle import ApplicationLifecycle, build_lifecycle
 
 
@@ -85,9 +86,14 @@ class AppContext:
     services: Services
     workflows: Workflows
     lifecycle: ApplicationLifecycle | None = None
+    call_logs: CallLogStore | None = None
     _closed: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self):
+        if self.call_logs is None:
+            self.call_logs = CallLogStore(default_call_dir(self.cfg.db_path), tz_offset_hours=self.cfg.tz_offset_hours)
+        if isinstance(self.llm, TracedLLMClient):
+            self.llm.store = self.call_logs
         if self.lifecycle is None:
             self.lifecycle = build_lifecycle(self.cfg, self.conn, self.services)
 
@@ -109,9 +115,6 @@ def build_app(cfg: AppConfig) -> AppContext:
     """根据 cfg 构造完整的 AppContext。"""
     # 1. Connection
     conn = init_db(cfg.db_path, check_same_thread=cfg.check_same_thread)
-
-    # 1b. trace 存储（诊断数据落文件，默认 <db 同级>/traces/）
-    set_default_store(TraceStore(default_trace_dir(cfg.db_path)))
 
     # 2. Repos（无依赖）
     repos = Repos(

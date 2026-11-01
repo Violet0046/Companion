@@ -7,7 +7,6 @@ import time
 
 from companion_ever.memory.extraction.service import ExtractionReport, report_from_state
 from companion_ever.memory.extraction.jobs import MemoryJobRepo
-from companion_ever.infrastructure.tracing import trace_scope
 from companion_ever.utils.time import parse_sqlite_ts
 from companion_ever.runtime.tasks import runtime_for
 from companion_ever.infrastructure.database.connection import transaction
@@ -119,30 +118,18 @@ class SessionCloseService:
         return self._run(user_id,persona_id,marker)
 
     def _run(self, user_id, persona_id, marker, *, drain_through=None):
-        with trace_scope('extraction',user_id,persona_id) as trace:
-            if marker:
-                trace.step('db.log_session_close',marker_id=marker)
-            state=self.extraction_service.run({'user_id':user_id,'persona_id':persona_id,'parent_trace_id':trace.trace_id})
-            report=report_from_state(state)
-            next_job = None
-            if report.job_status == 'succeeded':
-                next_job = self.jobs.enqueue(user_id,persona_id,until_id=drain_through)
-            trace.step('extraction.workflow',job_id=report.job_id,status=report.job_status,
-                       facts_created=report.facts_created,errors=report.errors,attempt_trace_id=state.get('attempt_trace_id'))
-            trace.context.update(job_id=report.job_id,attempt_trace_id=state.get('attempt_trace_id'))
-            if report.job_status=='failed':
-                trace.finish('error','; '.join(report.errors))
-            elif report.job_status in ('queued','running'):
-                trace.finish('waiting')
-            elif report.job_status is None:
-                trace.finish('noop')
-            result=SessionCloseReport(marker,report,more_pending=next_job is not None)
-            if self.on_record_done and report.job_status not in ('queued','running'):
-                try:
-                    self.on_record_done(user_id,persona_id,result)
-                except Exception:
-                    logging.getLogger(__name__).exception('记忆完成通知失败')
-            return result
+        state=self.extraction_service.run({'user_id':user_id,'persona_id':persona_id})
+        report=report_from_state(state)
+        next_job = None
+        if report.job_status == 'succeeded':
+            next_job = self.jobs.enqueue(user_id,persona_id,until_id=drain_through)
+        result=SessionCloseReport(marker,report,more_pending=next_job is not None)
+        if self.on_record_done and report.job_status not in ('queued','running'):
+            try:
+                self.on_record_done(user_id,persona_id,result)
+            except Exception:
+                logging.getLogger(__name__).exception('Memory completion notification failed')
+        return result
 
     def resume_pending(self):
         """Startup/periodic recovery does not depend on session markers."""

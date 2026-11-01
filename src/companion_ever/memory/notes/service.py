@@ -22,7 +22,7 @@ class NoteService:
         self.authorizer = authorizer
         self.note_repo = note_repo
 
-    # === 显式写入与固定 ===
+    # === 显式写入 ===
 
     def create_note(
         self,
@@ -58,17 +58,6 @@ class NoteService:
             source_quote=source_quote,
             importance=importance,
         )
-    def set_pinned(self, user_id, persona_id, note_id, pinned):
-        self.authorizer.require_persona(user_id,persona_id)
-        note = self.note_repo.get(note_id)
-        if note is None or (note.user_id,note.persona_id)!=(user_id,persona_id) or note.is_archived:
-            raise ValueError('记忆不存在或不属于当前角色')
-        self.note_repo.set_pinned(note_id, pinned)
-
-    def pinned_notes(self, user_id, persona_id):
-        self.authorizer.require_persona(user_id,persona_id)
-        return self.note_repo.pinned(user_id, persona_id)
-
     # === 读取 ===
 
     def get_note(self, note_id: str, user_id: str) -> Optional[Note]:

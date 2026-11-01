@@ -4,22 +4,11 @@ import time
 from companion_ever.infrastructure.llm.json_output import parse_json_response
 from companion_ever.runtime.errors import describe_error
 from companion_ever.runtime.tasks import checkpoint
-from companion_ever.infrastructure.tracing import current_trace
 
 
 def validation_detail(exc):
     return ('; '.join('.'.join(map(str,e['loc']))+': '+e['msg'] for e in exc.errors(include_input=False,include_url=False))
             if hasattr(exc,'errors') else str(exc))
-
-
-def record_validation(data,number,error=None):
-    trace=current_trace()
-    if trace:
-        trace.artifact(f'validation-{number:02d}.parsed',json.dumps(data,ensure_ascii=False,indent=2))
-        if error is not None:
-            trace.artifact(f'validation-{number:02d}.error',validation_detail(error))
-        trace.step('validation.failed' if error is not None else 'validation.passed',
-                   request_number=number,**({'error':describe_error(error)} if error is not None else {}))
 
 
 def correction_messages(data, error, source_rule=''):
@@ -57,10 +46,8 @@ def checked_json(llm,messages,validate,*,repair_attempts=0,source_rule='',**kwar
         try:
             checkpoint('validate',request_number=attempt+1)
             result=validate(data)
-            record_validation(data,attempt+1)
             return result
         except ValueError as exc:
-            record_validation(data,attempt+1,exc)
             if attempt==repair_attempts:
                 raise
             checkpoint('repair',error=describe_error(exc))

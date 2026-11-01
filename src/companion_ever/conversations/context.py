@@ -14,7 +14,6 @@ from companion_ever.runtime.invariants import (
 )
 from companion_ever.memory.notes.service import NoteService
 from companion_ever.memory.summaries.blocks import BlockService
-from companion_ever.infrastructure.tracing import current_trace
 from companion_ever.prompts import CHAT_SYSTEM, compose
 from companion_ever.utils.time import describe_gap, format_now, parse_sqlite_ts
 
@@ -89,9 +88,6 @@ class PromptService:
         Raises:
             PermissionError: user 不存在 / 不拥有 persona
         """
-        import time as _time
-        _t0 = _time.perf_counter()
-
         # 0. 权限校验
         self.authorizer.require_persona(user_id, persona_id)
 
@@ -125,8 +121,6 @@ class PromptService:
                 persona_id=persona_id,
                 query=query,
             )
-        pinned = self.note_service.pinned_notes(user_id,persona_id)
-        related_notes = pinned + [n for n in related_notes if n.id not in {p.id for p in pinned}]
         derived = ''
         if self.summary_service is not None:
             derived = self.summary_service.prompt_text(user_id, persona_id)
@@ -149,10 +143,9 @@ class PromptService:
                 "content": msg.content if msg.id == current_message_id else self._render_message(msg),
             })
 
-        self._record_trace(
+        self._check_invariants(
             user_id, persona_id, system_prompt, messages,
             related_notes=related_notes,
-            ms=(_time.perf_counter() - _t0) * 1000,
             current_message_id=current_message_id,
         )
 
@@ -161,38 +154,18 @@ class PromptService:
             "messages": messages,
         }
 
-    def _record_trace(
+    def _check_invariants(
         self,
         user_id: str,
         persona_id: str,
         system_prompt: str,
         messages: list[dict],
         related_notes: list,
-        ms: float,
         current_message_id: int | None = None,
     ) -> None:
-        """把 prompt 组装的细节记进 trace，并跑一遍廉价不变量检查。"""
-        tr = current_trace()
-        if tr is None:
+        """严格检查按需启用，不依赖日志或保存输入正文。"""
+        if not strict_mode():
             return
-
-        history = messages[1:]
-        history_chars = sum(len(str(m.get("content", ""))) for m in history)
-        note_chars = sum(
-            len(n.content) if isinstance(n.content, str) else len(str(n.content))
-            for n in related_notes
-        )
-
-        tr.step(
-            "prompt.build",
-            ms=ms,
-            system_chars=len(system_prompt),
-            history_msgs=len(history),
-            history_chars=history_chars,
-            notes=len(related_notes),
-            note_chars=note_chars,
-            total_chars=len(system_prompt) + history_chars,
-        )
 
         # --- 不变量检查 ---
         # 本轮输入不在 messages 里，所以要跟"本轮之前最新的那条"比，
@@ -224,11 +197,6 @@ class PromptService:
             retrieved_count=len(related_notes),
             last_db_message=last_db_message,
             total_notes=total_notes,
-        )
-        tr.step(
-            "invariants.check",
-            passed=not violations,
-            violations=[v.to_dict() for v in violations],
         )
         if violations and strict_mode():
             raise ValueError(

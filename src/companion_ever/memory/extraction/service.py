@@ -1,5 +1,6 @@
 """Durable memory execution and the business operations used by its LangGraph."""
 from __future__ import annotations
+from companion_ever.infrastructure.tracing import call_context
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
@@ -9,7 +10,7 @@ from companion_ever.memory.extraction.draft import (
 from companion_ever.memory.extraction.tools import MemoryTools, ToolRequest, note_payload, tool_specs
 from companion_ever.infrastructure.llm.json_output import parse_json_response
 from companion_ever.prompts import load
-from companion_ever.runtime.structured import correction_messages, record_validation
+from companion_ever.runtime.structured import correction_messages
 from companion_ever.memory.extraction.writer import MemoryWriter
 from companion_ever.runtime.errors import can_retry, describe_error, failure_kind, RetryableTaskError
 from companion_ever.runtime.tasks import runtime_for, checkpoint, TaskInterrupted
@@ -17,7 +18,6 @@ from companion_ever.memory.retrieval.service import RetrievalService
 from companion_ever.memory.retrieval.query import MemorySearch
 from companion_ever.config import RetrievalConfig
 from companion_ever.utils.time import parse_sqlite_ts
-from companion_ever.infrastructure.tracing import trace_scope,current_trace
 from companion_ever.runtime.repository import TaskRepo
 import json
 import time
@@ -104,17 +104,12 @@ class ExtractionService:
         if not claimed:
             job = self.jobs.get(job['id'])
             result['job_status'] = job['status']
-            result['attempt_trace_id']=TaskRepo(self.conn).latest_trace('memory',job['id'])
             if job['last_error']:
                 result['errors'] = [job['last_error']]
             return result
         token = claimed['lease_token']
-        parent=current_trace()
-        with trace_scope('memory_attempt',user_id,persona_id,job_id=job['id'],attempt_id=token,
-                         parent_trace_id=state.get('parent_trace_id') or (parent.trace_id if parent else None)) as trace:
-            result['attempt_trace_id']=trace.trace_id
-            if getattr(trace,'_store',None):
-                TaskRepo(self.conn).event(token,'trace',{'trace_id':trace.trace_id})
+        with call_context('extraction',user_id,persona_id,job_id=job['id'],attempt_id=token,
+                          attempt=TaskRepo(self.conn).sequence(token)):
             try:
                 with self.runtime.execute('memory',self.jobs,claimed):
                     initial={**result,'job':claimed,'deadline':time.monotonic()+self.timeout*3,
@@ -126,12 +121,10 @@ class ExtractionService:
                     return result
             except TaskInterrupted as exc:
                 current=self.jobs.get(job['id'])
-                trace.finish('interrupted',str(exc))
                 result.update(job_status=current['status'],errors=[],extraction_failed=False)
                 return result
             except Exception as exc:
                 error=describe_error(exc)
-                trace.finish('error',error)
                 self.jobs.fail(job['id'], token, error, retryable=can_retry(exc),failure_kind=failure_kind(exc))
                 result.update(facts_created=0, notes_updated=0, note_ids={}, blocks_updated=0, extraction_failed=True, job_status='failed', errors=[error])
                 return result
@@ -178,9 +171,6 @@ class ExtractionService:
         case={**state['case'],'existing_notes':[note_payload(n) for n in snapshots.values()]}
         checkpoint('input_ready',messages=len(state['messages']),candidate_notes=len(snapshots),
                    source_chars=sum(len(m.content) for m in state['messages']))
-        trace=current_trace()
-        if trace:
-            trace.artifact('input_case',json.dumps(case,ensure_ascii=False,indent=2))
         # An empty keyword result is not proof that the memory store is empty.
         notes_exist=self.note_service.note_repo.exists_active(state['user_id'],state['persona_id'])
         search_required=notes_exist and not snapshots
@@ -209,15 +199,12 @@ class ExtractionService:
         try:
             if isinstance(data,dict) and 'tool_calls' in data:
                 request=ToolRequest.model_validate(data)
-                record_validation(data,state['model_calls'])
                 return {'tool_requests':request.tool_calls,'next':'tools'}
             draft=validate_draft(state['case'],data)
             if draft.proposals and state['search_required']:
                 raise ValueError('当前角色已有笔记但初次召回为空；提交建议前必须先调用 search_notes 核对旧记忆，不能将空候选视为没有旧记忆')
-            record_validation(data,state['model_calls'])
             return {'llm_result':draft.model_dump(),'next':'commit'}
         except ValueError as exc:
-            record_validation(data,state['model_calls'],exc)
             if state['repaired'] or state['model_calls']>=self.MAX_MODEL_CALLS:
                 raise
             return {'validation_error':exc,'next':'repair'}
@@ -237,9 +224,6 @@ class ExtractionService:
         for index,call in enumerate(requests,state['tool_calls']+1):
             self.check_budget(state)
             checkpoint('tool.'+call.name,call_number=index)
-            trace=current_trace()
-            if trace:
-                trace.artifact(f'tool-{index:02d}.request',call.model_dump_json(indent=2))
             try:
                 data,notes=state['tools'].execute(call)
             except ValueError as exc:
@@ -258,9 +242,6 @@ class ExtractionService:
                 snapshots=merged
                 if call.name=='search_notes' and not data.get('error'):
                     search_required=False
-            if trace:
-                trace.artifact(f'tool-{index:02d}.result',json.dumps(data,ensure_ascii=False,indent=2))
-                trace.step('tool.result',call_number=index,tool_name=call.name,error=data.get('error'),candidate_notes=len(snapshots))
             results.append({'call_id':f'tool-{index:02d}','name':call.name,'arguments':call.arguments.model_dump(),'result':data})
         # 候选集每轮完整回灌：模型在每一轮都要能看到全部候选，
         # 否则 target_id 只能从工具返回里反推，confirm/append 几乎无法做对。
@@ -284,9 +265,4 @@ class ExtractionService:
         data=state['llm_result'];job=state['job']
         checkpoint('write',proposals=len(data['proposals']))
         applied=MemoryWriter(self.note_service,self.jobs).apply(state['case'],data,job,job['lease_token'],state['snapshots'])
-        trace=current_trace()
-        if trace:
-            trace.artifact('input_case.final',json.dumps(state['case'],ensure_ascii=False,indent=2))
-            trace.artifact('write_result',json.dumps(applied,ensure_ascii=False,indent=2))
-            trace.step('db.commit',job_id=job['id'],facts_created=applied['facts_created'],notes_updated=applied['notes_updated'])
         return {**applied,'job_status':'succeeded','extraction_failed':False}

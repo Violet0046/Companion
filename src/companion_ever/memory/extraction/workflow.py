@@ -4,14 +4,11 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from companion_ever.runtime.tasks import checkpoint
-from companion_ever.infrastructure.tracing import record_step
 
 
 class ExtractionState(TypedDict, total=False):
     user_id: str
     persona_id: str
-    parent_trace_id: str
-    attempt_trace_id: str
     job_id: str
     job_status: str
     messages: list
@@ -48,7 +45,6 @@ def build_extraction_graph(service):
             checkpoint('graph.' + name)
             service.check_budget(state)
             result = method(state)
-            record_step('graph.node', node=name, next=result.get('next'))
             return result
         graph.add_node(name, node)
     graph.add_edge(START, 'load_input')

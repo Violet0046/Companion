@@ -49,11 +49,9 @@ class TaskRepo:
         return [{**dict(r),'events':[{**dict(e),'detail':json.loads(e['detail_json'])} for e in self.conn.execute(
             'SELECT created_at,stage,detail_json FROM task_event WHERE attempt_id=? ORDER BY id',(r['id'],))]} for r in rows]
 
-    def latest_trace(self,kind,job_id):
-        row=self.conn.execute("SELECT e.detail_json FROM task_event e JOIN task_attempt a ON a.id=e.attempt_id "
-                              "WHERE a.kind=? AND a.job_id=? AND e.stage='trace' ORDER BY e.id DESC LIMIT 1",
-                              (kind,job_id)).fetchone()
-        return json.loads(row[0]).get('trace_id') if row else None
+    def sequence(self, token):
+        row=self.conn.execute('SELECT sequence FROM task_attempt WHERE id=?',(token,)).fetchone()
+        return row[0] if row else 1
 
     def cooldown_retry(self,attempt):
         table={'memory':'memory_job','summary':'summary_job'}[attempt['kind']]

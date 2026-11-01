@@ -19,8 +19,7 @@ CREATE TABLE IF NOT EXISTS note (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_accessed_at TEXT, reality TEXT NOT NULL DEFAULT 'uncertain'
       CHECK(reality IN ('user_report','shared_fiction','uncertain')),
-    event_time TEXT, time_basis TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1,
-    pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1))
+    event_time TEXT, time_basis TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1
 );
 
 -- 索引：用户×persona×类型 是最常用的过滤组合

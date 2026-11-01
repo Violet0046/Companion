@@ -8,7 +8,6 @@ from companion_ever.config import RetrievalConfig
 from companion_ever.domain.entities import Note
 from companion_ever.memory.notes.repository import NoteRepo
 from companion_ever.utils.text import all_keywords, keyword_hits
-from companion_ever.infrastructure.tracing import current_trace
 from companion_ever.memory.retrieval.query import MemorySearch, MemorySearchResult
 from companion_ever.memory.relations import memory_kind, valid_relation
 from companion_ever.memory.notes.links import NoteLinkRepo
@@ -38,8 +37,6 @@ class RetrievalService:
 
     def search(self, user_id, persona_id, request):
         """Retrieve seeds, expand at most two hops, then select scoped evidence."""
-        import time
-        started = time.perf_counter()
         self.authorizer.require_persona(user_id,persona_id)
         request = MemorySearch.model_validate(request)
         if request.purpose == 'chat' and request.recent_limit:
@@ -164,12 +161,6 @@ class RetrievalService:
                          'path':paths[note.id],'superseded':note.id in superseded,'evidence':evidence})
         truncated |= len(hits)>request.limit
         result=MemorySearchResult(hits[:request.limit],list(edges.values()),list(dict.fromkeys(warnings)),truncated)
-        trace=current_trace()
-        if trace:
-            trace.step('retrieval.retrieve',ms=(time.perf_counter()-started)*1000,purpose=request.purpose,
-                       query=request.query[:120],candidates=len(nodes),returned=len(result.hits),
-                       notes=[{'id':h['note'].id,'score':h['score'],'reasons':h['reasons'],'path':h['path']} for h in result.hits],
-                       warnings=result.warnings,truncated=truncated)
         return result
 
     def _score(

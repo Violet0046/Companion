@@ -82,8 +82,6 @@ class MemoryWriter:
                                                content=proposal.content,source_quote=proposal.evidence[0].quote,
                                                importance=proposal.importance,reality=proposal.reality,
                                                event_time=proposal.event_time,time_basis=proposal.time_basis)
-                        if proposal.action == 'revise' and target.pinned:
-                            self.conn.execute('UPDATE note SET pinned=1 WHERE id=?',(nid,))
                         created += 1
                 if nid in written:
                     raise ValueError('同一批不能对同一记忆执行多次写入')

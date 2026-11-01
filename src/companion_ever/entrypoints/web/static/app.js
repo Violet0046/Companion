@@ -1279,24 +1279,8 @@ function renderMemory() {
       <span class="note-imp">重要度 ${(n.importance || 0).toFixed(2)}</span></div>
       ${esc(n.content)}
       ${n.reality === 'shared_fiction' ? '<div class="dim-sm">共同想象</div>' : ''}
-      <button class="btn-mini note-pin" data-id="${escAttr(n.id)}">${n.pinned ? '取消固定' : '固定记忆'}</button>
       <div class="note-bar"><i style="width:${Math.round((n.importance || 0) * 100)}%"></i></div>
     </div>`).join('');
-  box.querySelectorAll('.note-pin').forEach(btn => {
-    btn.onclick = async () => {
-      const note = notes.find(n => n.id === btn.dataset.id);
-      const target = S.memoryPersona;
-      if (!note || !target) return;
-      btn.disabled = true;
-      try {
-        const result = await api(`/api/persona/${enc(target.user)}/${enc(target.persona)}/notes/${enc(note.id)}/pin`,
-          {method: 'PATCH', body: JSON.stringify({pinned: !note.pinned})});
-        note.pinned = result.pinned;
-        if (S.memoryPersona === target) renderMemory();
-      } catch (e) { toast('固定记忆失败：' + e.message, 3000); }
-      finally { btn.disabled = false; }
-    };
-  });
 }
 
 /* ---------- 视口：用 visualViewport 精确跟随「实际可见区域」 ---------- */
@@ -1422,10 +1406,28 @@ async function boot() {
     const health = await api('/api/health');
     S.automaticMemory=health.auto_memory !== false;
     if (health.auth_required && !S.pin) { showGate(); return; }
-  } catch (e) { showGate(true); return; }
+    if (health.auth_required) await api('/api/auth/check', {method: 'POST'});
+  } catch (e) {
+    if (e.status === 401) {
+      S.pin = '';
+      localStorage.removeItem('ce_pin');
+      $('gate-error').textContent = 'PIN 已失效，请重新输入';
+      showGate();
+    } else {
+      showGate(true);
+    }
+    return;
+  }
   $('gate').classList.add('hidden');
   $('app').classList.remove('hidden');
   await resolveTarget();
+  if (S.debug) {
+    $('call-log-link').classList.remove('hidden');
+    $('call-log-link').href = `/calls.html?user=${enc(S.user)}&persona=${enc(S.persona)}`;
+    $('call-log-link').onclick = () => {
+      $('call-log-link').href = `/calls.html?user=${enc(S.user)}&persona=${enc(S.persona)}`;
+    };
+  }
   // 先读设置（show_thinking）再拉历史 —— 并行的话不知道该不该带 think
   await loadSettings();
   await loadUsers();
@@ -2421,16 +2423,21 @@ $('toggle-thinking').addEventListener('change', async (e) => {
 });
 
 $('pin-submit').onclick = async () => {
+  const button = $('pin-submit');
+  if (button.disabled) return;
+  button.disabled = true;
   S.pin = $('pin-input').value.trim();
   try {
-    await api('/api/health');
+    await api('/api/auth/check', {method: 'POST'});
     localStorage.setItem('ce_pin', S.pin);
     $('pin-input').value = '';
     $('gate-error').textContent = '';
-    boot();
+    await boot();
   } catch (e) {
-    $('gate-error').textContent = 'PIN 不对';
+    $('gate-error').textContent = e.status === 401 ? 'PIN 不对' : '暂时无法验证，请稍后重试';
     S.pin = localStorage.getItem('ce_pin') || '';
+  } finally {
+    button.disabled = false;
   }
 };
 $('pin-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pin-submit').click(); });

@@ -1,10 +1,10 @@
 """Durable user receipt and cancellable, independently persisted assistant messages."""
+from companion_ever.infrastructure.tracing import call_context
 import logging
 import uuid
 from companion_ever.conversations.reply import split_assistant_reply
 from companion_ever.conversations.generation_repository import GenerationRepo
 from companion_ever.infrastructure.database.connection import transaction
-from companion_ever.infrastructure.tracing import trace_scope
 from companion_ever.utils.text import strip_invisible
 from companion_ever.runtime.errors import describe_error
 
@@ -45,7 +45,7 @@ class ChatService:
             return
         completed=False
         chunks=None
-        with trace_scope('chat',generation['user_id'],generation['persona_id']) as trace:
+        with call_context('chat',generation['user_id'],generation['persona_id'],generation_id=gid):
             try:
                 # The host can prime this event under its execution lock,
                 # fencing claim against shutdown before any model request.
@@ -78,7 +78,6 @@ class ChatService:
                             yield {'type':'cancelled','generation_id':gid}
                             return
                         yield {'type':'message_done','message':saved,'raw':raw,'generation_id':gid}
-                        trace.step('db.log_turn',message_id=saved['id'],generation_id=gid)
                         index+=1
                         body_parts=[]
                         if index>=3:
@@ -109,7 +108,6 @@ class ChatService:
                         yield {'type':'cancelled','generation_id':gid}
                         return
                     yield {'type':'message_done','message':saved,'raw':raw,'generation_id':gid}
-                    trace.step('db.log_turn',message_id=saved['id'],generation_id=gid)
                 elif index==0:
                     raise ValueError('模型返回了空回复')
                 self.generations.finish(gid)

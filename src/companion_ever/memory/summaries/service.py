@@ -1,5 +1,6 @@
 """Incremental summaries derived from fact operations; never create or update notes."""
 from __future__ import annotations
+from companion_ever.infrastructure.tracing import call_context
 import json
 import logging
 import threading
@@ -12,11 +13,10 @@ from companion_ever.infrastructure.database.connection import transaction
 from companion_ever.memory.summaries.repository import SummaryRepo, digest
 from companion_ever.domain.enums import BlockType
 from companion_ever.runtime.errors import can_retry, describe_error, RetryableTaskError, failure_kind
-from companion_ever.runtime.structured import correction_messages,record_validation
+from companion_ever.runtime.structured import correction_messages
 from companion_ever.infrastructure.llm.json_output import parse_json_response
 from companion_ever.runtime.tasks import runtime_for, checkpoint as task_checkpoint, TaskInterrupted
 from companion_ever.runtime.repository import TaskRepo
-from companion_ever.infrastructure.tracing import trace_scope,current_trace
 from companion_ever.memory.summaries.changes import coalesce_changes
 from companion_ever.memory.extraction.jobs import MemoryJobRepo
 
@@ -150,19 +150,16 @@ class SummaryService:
         job=self.repo.claim(jid,owner_id=self.runtime.owner_id,lease_seconds=self.runtime.lease_seconds)
         if job is None:
             return self.repo.get(jid)
-        with trace_scope('summary',job['user_id'],job['persona_id'],job_id=jid,attempt_id=job['lease_token']) as trace:
-            if getattr(trace,'_store',None):
-                TaskRepo(self.conn).event(job['lease_token'],'trace',{'trace_id':trace.trace_id})
+        with call_context('summary',job['user_id'],job['persona_id'],job_id=jid,attempt_id=job['lease_token'],
+                          attempt=TaskRepo(self.conn).sequence(job['lease_token'])):
             try:
                 with self.runtime.execute('summary',self.repo,job):
                     self.authorizer.require_persona(job['user_id'],job['persona_id'])
                     self.graph.invoke({'job':job,'deadline':time.monotonic()+self.timeout*3,
                                        'model_calls':0,'repaired':False},config={'recursion_limit':24})
             except TaskInterrupted as exc:
-                trace.finish('interrupted',str(exc))
                 return self.repo.get(jid)
             except Exception as exc:
-                trace.finish('error',describe_error(exc))
                 self.repo.fail(job,describe_error(exc),retryable=can_retry(exc),failure_kind=failure_kind(exc))
         result=self.repo.get(jid)
         if self.on_updated and result['status'] in ('succeeded','failed'):
@@ -197,9 +194,6 @@ class SummaryService:
         payload['output_limits']={block:{name:spec['maxItems'] for name,spec in schema['$defs'][model.__name__]['properties'].items()}
                                  for block,model in (('user_profile',Profile),('relationship_state',Relationship))}
         before_blocks=self.repo.blocks(user,persona)
-        trace=current_trace()
-        if trace:
-            trace.artifact('input_case',json.dumps(payload,ensure_ascii=False,indent=2))
         task_checkpoint('input_ready',changes=len(events),journal_events=len(raw_events),current_facts=len(available),input_chars=len(json.dumps(payload,ensure_ascii=False)))
         if len(json.dumps(payload,ensure_ascii=False))>self.MAX_PAYLOAD_CHARS:
             raise ValueError('本批摘要输入超过预算，未截断或跳过操作；请精简过长事实后重试')
@@ -260,10 +254,8 @@ class SummaryService:
                 structural=['.'.join(map(str,e['loc']))+': '+e['msg'] for e in exc.errors(include_input=False,include_url=False)]
                 raise ValueError('; '.join(structural+self._citation_errors(data,state['available']))) from exc
             self._validate(document,state['available'])
-            if state['origin']=='model':record_validation(data,state['model_calls'])
             return {'document':document,'next':'commit'}
         except ValueError as exc:
-            if state['origin']=='model':record_validation(data,state['model_calls'],exc)
             if state['origin']!='model' or state['repaired'] or state['model_calls']>=2:raise
             return {'validation_error':exc,'next':'repair'}
 
@@ -276,7 +268,6 @@ class SummaryService:
         job=state['job'];user,persona=job['user_id'],job['persona_id']
         document=state['document'];available=state['available'];expected_cursor=state['expected_cursor']
         referenced,impacted=state['referenced'],state['impacted'];before_blocks=state['before_blocks']
-        trace=current_trace()
         self._validate(document,available)
         fields=fields_for(document)
         task_checkpoint('write',claims=sum(1 for _ in claims(document)))
@@ -299,9 +290,6 @@ class SummaryService:
                 self.blocks.upsert(user,persona,BlockType(block),values)  # Replace; no monotonic/list-union merge.
             generated=datetime.now(timezone.utc).isoformat()
             self.repo.save_result(job,document,fields,before_blocks,generated)
-        if trace:
-            trace.step('db.commit',job_id=job['id'],last_change_id=job['through_change_id'],
-                       claims=sum(1 for _ in claims(document)))
         return {}
 
     @staticmethod

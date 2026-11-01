@@ -35,7 +35,7 @@ def create_llm_client(cfg: LLMConfig) -> LLMClient:
         timeout=cfg.timeout,
         stream_usage=cfg.stream_usage,
     )
-    # 包一层 trace —— 与"用哪个模型"解耦，换实现也不会漏埋点
+    # 统一记录基本用量；不保留请求或回复正文。
     return TracedLLMClient(inner)
 
 

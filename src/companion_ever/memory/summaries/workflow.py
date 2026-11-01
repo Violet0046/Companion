@@ -2,7 +2,6 @@
 from typing import Any,TypedDict
 from langgraph.graph import StateGraph,START,END
 from companion_ever.runtime.tasks import checkpoint
-from companion_ever.infrastructure.tracing import record_step
 
 
 class SummaryState(TypedDict,total=False):
@@ -33,7 +32,6 @@ def build_summary_graph(service):
         def node(state,method=method,name=name):
             checkpoint('graph.'+name);service.check_budget(state)
             result=method(state)
-            record_step('graph.node',node=name,next=result.get('next'))
             return result
         graph.add_node(name,node)
     graph.add_edge(START,'load_input');graph.add_edge('load_input','decide')
