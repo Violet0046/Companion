@@ -29,6 +29,7 @@ const S = {
   searchScope: 'all',
   searchTimer: null,
   appH: 0,
+  viewportH: 0,
   kbOpen: false,
   /* 新消息角标：用户往上翻时，新到的消息数 */
   newCount: 0,
@@ -77,6 +78,8 @@ const S = {
 const PAGE = 50;
 let bootRequest = 0;
 let wasAtBottom = true;
+let keyboardStickUntil = 0;
+let chatScrollEpoch = 0;
 
 /* ---------- 工具 ---------- */
 
@@ -1345,11 +1348,16 @@ function syncViewport() {
 
   // 可见视口的底边（client 坐标）
   const vvBottom = Math.round(vv.offsetTop + vv.height);
-  // 键盘占了多少
-  const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
   const active = document.activeElement;
   const editing = active && (['INPUT','TEXTAREA'].includes(active.tagName) || active.isContentEditable);
-  const kbOpen = kb > 120 && !!editing;
+  if (!editing && !S.kbOpen) S.viewportH = vv.height;
+  const restingHeight = S.viewportH || Math.max(window.innerHeight, root.clientHeight || 0);
+  // offsetTop is iOS focus panning, not keyboard height. innerHeight can shrink
+  // together with visualViewport, so retain the last unobscured visible height.
+  const kb = Math.max(restingHeight, window.innerHeight, root.clientHeight || 0) - vv.height;
+  const kbOpen = editing ? kb > 120 : S.kbOpen && restingHeight - vv.height > 120;
+  const keepLatest = shouldFollowLatest();
+  const wasKeyboardOpen = S.kbOpen;
 
   const prev = S.appH || 0;
   let h, top;
@@ -1371,14 +1379,7 @@ function syncViewport() {
   S.appH = h;
   S.kbOpen = kbOpen;
 
-  // 键盘弹起导致可见区域变小 → 滚到底部（新消息不能被遮住）
-  // 高度变了（键盘弹出/收起、app 高度重算）：若原本贴着底部就重新贴底；
-  // 键盘弹起导致高度变小时强制贴底，避免最后一条被键盘挡住
-  if (prev && prev !== h) {
-    const box = $('chat');
-    const atBottom = !box || (box.scrollHeight - box.scrollTop - box.clientHeight < 80);
-    if (atBottom || h < prev) anchorBottom();
-  }
+  if (prev && (prev !== h || wasKeyboardOpen !== kbOpen) && keepLatest) anchorBottom();
 
   updateDebug();
 }
@@ -1431,7 +1432,7 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('scroll', syncViewport);
 }
 window.addEventListener('resize', syncViewport);
-window.addEventListener('orientationchange', () => setTimeout(syncViewport, 250));
+window.addEventListener('orientationchange', () => { S.viewportH = 0; setTimeout(syncViewport, 250); });
 window.addEventListener('load', () => setTimeout(syncViewport, 100));
 window.addEventListener('pageshow', () => setTimeout(syncViewport, 100));
 document.addEventListener('visibilitychange', () => {
@@ -1896,15 +1897,32 @@ function scrollBottom(instant) {
  * - 所以在两帧之后再补两次，保证最终落点一定是底部。
  */
 function anchorBottom() {
+  const epoch = chatScrollEpoch;
   scrollBottom(true);
   requestAnimationFrame(() => {
+    if (epoch !== chatScrollEpoch) return;
     scrollBottom(true);
     requestAnimationFrame(() => {
+      if (epoch !== chatScrollEpoch) return;
       scrollBottom(true);
       wasAtBottom = true;
       markVisibleChatRead();
     });
   });
+}
+
+function shouldFollowLatest() {
+  return S.view === 'chat' && S.viewMode === 'live' && document.visibilityState === 'visible'
+    && !$('app').classList.contains('hidden') && (wasAtBottom || Date.now() < keyboardStickUntil);
+}
+
+// Observe the actual chat size: iOS keyboard layout and multiline composer
+// changes do not always arrive in the same frame as visualViewport.resize.
+if (window.ResizeObserver) {
+  const chatSizeObserver = new window.ResizeObserver(() => {
+    if (shouldFollowLatest()) anchorBottom();
+  });
+  chatSizeObserver.observe($('chat'));
 }
 
 /* ---------- 历史跳转 ---------- */
@@ -2447,8 +2465,10 @@ $('contact-search').addEventListener('input', (e) => {
 
 $('input').addEventListener('input', (e) => {
   const el = e.target;
+  const keepLatest = shouldFollowLatest();
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+  if (keepLatest) anchorBottom();
 });
 $('input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
@@ -2458,9 +2478,11 @@ $('input').addEventListener('keydown', (e) => {
    我们的 app 是 position:fixed，文档一滚它就被顶出屏幕。
    常量屏幕时把滚动量拉回来。 */
 $('input').addEventListener('focus', () => {
-  [0, 60, 180].forEach((d) => setTimeout(() => {
+  keyboardStickUntil = shouldFollowLatest() ? Date.now() + 750 : 0;
+  [0, 60, 180, 360].forEach((d) => setTimeout(() => {
     if (window.scrollY !== 0) window.scrollTo(0, 0);
     syncViewport();
+    if (Date.now() < keyboardStickUntil && shouldFollowLatest()) anchorBottom();
   }, d));
 });
 
@@ -2529,13 +2551,18 @@ $('dialog-persona').addEventListener('click', (e) => {
 });
 
 /* 往上滑到顶 → 加载更早的 */
+['touchstart', 'pointerdown', 'wheel'].forEach(type => $('chat').addEventListener(type, () => {
+  keyboardStickUntil = 0;
+  chatScrollEpoch += 1;
+}, {passive: true}));
 $('chat').addEventListener('scroll', () => {
   const box = $('chat');
   if (box.scrollTop < 80) loadOlder();
   // 记住是否贴在底部（发送时不要把用户拉走）
-  wasAtBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  wasAtBottom = atBottom || (Date.now() < keyboardStickUntil && S.view === 'chat' && S.viewMode === 'live');
   // 自己滑回底部了 → 角标清零
-  if (wasAtBottom) { S.newCount = 0; markVisibleChatRead(); }
+  if (atBottom) { S.newCount = 0; markVisibleChatRead(); }
   updateJumpButton();
 });
 
