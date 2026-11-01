@@ -7,6 +7,11 @@ from companion_ever.characters.access import Authorizer
 from companion_ever.domain.entities import Note
 from companion_ever.domain.enums import MemoryKind
 from companion_ever.memory.notes.repository import NoteRepo
+from companion_ever.infrastructure.database.connection import transaction
+
+
+class NoteConflictError(ValueError):
+    """调用方读取的版本已过期，不能覆盖较新的笔记。"""
 
 
 class NoteService:
@@ -135,59 +140,41 @@ class NoteService:
             limit=limit,
         )
 
-    # === 更新（1 个）===
 
-    def update_note(
-        self,
-        note_id: str,
-        user_id: str,
-        *,
-        content: Optional[str] = None,
-        importance: Optional[float] = None,
-        source_quote: Optional[str] = None,
-    ) -> None:
-        """更新笔记字段（带权限校验）。
+    # === 显式编辑与删除 ===
 
-        校验：note 必须属于 user。
-        仅更新提供的字段（其他字段保持不变）。
-        updated_at 自动刷新。
+    def edit_content(self, user_id: str, persona_id: str, note_id: str, content: str, revision: int) -> Note:
+        content=content.strip()
+        if not content:
+            raise ValueError('记忆内容不能为空')
+        with transaction(self.note_repo.conn):
+            note=self._scoped_note(user_id,persona_id,note_id)
+            if note.is_archived:
+                raise LookupError('记忆不存在或已删除')
+            if note.revision!=revision:
+                raise NoteConflictError('记忆已更新，请重新打开后再编辑')
+            if note.content!=content:
+                self.note_repo.edit_content(note,content)
+            return self.note_repo.get(note_id)
 
-        Raises:
-            PermissionError: note 不存在 / 不属于 user
-            ValueError: importance 越界
-        """
-        self._require_note_owner(note_id, user_id)
-        if importance is not None:
-            self._check_importance(importance)
-        self.note_repo.update(
-            note_id,
-            content=content,
-            importance=importance,
-            source_quote=source_quote,
-        )
-
-    # === 删除（2 个）===
-
-    def archive_note(self, note_id: str, user_id: str) -> bool:
-        """软删除（带权限校验）。
-
-        Returns:
-            True if 成功（之前未归档）
-            False if 之前已归档
-
-        Raises:
-            PermissionError: note 不存在 / 不属于 user
-        """
-        self._require_note_owner(note_id, user_id)
-        return self.note_repo.archive(note_id)
+    def delete_note(self, user_id: str, persona_id: str, note_id: str, revision: int) -> None:
+        with transaction(self.note_repo.conn):
+            note=self._scoped_note(user_id,persona_id,note_id)
+            if note.is_archived:
+                return  # 重复删除不新增版本或事实操作。
+            if note.revision!=revision:
+                raise NoteConflictError('记忆已更新，请重新打开后再删除')
+            self.note_repo.archive(note_id)
 
     # === 内部 helper（LLM 不可见）===
 
-    def _require_note_owner(self, note_id: str, user_id: str) -> None:
-        note = self.note_repo.get(note_id)
-        if note is None or note.user_id != user_id:
-            raise PermissionError('记忆不存在或不属于当前用户')
-        self.authorizer.require_persona(user_id, note.persona_id)
+    def _scoped_note(self, user_id: str, persona_id: str, note_id: str) -> Note:
+        self.authorizer.require_persona(user_id,persona_id)
+        note=self.note_repo.get(note_id)
+        if note is None or (note.user_id,note.persona_id)!=(user_id,persona_id):
+            raise LookupError('记忆不存在或不属于当前角色')
+        return note
+
 
     @staticmethod
     def _check_importance(importance: float) -> None:
@@ -198,4 +185,4 @@ class NoteService:
             )
 
 
-__all__ = ["NoteService"]
+__all__ = ["NoteService", "NoteConflictError"]

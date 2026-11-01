@@ -50,6 +50,7 @@ const S = {
   recordPending: null,
   memoryNotes: [],
   memoryFilter: 'all',
+  memoryAction: null,
   convQuery: '',
   contactQuery: '',
   automaticMemory: true,
@@ -75,8 +76,6 @@ const S = {
 
 const PAGE = 50;
 let bootRequest = 0;
-/* 关系阶段：block 里存的是英文 key，这里翻成中文 */
-const REL_STAGE = { stranger: '初识', familiar: '熟悉', close: '亲近', deep_bond: '深交' };
 let wasAtBottom = true;
 
 /* ---------- 工具 ---------- */
@@ -908,15 +907,6 @@ async function loadAround(firstId) {
 
 /* ---------- 角色资料 ---------- */
 
-function relStage(info) {
-  if (info && info.summary_meta && info.summary_meta.current) return '查看关系概况';
-  const blocks = (info && info.blocks) || [];
-  const rel = blocks.find((b) => b.block_type === 'relationship_state');
-  if (!rel) return '—';
-  const f = rel.fields || {};
-  return REL_STAGE[f.stage] || f.stage || '—';
-}
-
 async function openProfile(user, persona) {
   S.profilePersona = { user, persona };
   // 记住来路：返回时回原处。通讯录点开的就回通讯录，聊天页点开的就回聊天页——
@@ -954,7 +944,7 @@ function renderProfile(user, persona, info) {
       <div class="row" id="row-chat"><span>继续聊天</span><span class="row-val">现在就开始 <span class="chev">›</span></span></div>
       <div class="row" id="row-memory"><span>TA 的记忆</span><span class="row-val">${(info && info.note_count) || 0} 条 <span class="chev">›</span></span></div>
       <div class="row" id="row-dates"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>
-      <div class="row" id="row-relation"><span>关系状态</span><span class="row-val">${esc(relStage(info))} <span class="chev">›</span></span></div>
+      ${S.debug ? '<div class="row" id="row-relation"><span>后台记忆</span><span class="row-val">任务状态 <span class="chev">›</span></span></div>' : ''}
     </div>
     <div class="dlg-danger">
       <button class="dlg-danger-btn" id="btn-persona-delete">删除角色</button>
@@ -964,58 +954,14 @@ function renderProfile(user, persona, info) {
   q('row-chat').onclick = () => openChat(user, persona);
   q('row-memory').onclick = () => openMemory(user, persona);
   q('row-dates').onclick = () => openCalendar(user, persona);
-  q('row-relation').onclick = () => openRelation(user, persona);
+  const maintenance = q('row-relation');
+  if (S.debug && maintenance) maintenance.onclick = () => openRelation(user, persona);
   q('btn-persona-delete').onclick = () => deletePersona(user, persona);
 }
 
-/* ---------- 关系状态（独立子页面） ---------- */
-
-/**
- * 关系状态卡片的内容（纯函数：只认 info，不碰 DOM）。
- * 资料页只显示阶段，关系状态页显示全部（阶段 / 进展 / 关键时刻 / 偏好）。
- */
-function relationHtml(info) {
-  const blocks = (info && info.blocks) || [];
-  const rel = blocks.find((b) => b.block_type === 'relationship_state');
-  const prof = blocks.find((b) => b.block_type === 'user_profile');
-  if (!rel && !prof) {
-    return '<div class="empty">还没有关系数据<br/>多聊几句，TA 就会开始记你们之间的事了</div>';
-  }
-  let html = '';
-  if (rel) {
-    const f = rel.fields || {};
-    if (Array.isArray(f.overview)) {
-      for (const [field,label] of [['overview','关系概况'],['agreements','约定与边界'],['key_moments','明确记载的重要时刻']]) {
-        const items = f[field] || [];
-        if (items.length) html += `<div class="row"><span class="k">${label}</span></div><ul>${items.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`;
-      }
-      if (!(f.overview.length || (f.agreements || []).length || (f.key_moments || []).length)) html += '<div class="hint">现有事实不足以总结关系概况</div>';
-    } else {
-    const stage = REL_STAGE[f.stage] || f.stage || '—';
-    const prog = Math.round((f.stage_progress || 0) * 100);
-    html += `<div class="row"><span class="k">关系</span><span class="v">${esc(stage)}</span></div>`;
-    html += `<div class="row"><span class="k">进展</span><span class="v">${prog}%</span></div>`;
-    html += `<div class="meter"><i style="width:${prog}%"></i></div>`;
-    const mom = Array.isArray(f.key_moments) ? f.key_moments : [];
-    if (mom.length) {
-      html += '<div class="moments"><ul>'
-        + mom.slice(-6).map((m) => `<li>${esc(m)}</li>`).join('') + '</ul></div>';
-    }
-    }
-  }
-  if (prof) {
-    const f = prof.fields || {};
-    const arr = (v) => (Array.isArray(v) ? v : v ? [v] : []);
-    for (const [field,label] of [['identity','用户信息'],['personality','特点'],['preferences','偏好'],['communication_style_hint','沟通方式']]) {
-      const values = arr(f[field]);
-      if (values.length) html += `<div class="row" style="margin-top:8px"><span class="k">${label}</span><span class="v">${esc(values.join('、'))}</span></div>`;
-    }
-  }
-  return html;
-}
-
-/** 打开关系状态页（和「TA 的记忆」「聊天记录」一样的子页面） */
+/* ---------- 后台记忆任务（仅调试入口） ---------- */
 async function openRelation(user, persona) {
+  if (!S.debug) return;
   S.relationPersona = { user, persona };
   showView('relation');
   const body = $('relation-body');
@@ -1029,8 +975,9 @@ async function openRelation(user, persona) {
   renderRelationPage(user, persona, info);
 }
 
-/** 渲染关系状态页 */
+/** 只显示后台任务状态，不展示画像、关系摘要或事实引文。 */
 function renderRelationPage(user, persona, info) {
+  if (!S.debug) return;
   const body = $('relation-body');
   if (!body) return;
   const basics = (info && info.persona_basics) || {};
@@ -1045,12 +992,9 @@ function renderRelationPage(user, persona, info) {
     <div class="profile-hero">
       <div class="ava ava-xl ${avaClass(persona)}">${esc(name.slice(0, 1))}</div>
       <div class="profile-name">${esc(name)}</div>
-      <div class="profile-sub">用户画像与关系概况</div>
+      <div class="profile-sub">后台记忆任务</div>
     </div>
-    <div class="rel-card">${relationHtml(info)}</div>
-    ${summaryEvidenceHtml(meta)}
-    ${S.debug ? `
-    <div class="hint">${meta.current ? '摘要已与事实操作同步，可查看每项结论的依据。' : meta.document ? '摘要尚未与最新事实同步，对话继续沿用上次成功摘要，近期明确纠正优先。' : '尚未生成独立摘要，后台将从事实建立。'}${meta.pending_changes ? ` 尚有 ${meta.pending_changes} 条事实操作待处理。` : ''}</div>
+    <div class="hint">${meta.current ? '摘要已与事实操作同步。' : meta.document ? '摘要更新期间，对话继续沿用上次成功摘要。' : '尚未生成独立摘要，后台将从事实建立。'}${meta.pending_changes ? ` 尚有 ${meta.pending_changes} 条事实操作待处理。` : ''}</div>
     <div class="group">
       <div class="row"><span>摘要更新</span><span class="row-val"><button class="btn-mini" id="btn-summary-refresh" ${summaryBusy ? 'disabled' : ''}>${summaryBusy ? '更新中…' : meta.job_status === 'failed' ? '重试更新' : meta.legacy ? '从事实生成' : '更新摘要'}</button></span></div>
       ${meta.generated_at ? `<div class="row"><span>摘要更新时间</span><span class="row-val">${esc(fmtTime(meta.generated_at))}</span></div>` : ''}
@@ -1068,7 +1012,6 @@ function renderRelationPage(user, persona, info) {
     ${info && info.memory_meta && info.memory_meta.last_error ? `<div class="hint">记一次未完成：${esc(taskFailureText(info.memory_meta.last_error))}${info.memory_meta.retry_at ? '（已安排重试）' : '（当前快速重试已暂停）'}</div>` : ''}
     <div class="hint">${S.automaticMemory ? '对话积累一定内容或满足空闲条件后，会自动记下值得保留的事。' : '自动记录已关闭。'}<br/>想现在记也可以手动触发，记录完这里会自动刷新。</div>
     <button class="btn-mini" id="btn-task-attempts">查看后台执行记录</button><pre id="task-attempts"></pre>
-    ` : ''}
   `;
   const btn = body.querySelector('#btn-record-now');
   if (btn && !recording) btn.onclick = (e) => recordNow(user, persona, e.target);
@@ -1087,17 +1030,6 @@ async function loadTaskAttempts(user,persona) {
     const box=$('task-attempts');
     if (box) box.textContent=JSON.stringify(records,null,2);
   } catch (e) { toast('读取执行记录失败：'+e.message); }
-}
-
-function summaryEvidenceHtml(meta) {
-  if (!meta.document) return '';
-  const entries = [];
-  for (const block of ['user_profile','relationship_state']) {
-    for (const items of Object.values(meta.document[block] || {})) {
-      for (const item of items) entries.push(`<li>${esc(item.text)}<ul>${item.citations.map(c => `<li>${esc(c.note_id)}：${esc(c.quote)}</li>`).join('')}</ul></li>`);
-    }
-  }
-  return entries.length ? `<details><summary>查看事实依据</summary><ul>${entries.join('')}</ul></details>` : '';
 }
 
 const summaryWatchers = new Set();
@@ -1249,14 +1181,20 @@ function finishRecord(user, persona, info, toastIt) {
 /* ---------- TA 的记忆 ---------- */
 
 async function openMemory(user, persona) {
-  S.memoryPersona = { user, persona };
+  const target = { user, persona };
+  S.memoryPersona = target;
+  S.memoryAction = null;
+  S.memoryNotes = [];
   showView('memory');
   $('memory-title').textContent = persona + '的记忆';
   const box = $('memory-list');
   box.innerHTML = '<div class="empty">载入中…</div>';
   try {
-    S.memoryNotes = await api(`/api/persona/${enc(user)}/${enc(persona)}/notes?limit=200`);
+    const notes = await api(`/api/persona/${enc(user)}/${enc(persona)}/notes?limit=200`);
+    if (S.memoryPersona !== target) return;
+    S.memoryNotes = notes;
   } catch (e) {
+    if (S.memoryPersona !== target) return;
     S.memoryNotes = [];
   }
   renderMemory();
@@ -1271,20 +1209,81 @@ function renderMemory() {
   notes.forEach((n) => { counts[n.kind] = (counts[n.kind] || 0) + 1; });
   const types = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
   chips.innerHTML = '<button class="chip' + (S.memoryFilter === 'all' ? ' active' : '') + '" data-t="all">全部</button>'
-    + types.map((t) => `<button class="chip${S.memoryFilter === t ? ' active' : ''}" data-t="${escAttr(t)}">${esc(t)} ${counts[t]}</button>`).join('');
+    + types.map((t) => `<button class="chip${S.memoryFilter === t ? ' active' : ''}" data-t="${escAttr(t)}">${t === 'episode' ? '经历' : '事实'} ${counts[t]}</button>`).join('');
   chips.querySelectorAll('.chip').forEach((c) => {
     c.onclick = () => { S.memoryFilter = c.dataset.t; renderMemory(); };
   });
   const filtered = S.memoryFilter === 'all' ? notes : notes.filter((n) => n.kind === S.memoryFilter);
   if (!filtered.length) { box.innerHTML = '<div class="empty">还没有这类记忆</div>'; return; }
-  box.innerHTML = filtered.map((n) => `
+  const action = S.memoryAction;
+  box.innerHTML = filtered.map((n) => {
+    const active = action && action.id === n.id;
+    let controls = `<div class="note-actions"><button class="note-edit" data-id="${escAttr(n.id)}" ${action ? 'disabled' : ''}>编辑</button><button class="note-delete" data-id="${escAttr(n.id)}" ${action ? 'disabled' : ''}>删除</button></div>`;
+    if (active) {
+      const disabled = action.busy ? 'disabled' : '';
+      controls = action.kind === 'edit'
+        ? `<textarea class="note-editor" data-note-editor aria-label="编辑记忆内容" ${disabled}>${esc(action.draft)}</textarea><div class="note-actions"><button class="note-cancel" ${disabled}>取消</button><button class="note-save" ${disabled}>${action.busy ? '保存中…' : '保存'}</button></div>`
+        : `<div class="note-confirm">删除这条记忆？聊天记录会保留。</div><div class="note-actions"><button class="note-cancel" ${disabled}>取消</button><button class="note-save danger" ${disabled}>${action.busy ? '删除中…' : '确认删除'}</button></div>`;
+      if (action.error) controls += `<div class="note-error" role="alert">${esc(action.error)}</div>`;
+    }
+    return `
     <div class="note" data-kind="${escAttr(n.kind)}">
       <div class="note-head"><span class="note-type">${n.kind === 'episode' ? '经历' : '事实'}</span>
       <span class="note-imp">重要度 ${(n.importance || 0).toFixed(2)}</span></div>
-      ${esc(n.content)}
+      ${active && action.kind === 'edit' ? '' : `<div class="note-content">${esc(n.content)}</div>`}
       ${n.reality === 'shared_fiction' ? '<div class="dim-sm">共同想象</div>' : ''}
       <div class="note-bar"><i style="width:${Math.round((n.importance || 0) * 100)}%"></i></div>
-    </div>`).join('');
+      ${controls}
+    </div>`;
+  }).join('');
+  for (const kind of ['edit', 'delete']) box.querySelectorAll('.note-' + kind).forEach(button => {
+    button.onclick = () => startMemoryAction(button.dataset.id, kind);
+  });
+  box.querySelectorAll('.note-cancel').forEach(button => button.onclick = () => { S.memoryAction = null; renderMemory(); });
+  box.querySelectorAll('.note-save').forEach(button => button.onclick = saveMemoryAction);
+  const editor = box.querySelector('[data-note-editor]');
+  if (editor && action) editor.oninput = () => {
+    action.draft = editor.value;
+    const save = box.querySelector('.note-save');
+    if (save) save.disabled = action.busy || !action.draft.trim();
+  };
+}
+
+function startMemoryAction(id, kind) {
+  if (S.memoryAction) return;
+  const note = S.memoryNotes.find(note => note.id === id);
+  if (!note || !S.memoryPersona) return;
+  S.memoryAction = {id, kind, scope:S.memoryPersona, revision:note.revision, draft:note.content, busy:false, error:''};
+  renderMemory();
+}
+
+async function saveMemoryAction() {
+  const action = S.memoryAction;
+  if (!action || action.busy) return;
+  if (action.kind === 'edit' && !action.draft.trim()) {
+    action.error = '记忆内容不能为空'; renderMemory(); return;
+  }
+  const {user,persona} = action.scope;
+  action.busy = true; action.error = ''; renderMemory();
+  try {
+    const path = `/api/persona/${enc(user)}/${enc(persona)}/notes/${enc(action.id)}`;
+    const result = action.kind === 'edit'
+      ? await api(path, {method:'PATCH',body:JSON.stringify({content:action.draft.trim(),revision:action.revision})})
+      : await api(`${path}?revision=${action.revision}`, {method:'DELETE'});
+    if (S.memoryPersona !== action.scope || S.memoryAction !== action) return;
+    S.memoryNotes = action.kind === 'edit'
+      ? S.memoryNotes.map(note => note.id === action.id ? result : note)
+      : S.memoryNotes.filter(note => note.id !== action.id);
+    S.memoryAction = null; renderMemory();
+    toast(action.kind === 'edit' ? '已保存修改' : '已删除记忆');
+    try {
+      S.summaries[pkey(user,persona)] = await api(`/api/persona/${enc(user)}/${enc(persona)}`);
+      renderProfileIfOpen(user,persona);
+    } catch (_) { /* 稍后重新打开资料时同步计数 */ }
+  } catch (error) {
+    if (S.memoryPersona !== action.scope || S.memoryAction !== action) return;
+    action.busy = false; action.error = error.message; renderMemory();
+  }
 }
 
 /* ---------- 视口：用 visualViewport 精确跟随「实际可见区域」 ---------- */
@@ -1301,10 +1300,12 @@ function renderMemory() {
 function syncViewport() {
   const root = document.documentElement;
   const vv = window.visualViewport;
+  const standalone = navigator.standalone === true || !!window.matchMedia?.('(display-mode: standalone)').matches;
+  const dynamicHeight = standalone && !!window.CSS?.supports('height', '100dvh');
 
   if (!vv) {
     // 不支持 visualViewport：退回到布局视口
-    root.style.setProperty('--app-h', window.innerHeight + 'px');
+    root.style.setProperty('--app-h', dynamicHeight ? '100dvh' : window.innerHeight + 'px');
     root.style.setProperty('--vv-top', '0px');
     updateDebug();
     return;
@@ -1314,7 +1315,9 @@ function syncViewport() {
   const vvBottom = Math.round(vv.offsetTop + vv.height);
   // 键盘占了多少
   const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-  const kbOpen = kb > 120;
+  const active = document.activeElement;
+  const editing = active && (['INPUT','TEXTAREA'].includes(active.tagName) || active.isContentEditable);
+  const kbOpen = kb > 120 && !!editing;
 
   const prev = S.appH || 0;
   let h, top;
@@ -1331,8 +1334,8 @@ function syncViewport() {
     top = Math.max(0, vvBottom - h);
   }
 
-  root.style.setProperty('--app-h', h + 'px');
-  root.style.setProperty('--vv-top', top + 'px');
+  root.style.setProperty('--app-h', dynamicHeight && !kbOpen ? '100dvh' : h + 'px');
+  root.style.setProperty('--vv-top', dynamicHeight && !kbOpen ? '0px' : top + 'px');
   S.appH = h;
   S.kbOpen = kbOpen;
 

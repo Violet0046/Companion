@@ -31,7 +31,7 @@ WEB_DIR = Path(__file__).resolve().parent / "static"
 
 def _frontend_version() -> str:
     digest = hashlib.sha256()
-    for name in ('index.html', 'app.js', 'styles.css', 'calls.html', 'calls.js', 'sw.js'):
+    for name in ('index.html', 'app.js', 'styles.css', 'calls.html', 'calls.js', 'sw.js', 'icon.png', 'manifest.webmanifest'):
         path = WEB_DIR / name
         if path.is_file():
             digest.update(name.encode('utf-8'))
@@ -149,9 +149,14 @@ def create_app(
 
     # --- 静态资源（PWA 壳）---
     if WEB_DIR.is_dir():
+        @app.api_route('/apple-touch-icon.png', methods=['GET','HEAD'], include_in_schema=False)
+        @app.api_route('/apple-touch-icon-precomposed.png', methods=['GET','HEAD'], include_in_schema=False)
+        def apple_touch_icon() -> FileResponse:
+            return FileResponse(WEB_DIR / 'icon.png', media_type='image/png', headers={'Cache-Control':'no-cache'})
+
         def render_shell(name: str) -> HTMLResponse:
             content = (WEB_DIR / name).read_text(encoding='utf-8')
-            for asset in ('app.js', 'styles.css', 'calls.js'):
+            for asset in ('app.js', 'styles.css', 'calls.js', 'apple-touch-icon.png'):
                 content = content.replace(f'"/{asset}"', f'"/{asset}?v={app.state.frontend_version}"')
             return HTMLResponse(content)
 

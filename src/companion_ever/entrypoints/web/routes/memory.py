@@ -1,9 +1,11 @@
-"""api/routes/memory.py — 记忆相关的只读接口。
+"""记忆查询、显式编辑/删除与后台维护接口。
 
 前端"TA 记得什么"面板用：
 - GET /api/users                                    所有用户 + 角色
 - GET /api/persona/{user}/{persona}                角色总览（人设 + 关系状态 + 计数）
 - GET /api/persona/{user}/{persona}/notes          记忆列表
+- PATCH /api/persona/{user}/{persona}/notes/{id}  编辑正文（检查版本）
+- DELETE /api/persona/{user}/{persona}/notes/{id} 删除有效记忆（检查版本）
 - GET /api/persona/{user}/{persona}/blocks         用户画像与关系进展摘要
 - GET /api/persona/{user}/{persona}/history        最近对话
 """
@@ -21,6 +23,7 @@ from companion_ever.entrypoints.web.schemas import (
     DateEntry,
     MessageOut,
     NoteOut,
+    NoteEditIn,
     PersonaSummary,
     SearchHit,
     SettingsIn,
@@ -30,6 +33,7 @@ from companion_ever.entrypoints.web.schemas import (
 from companion_ever.domain.enums import MemoryKind
 from companion_ever.utils.timeutil import utc_ts_to_local
 from companion_ever.memory.retrieval.query import MemorySearch
+from companion_ever.memory.notes.service import NoteConflictError
 
 router = APIRouter()
 
@@ -199,19 +203,49 @@ def list_notes(
         kind=note_kind,
         limit=limit,
     )
-    return [
-        NoteOut(
-            id=n.id,
-            kind=n.kind.value,
-            reality=n.reality, event_time=n.event_time, time_basis=n.time_basis,
-            content=n.content if isinstance(n.content, str) else json.dumps(n.content, ensure_ascii=False),
-            importance=n.importance,
-            source_quote=n.source_quote,
-            created_at=_s(n.created_at, tz),
-            updated_at=_s(n.updated_at, tz),
-        )
-        for n in notes
-    ]
+    return [_note_out(n,tz) for n in notes]
+
+
+def _note_out(n, tz):
+    return NoteOut(
+        id=n.id,
+        kind=n.kind.value,
+        reality=n.reality, event_time=n.event_time, time_basis=n.time_basis,
+        content=n.content if isinstance(n.content, str) else json.dumps(n.content, ensure_ascii=False),
+        importance=n.importance,
+        revision=n.revision,
+        source_quote=n.source_quote,
+        created_at=_s(n.created_at, tz),
+        updated_at=_s(n.updated_at, tz),
+    )
+
+
+@router.patch('/api/persona/{user_id}/{persona_id}/notes/{note_id}', response_model=NoteOut)
+def edit_note(request: Request, user_id: str, persona_id: str, note_id: str,
+              payload: NoteEditIn, x_pin: str=Header(default='')):
+    ctx,_=_ctx_and_cfg(request,x_pin)
+    try:
+        note=ctx.services.note.edit_content(user_id,persona_id,note_id,payload.content,payload.revision)
+    except LookupError as exc:
+        raise HTTPException(404,str(exc)) from exc
+    except NoteConflictError as exc:
+        raise HTTPException(409,str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+    return _note_out(note,ctx.cfg.tz_offset_hours)
+
+
+@router.delete('/api/persona/{user_id}/{persona_id}/notes/{note_id}')
+def delete_note(request: Request, user_id: str, persona_id: str, note_id: str,
+                revision: int=Query(ge=1), x_pin: str=Header(default='')):
+    ctx,_=_ctx_and_cfg(request,x_pin)
+    try:
+        ctx.services.note.delete_note(user_id,persona_id,note_id,revision)
+    except LookupError as exc:
+        raise HTTPException(404,str(exc)) from exc
+    except NoteConflictError as exc:
+        raise HTTPException(409,str(exc)) from exc
+    return {'id':note_id,'deleted':True}
 
 
 @router.get("/api/persona/{user_id}/{persona_id}/blocks", response_model=list[BlockOut])

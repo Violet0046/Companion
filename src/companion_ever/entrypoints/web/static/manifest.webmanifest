@@ -1,13 +1,14 @@
 {
   "name": "同行",
   "short_name": "同行",
+  "id": "/",
   "description": "长期记忆 AI 伴侣",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#14100f",
-  "theme_color": "#14100f",
+  "background_color": "#f2f3f6",
+  "theme_color": "#f2f3f6",
   "lang": "zh-CN",
   "icons": [
     {
@@ -16,9 +17,5 @@
       "type": "image/png",
       "purpose": "any maskable"
     }
-  ],
-  "display_override": [
-    "fullscreen",
-    "standalone"
   ]
 }

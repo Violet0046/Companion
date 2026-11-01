@@ -301,6 +301,13 @@ class NoteRepo:
         sql = f"UPDATE note SET {', '.join(updates)} WHERE id = ?"
         self.conn.execute(sql, params)
 
+    def edit_content(self, note: Note, content: str) -> None:
+        """调用方持有事务；保存旧版本，正文变更由触发器进入 fact 流水。"""
+        self.conn.execute('INSERT INTO note_revision(note_id,revision,content,reality,event_time,time_basis,updated_at,job_id) '
+            'VALUES (?,?,?,?,?,?,?,NULL)', (note.id,note.revision,note.content,note.reality,
+                                           note.event_time,note.time_basis,note.updated_at))
+        self.update(note.id,content=content)
+
     def archive(self, note_id: str) -> bool:
         """软删除（is_archived=1）。
 

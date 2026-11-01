@@ -4,15 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
   <title>同行</title>
-  <meta name="theme-color" content="#14100f">
+  <meta name="theme-color" content="#f2f3f6">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="同行">
   <meta name="mobile-web-app-capable" content="yes">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.png">
   <!-- 满幅不透明、圆角由系统自己切；带透明角或烤死圆角的图在 iOS 上会露出黑边 -->
-  <link rel="apple-touch-icon" href="/icon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -145,7 +145,7 @@
           <button id="btn-relation-back" class="icon-btn" aria-label="返回">
             <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M15.4 4.6 14 3.2 5.2 12 14 20.8l1.4-1.4L8 12z"/></svg>
           </button>
-          <div class="nav-title">关系状态</div>
+          <div class="nav-title">后台记忆</div>
         </div>
         <div class="scroll" id="relation-body"></div>
       </section>
@@ -159,7 +159,6 @@
           <div class="nav-title" id="memory-title">记忆</div>
         </div>
         <div class="scroll">
-          <div class="stats" id="memory-stats"></div>
           <div class="chip-row chips" id="memory-filters"></div>
           <div class="note-list" id="memory-list"></div>
         </div>

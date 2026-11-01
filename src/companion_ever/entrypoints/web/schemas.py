@@ -45,12 +45,18 @@ class NoteOut(BaseModel):
     kind: str
     content: str
     importance: float
+    revision: int = 1
     reality: str = 'uncertain'
     event_time: Optional[str] = None
     time_basis: str = ''
     source_quote: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class NoteEditIn(BaseModel):
+    content: str = Field(min_length=1)
+    revision: int = Field(ge=1)
 
 
 class BlockOut(BaseModel):
