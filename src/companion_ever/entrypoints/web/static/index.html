@@ -19,11 +19,23 @@
 
   <div id="gate" class="gate hidden">
     <div class="gate-card">
-      <div class="gate-avatar" id="gate-avatar">·</div>
-      <h2>需要访问 PIN</h2>
-      <p class="gate-hint">输入 PIN 以继续</p>
-      <input id="pin-input" type="password" inputmode="text" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="current-password" placeholder="PIN" aria-label="访问 PIN">
-      <button id="pin-submit" class="btn-primary">进入</button>
+      <div class="gate-avatar" id="gate-avatar"><img src="/icon.png" alt="同行"></div>
+      <h2 id="gate-title">登录同行</h2>
+      <p class="gate-hint" id="gate-hint">和熟悉的 TA 继续聊</p>
+      <form id="login-form">
+        <input class="account-input" id="login-username" type="text" inputmode="text" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" maxlength="32" placeholder="账号" aria-label="账号" required>
+        <input class="account-input" id="login-password" type="password" autocomplete="current-password" maxlength="128" placeholder="密码" aria-label="密码" required>
+        <button id="login-submit" class="btn-primary" type="submit">登录</button>
+      </form>
+      <form id="password-form" class="hidden">
+        <input class="account-input" id="password-current" type="password" autocomplete="current-password" maxlength="128" placeholder="当前密码" aria-label="当前密码" required>
+        <input class="account-input" id="password-new" type="password" autocomplete="new-password" minlength="15" maxlength="128" placeholder="新密码（至少 15 个字符）" aria-label="新密码" required>
+        <input class="account-input" id="password-confirm" type="password" autocomplete="new-password" minlength="15" maxlength="128" placeholder="再次输入新密码" aria-label="确认新密码" required>
+        <button id="password-submit" class="btn-primary" type="submit">保存新密码</button>
+        <button id="password-cancel" class="account-link" type="button">返回</button>
+      </form>
+      <button id="login-retry" class="account-link hidden" type="button">重新连接</button>
+      <p class="gate-hint">账号由邀请你的朋友创建，请勿分享密码</p>
       <p id="gate-error" class="gate-error"></p>
     </div>
   </div>
@@ -79,6 +91,10 @@
             <div class="notification-hint" id="notification-hint" role="status"></div>
             <div class="row hidden" id="notification-test-row"><span>测试通知</span><button type="button" class="notification-action" id="notification-test" disabled>发送</button></div>
             <div class="row"><span>服务器地址</span><span class="row-val" id="me-server">…</span></div>
+            <div class="row"><span>账号</span><span class="row-val" id="account-name"></span></div>
+            <button class="row account-row" id="btn-password" type="button">修改密码</button>
+            <button class="row account-row" id="btn-logout" type="button">退出登录</button>
+            <button class="row account-row" id="btn-logout-all" type="button">退出所有设备</button>
             <div class="row"><span>关于</span><span class="row-val" id="me-version">v0.3.0</span></div>
             <a class="row hidden" id="call-log-link" href="/calls.html"><span>模型调用记录</span><span class="row-val">查看 ›</span></a>
           </div>

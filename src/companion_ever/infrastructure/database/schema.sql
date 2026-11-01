@@ -6,9 +6,14 @@
 -- 用途：每个用户一行，persona_ids 用 CSV 存储该用户的所有 persona
 CREATE TABLE IF NOT EXISTS user (
     id           TEXT PRIMARY KEY,
-    persona_ids  TEXT NOT NULL DEFAULT ''
+    persona_ids  TEXT NOT NULL DEFAULT '',
+    login_name TEXT,
+    password_hash TEXT,
+    disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1)),
+    must_change_password INTEGER NOT NULL DEFAULT 0 CHECK(must_change_password IN (0,1)),
+    auth_failures INTEGER NOT NULL DEFAULT 0,
+    auth_locked_until REAL NOT NULL DEFAULT 0
 );
-
 -- === Wiki 笔记表（核心）===
 -- 用途：所有抽取的事实，经历与事实，角色设定独立存储
 CREATE TABLE IF NOT EXISTS note (

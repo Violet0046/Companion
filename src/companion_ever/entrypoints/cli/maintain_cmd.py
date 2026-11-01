@@ -15,11 +15,16 @@ def cmd_backup(args) -> int:
         print('[FAIL] 数据库不存在')
         return 1
     output = path.with_name(path.name + '.bak-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
+    output.touch(mode=0o600, exist_ok=False)
     source = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
     try:
         target = sqlite3.connect(output)
         try:
             source.backup(target)
+            if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                raise ValueError('备份完整性检查失败')
+            if target.execute('PRAGMA foreign_key_check').fetchone():
+                raise ValueError('备份存在外键异常')
         finally:
             target.close()
     finally:

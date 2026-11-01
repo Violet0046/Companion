@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 const S = {
   user: null,
   persona: null,
-  pin: localStorage.getItem('ce_pin') || '',
+  account: null,
   ws: null,
   connected: false,
   sending: false,
@@ -124,24 +124,28 @@ function dayLabel(day) {
 }
 
 async function api(path, opts = {}) {
+  const actor = S.account?.csrf_token;
   const headers = Object.assign({}, opts.headers || {});
-  if (S.pin && headers['X-Pin'] === undefined) headers['X-Pin'] = S.pin;
+  if (S.account && opts.method && !['GET','HEAD'].includes(opts.method.toUpperCase())) headers['X-CSRF-Token'] = S.account.csrf_token;
   if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const controller = new AbortController();
   const timer = setTimeout(()=>controller.abort(),15000);
   try {
-    const res = await fetch(path, Object.assign({cache:'no-store'}, opts, { headers, signal:opts.signal || controller.signal }));
+    const res = await fetch(path, Object.assign({cache:'no-store', credentials:'same-origin'}, opts, { headers, signal:opts.signal || controller.signal }));
     if (!res.ok) {
       let detail = res.statusText;
       try { detail = (await res.json()).detail || detail; } catch (e) { /* ignore */ }
       const err = new Error(detail);
       err.status = res.status;
-      if (res.status === 401 && path !== '/api/auth/check' && (headers['X-Pin'] || '') === S.pin) {
+      if (res.status === 401 && !['/api/auth/login','/api/auth/me'].includes(path) && (!actor || actor === S.account?.csrf_token)) {
         invalidateAccess();
       }
       throw err;
     }
-    return await res.json();
+    const data = await res.json();
+    const endingOwnSession = !S.account && ['/api/auth/password','/api/auth/logout','/api/auth/logout-all'].includes(path);
+    if (actor && actor !== S.account?.csrf_token && !endingOwnSession) throw new Error('登录身份已变更');
+    return data;
   } finally { clearTimeout(timer); }
 }
 
@@ -746,8 +750,8 @@ function renderMe() {
     msgs += c.summary.message_count || 0;
     sessions += c.summary.session_count || 0;
   });
-  $('me-avatar').textContent = (S.user || '·').slice(0, 1);
-  $('me-name').textContent = S.user || '我';
+  $('me-avatar').textContent = (S.account?.username || '·').slice(0, 1);
+  $('me-name').textContent = S.account?.username || '我';
   $('me-sub').textContent = `${S.convs.length} 个角色 · 共 ${notes} 条记忆 · ${msgs} 条消息`;
   $('me-server').textContent = location.host;
   $('me-interval').textContent = S.automaticMemory ? '已开启' : '已关闭';
@@ -1441,46 +1445,55 @@ document.addEventListener('visibilitychange', () => {
 
 /* ---------- 启动 ---------- */
 
-async function verifyAccess(pin) {
-  const result = await api('/api/auth/check', {method: 'POST', headers: {'X-Pin': pin}});
-  if (result.ok !== true) throw new Error('访问校验未完成');
-}
+localStorage.removeItem('ce_pin');
 
 function invalidateAccess() {
   ++bootRequest;
-  const hadPin = Boolean(S.pin);
-  S.pin = '';
-  localStorage.removeItem('ce_pin');
+  S.account = null;
   clearTimeout(S.reconnectTimer);
   stopReplyRecovery();
   const ws = S.ws;
-  S.ws = null;
-  S.connected = false;
-  S.user = null;
-  S.persona = null;
-  if (ws) { try { ws.close(); } catch (_) { /* 已断开 */ } }
+  S.ws = null; S.connected = false; S.user = null; S.persona = null;
+  if (ws) { try { ws.close(); } catch (_) {} }
   resetSending();
+  S.messages = []; S.convs = []; S.users = []; S.memoryNotes = []; S.summaries = {};
+  for (const id of ['chat','conv-list','contact-list','profile-body','relation-body','memory-list']) $(id).innerHTML = '';
   $('dialog-persona').classList.add('hidden');
-  $('gate-error').textContent = hadPin ? 'PIN 已失效，请重新输入' : '请输入访问 PIN';
+  $('login-form').classList.remove('hidden');
+  $('password-form').classList.add('hidden');
+  $('gate-title').textContent = '登录同行';
+  $('gate-avatar').innerHTML = '<img src="/icon.png" alt="同行">';
+  $('login-password').value = $('password-current').value = $('password-new').value = $('password-confirm').value = '';
+  $('gate-hint').textContent = '和熟悉的 TA 继续聊';
+  $('gate-error').textContent = '请登录后继续';
   showGate();
+}
+
+function showPasswordForm(required = false) {
+  showGate();
+  $('login-form').classList.add('hidden');
+  $('password-form').classList.remove('hidden');
+  $('gate-title').textContent = required ? '设置自己的密码' : '修改密码';
+  $('gate-hint').textContent = required ? '首次登录，请更换初始密码' : '修改后，需要在各设备重新登录';
+  $('gate-error').textContent = '';
+  $('password-current').value = $('password-new').value = $('password-confirm').value = '';
 }
 
 async function boot() {
   const request = ++bootRequest;
-  const pin = S.pin;
   try {
-    await verifyAccess(pin);
-    if (request !== bootRequest || S.pin !== pin) return;
+    const account = await api('/api/auth/me');
+    if (request !== bootRequest) return;
+    S.account = account;
+    if (account.must_change_password) { showPasswordForm(true); return; }
     const health = await api('/api/health');
-    if (request !== bootRequest || S.pin !== pin) return;
-    S.automaticMemory=health.auto_memory !== false;
+    if (request !== bootRequest) return;
+    S.automaticMemory = health.auto_memory !== false;
+    $('account-name').textContent = account.username;
   } catch (e) {
-    if (request !== bootRequest || S.pin !== pin) return;
-    if (e.status === 401) {
-      invalidateAccess();
-    } else {
-      showGate(true);
-    }
+    if (request !== bootRequest) return;
+    if (e.status === 401) invalidateAccess();
+    else showGate(true);
     return;
   }
   $('gate').classList.add('hidden');
@@ -1497,7 +1510,8 @@ async function boot() {
   await loadSettings();
   await loadUsers();
   await Promise.all([loadPersona(), loadHistory(true)]);
-  const initialView = new URLSearchParams(location.search).get('open') === 'chat'
+  const launch = new URLSearchParams(location.search);
+  const initialView = launch.get('open') === 'chat' && (!launch.has('persona') || launch.get('persona') === S.persona)
     && S.users.some(u => u.id === S.user && (u.personas || []).includes(S.persona)) ? 'chat' : 'messages';
   showView(initialView);
   window.CompanionNotifications?.init({api, toast, debug: S.debug,
@@ -1510,7 +1524,8 @@ async function boot() {
 function showGate(networkError) {
   $('gate').classList.remove('hidden');
   $('app').classList.add('hidden');
-  if (networkError) $('gate-error').textContent = '连不上服务器，确认 companion-cli serve 还在跑';
+  $('login-retry').classList.toggle('hidden', !networkError);
+  if (networkError) $('gate-error').textContent = '暂时连不上，请检查网络后重试';
 }
 
 async function resolveTarget() {
@@ -1518,9 +1533,10 @@ async function resolveTarget() {
   let users = [];
   try { users = await api('/api/users'); } catch (e) { /* ignore */ }
   if (!users.length) { $('persona-sub').textContent = '库里还没有用户，先跑 setup'; return; }
-  const u = params.get('user') || localStorage.getItem('ce_user') || users[0].id;
+  const u = S.account.user_id;
   const person = users.find((x) => x.id === u) || users[0];
-  const p = params.get('persona') || localStorage.getItem('ce_persona') || (person.personas[0] || '');
+  const wanted = params.get('persona') || localStorage.getItem('ce_persona');
+  const p = (person.personas || []).includes(wanted) ? wanted : (person.personas[0] || '');
   S.user = u; S.persona = p;
   localStorage.setItem('ce_user', u);
   localStorage.setItem('ce_persona', p);
@@ -2042,7 +2058,6 @@ async function doSearch(q) {
 function wsUrl() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const p = new URLSearchParams({ user: S.user, persona: S.persona });
-  if (S.pin) p.set('pin', S.pin);
   return `${proto}//${location.host}/ws/chat?${p.toString()}`;
 }
 
@@ -2068,7 +2083,8 @@ function connect() {
     resetSending();
     loadConvs();
   };
-  ws.onclose = () => {
+  ws.onclose = (event) => {
+    if (S.ws === ws && [4401,4403].includes(event?.code)) { invalidateAccess(); return; }
     if (S.ws !== ws) return;
     S.connected = false;
     setStatus('已断开 · 重连中…', 'offline');
@@ -2520,27 +2536,61 @@ $('toggle-thinking').addEventListener('change', async (e) => {
   } catch (err) { toast('设置失败'); }
 });
 
-$('pin-submit').onclick = async () => {
-  const button = $('pin-submit');
+$('login-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const button = $('login-submit');
   if (button.disabled) return;
-  button.disabled = true;
-  ++bootRequest;
-  showGate();
-  const pin = $('pin-input').value.trim();
+  button.disabled = true; ++bootRequest;
   try {
-    await verifyAccess(pin);
-    S.pin = pin;
-    localStorage.setItem('ce_pin', S.pin);
-    $('pin-input').value = '';
+    await api('/api/auth/login', {method:'POST', body:JSON.stringify({username:$('login-username').value.trim(), password:$('login-password').value})});
+    $('login-password').value = '';
+    const device = await navigator.serviceWorker?.getRegistration?.();
+    const oldSubscription = await device?.pushManager?.getSubscription?.();
+    if (oldSubscription && !await oldSubscription.unsubscribe()) throw new Error('旧设备通知未关闭，请重试登录');
     $('gate-error').textContent = '';
     await boot();
-  } catch (e) {
-    $('gate-error').textContent = e.status === 401 ? 'PIN 不对' : '暂时无法验证，请稍后重试';
-  } finally {
-    button.disabled = false;
-  }
+  } catch (error) { $('gate-error').textContent = error.status ? error.message : '暂时无法连接，请稍后重试'; }
+  finally { button.disabled = false; }
 };
-$('pin-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pin-submit').click(); });
+$('password-form').onsubmit = async (event) => {
+  event.preventDefault();
+  if ($('password-new').value !== $('password-confirm').value) { $('gate-error').textContent = '两次新密码不一致'; return; }
+  const button = $('password-submit');
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    await api('/api/auth/password', {method:'POST', body:JSON.stringify({current_password:$('password-current').value, new_password:$('password-new').value})});
+    $('password-current').value = $('password-new').value = $('password-confirm').value = '';
+    await finishLocalLogout();
+  } catch (error) { $('gate-error').textContent = error.message; }
+  finally { button.disabled = false; }
+};
+async function finishLocalLogout() {
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration?.();
+    const subscription = await registration?.pushManager?.getSubscription?.();
+    await subscription?.unsubscribe();
+  } catch (_) {}
+  for (const key of Object.keys(localStorage)) {
+    if (key.startsWith('companion-outbox:') || key.startsWith('ce_read_') || ['ce_pin','ce_user','ce_persona'].includes(key)) localStorage.removeItem(key);
+  }
+  invalidateAccess();
+  location.replace('/');
+}
+async function logout(all = false) {
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration?.();
+    const subscription = await registration?.pushManager?.getSubscription?.();
+    await api(all ? '/api/auth/logout-all' : '/api/auth/logout', {method:'POST', body:JSON.stringify({endpoint:subscription?.endpoint || ''})});
+    try { await subscription?.unsubscribe(); } catch (_) {}
+    await finishLocalLogout();
+  } catch (error) { toast('退出未完成：' + error.message); }
+}
+$('btn-password').onclick = () => showPasswordForm();
+$('login-retry').onclick = () => boot();
+$('btn-logout').onclick = () => logout();
+$('btn-logout-all').onclick = () => logout(true);
+$('password-cancel').onclick = () => S.account?.must_change_password ? logout() : boot();
 
 /* 新建角色对话框 */
 $('btn-persona-cancel').onclick = () => $('dialog-persona').classList.add('hidden');

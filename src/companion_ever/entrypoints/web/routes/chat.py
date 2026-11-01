@@ -11,12 +11,13 @@ import asyncio
 import threading
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from starlette.concurrency import run_in_threadpool
 
 from companion_ever.bootstrap.app import AppContext
 from companion_ever.infrastructure.llm.json_output import strip_thinking
-from companion_ever.entrypoints.web.deps import check_pin, resolve_target
+from companion_ever.entrypoints.web.deps import resolve_target
+from companion_ever.accounts.service import AuthError, COOKIE
 from companion_ever.entrypoints.web.schemas import ChatIn, CloseSessionIn, CloseSessionOut, ReadIn, ProactiveIn
 from companion_ever.memory.extraction.sessions import SessionCloseReport
 
@@ -24,38 +25,37 @@ router = APIRouter()
 
 
 @router.post('/api/persona/{user_id}/{persona_id}/read')
-def mark_read(request: Request,user_id: str,persona_id: str,payload: ReadIn,x_pin: str=Header(default='')):
-    ctx=_authorized_ctx(request,user_id,persona_id,x_pin)
+def mark_read(request: Request,user_id: str,persona_id: str,payload: ReadIn):
+    ctx=_authorized_ctx(request,user_id,persona_id)
     ctx.services.conversation.mark_read(user_id,persona_id,payload.message_id)
     return {'ok':True}
 
 
 @router.get('/api/persona/{user_id}/{persona_id}/proactive')
-def get_proactive(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
-    ctx=_authorized_ctx(request,user_id,persona_id,x_pin)
+def get_proactive(request: Request,user_id: str,persona_id: str):
+    ctx=_authorized_ctx(request,user_id,persona_id)
     if ctx.services.proactive is None:
         return {'enabled':False}
     return ctx.services.proactive.setting(user_id,persona_id)
 
 
 @router.put('/api/persona/{user_id}/{persona_id}/proactive')
-def set_proactive(request: Request,user_id: str,persona_id: str,payload: ProactiveIn,x_pin: str=Header(default='')):
-    ctx=_authorized_ctx(request,user_id,persona_id,x_pin)
+def set_proactive(request: Request,user_id: str,persona_id: str,payload: ProactiveIn):
+    ctx=_authorized_ctx(request,user_id,persona_id)
     if ctx.services.proactive is None:
         raise HTTPException(503,'主动联系暂未启用')
     return ctx.services.proactive.setting(user_id,persona_id,payload.enabled)
 
 
-def _authorized_ctx(request, user_id, persona_id, pin):
+def _authorized_ctx(request, user_id, persona_id):
     ctx = request.app.state.ctx
-    check_pin(pin,request.app.state.web_cfg)
     ctx.services.conversation.authorizer.require_persona(user_id,persona_id)
     return ctx
 
 
 @router.get('/api/persona/{user_id}/{persona_id}/generations/{generation_id}')
-def generation_status(request: Request,user_id: str,persona_id: str,generation_id: str,x_pin: str=Header(default='')):
-    ctx=_authorized_ctx(request,user_id,persona_id,x_pin)
+def generation_status(request: Request,user_id: str,persona_id: str,generation_id: str):
+    ctx=_authorized_ctx(request,user_id,persona_id)
     try:
         return _present_snapshot(ctx.services.generation.snapshot(user_id,persona_id,generation_id))
     except LookupError as exc:
@@ -63,15 +63,14 @@ def generation_status(request: Request,user_id: str,persona_id: str,generation_i
 
 
 @router.get('/api/persona/{user_id}/{persona_id}/generation')
-def latest_generation(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
-    ctx = _authorized_ctx(request,user_id,persona_id,x_pin)
+def latest_generation(request: Request,user_id: str,persona_id: str):
+    ctx = _authorized_ctx(request,user_id,persona_id)
     return _present_snapshot(ctx.services.generation.latest(user_id,persona_id))
 
 
 @router.post('/api/persona/{user_id}/{persona_id}/generations/{generation_id}/retry')
-def retry_generation(request: Request,user_id: str,persona_id: str,generation_id: str,
-                     x_pin: str=Header(default='')):
-    ctx=_authorized_ctx(request,user_id,persona_id,x_pin)
+def retry_generation(request: Request,user_id: str,persona_id: str,generation_id: str):
+    ctx=_authorized_ctx(request,user_id,persona_id)
     try:
         return _present_snapshot(ctx.services.generation.retry(user_id,persona_id,generation_id))
     except LookupError as exc:
@@ -91,10 +90,9 @@ def _present_snapshot(snapshot):
 
 
 @router.post('/api/messages')
-def receive_message(request: Request,payload: ChatIn,x_pin: str=Header(default='')):
+def receive_message(request: Request,payload: ChatIn):
     ctx=request.app.state.ctx
-    check_pin(x_pin,request.app.state.web_cfg)
-    user,persona=resolve_target(ctx,request.app.state.web_cfg,payload.user_id,payload.persona_id)
+    user,persona=resolve_target(ctx,request.app.state.web_cfg,request.state.account['user_id'],payload.persona_id)
     try:
         g,created=ctx.services.generation.submit(user,persona,payload.content,payload.client_message_id)
     except ValueError as exc:
@@ -129,6 +127,11 @@ class _Conn:
 
     async def send(self, payload: dict[str, Any]) -> None:
         async with self.lock:
+            try:
+                await run_in_threadpool(self.ws.app.state.accounts.authenticate, self.ws.cookies.get(COOKIE, ''))
+            except AuthError:
+                await self.ws.close(code=4401)
+                return
             await self.ws.send_json(payload)
 
 
@@ -200,6 +203,11 @@ def broadcast(user_id: str, persona_id: str, payload: dict[str, Any]) -> None:
         _send_threadsafe(conn, payload)
 
 
+def revalidate_connections(user_id):
+    """A logout/password change immediately closes sockets with revoked sessions."""
+    broadcast(user_id, '', {'type': 'auth_check'})
+
+
 def notify_summary_updated(user_id,persona_id):
     broadcast(user_id,persona_id,{'type':'summary_updated','user_id':user_id,'persona_id':persona_id})
 
@@ -238,14 +246,12 @@ def notify_record_done(
 def post_chat(
     request: Request,
     payload: ChatIn,
-    x_pin: str = Header(default=""),
 ) -> dict[str, Any]:
     """一次性拿到完整回复（不走 WebSocket）。"""
     ctx: AppContext = request.app.state.ctx
     cfg = request.app.state.web_cfg
-    check_pin(x_pin, cfg)
 
-    user_id, persona_id = resolve_target(ctx, cfg, payload.user_id, payload.persona_id)
+    user_id, persona_id = resolve_target(ctx, cfg, request.state.account['user_id'], payload.persona_id)
     try:
         raw = ctx.services.chat.chat(user_id, persona_id, payload.content, payload.client_message_id)
     except PermissionError as e:
@@ -263,7 +269,6 @@ def post_chat(
 async def post_close_session(
     request: Request,
     payload: CloseSessionIn,
-    x_pin: str = Header(default=""),
 ) -> CloseSessionOut:
     """结束当前 session：写 session_close sentinel + 立即触发记忆抽取。
 
@@ -271,9 +276,8 @@ async def post_close_session(
     """
     ctx: AppContext = request.app.state.ctx
     cfg = request.app.state.web_cfg
-    check_pin(x_pin, cfg)
 
-    user_id, persona_id = resolve_target(ctx, cfg, payload.user_id, payload.persona_id)
+    user_id, persona_id = resolve_target(ctx, cfg, request.state.account['user_id'], payload.persona_id)
     try:
         # **后台执行**：抽取是一次完整 LLM 调用（几十秒），
         # 同步等会让用户干等着、没法继续聊天。
@@ -297,7 +301,6 @@ async def ws_chat(
     websocket: WebSocket,
     user: str = Query(default=""),
     persona: str = Query(default=""),
-    pin: str = Query(default=""),
 ) -> None:
     """流式对话通道。
 
@@ -320,15 +323,14 @@ async def ws_chat(
     ctx: AppContext = websocket.app.state.ctx
     cfg = websocket.app.state.web_cfg
 
-    # 鉴权（WebSocket 不能用 HTTPException，要用 close code）
-    if cfg.pin and pin != cfg.pin:
-        await websocket.close(code=4401, reason="PIN 不正确")
-        return
-
     try:
-        user_id, persona_id = resolve_target(ctx, cfg, user, persona)
+        user_id, persona_id = resolve_target(ctx, cfg, websocket.state.account['user_id'], persona)
+        ctx.services.conversation.authorizer.require_persona(user_id, persona_id)
     except HTTPException as e:
         await websocket.close(code=4404, reason=str(e.detail))
+        return
+    except PermissionError:
+        await websocket.close(code=4403, reason='角色不可访问')
         return
 
     await websocket.accept()
@@ -348,12 +350,23 @@ async def ws_chat(
     active_generation = None
     try:
         while True:
-            msg = await websocket.receive_json()
+            try:
+                msg = await asyncio.wait_for(websocket.receive_json(), timeout=30)
+            except asyncio.TimeoutError:
+                msg = {'type': 'ping'}
+            try:
+                await run_in_threadpool(websocket.app.state.accounts.authenticate, websocket.cookies.get(COOKIE, ''))
+            except AuthError:
+                await websocket.close(code=4401)
+                break
             mtype = (msg or {}).get("type")
 
             if mtype == "chat":
                 content = str((msg or {}).get("content") or "").strip()
                 if not content:
+                    continue
+                if len(content) > 16000:
+                    await conn.send({'type':'error','message':'消息过长，请控制在 16000 字以内'})
                     continue
                 channel, emit = _reply_channel()
                 try:

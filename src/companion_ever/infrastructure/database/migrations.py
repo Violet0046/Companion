@@ -7,7 +7,7 @@ import re
 
 def migrate(conn):
     version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > 9:
+    if version > 10:
         raise ValueError('数据库版本比当前程序新，拒绝降级运行')
     if version < 1:
         _migrate_jobs(conn)
@@ -27,6 +27,43 @@ def migrate(conn):
         _add_notifications(conn)
     if conn.execute('PRAGMA user_version').fetchone()[0] < 9:
         _add_proactive(conn)
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 10:
+        _add_accounts(conn)
+
+
+def _add_accounts(conn):
+    """Add credentials and sessions without claiming or rewriting existing users."""
+    from companion_ever.infrastructure.database.connection import transaction
+    path = conn.execute('PRAGMA database_list').fetchone()[2]
+    if path:
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')
+        backup_path = Path(path + '.bak-before-accounts-' + stamp)
+        backup_path.touch(mode=0o600, exist_ok=False)
+        backup = sqlite3.connect(backup_path)
+        try:
+            conn.backup(backup)
+        finally:
+            backup.close()
+    with transaction(conn):
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(user)')}
+        for field, definition in (
+            ('login_name', 'TEXT'), ('password_hash', 'TEXT'),
+            ('disabled', 'INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1))'),
+            ('must_change_password', 'INTEGER NOT NULL DEFAULT 0 CHECK(must_change_password IN (0,1))'),
+            ('auth_failures', 'INTEGER NOT NULL DEFAULT 0'),
+            ('auth_locked_until', 'REAL NOT NULL DEFAULT 0'),
+        ):
+            if field not in columns:
+                conn.execute(f'ALTER TABLE user ADD COLUMN {field} {definition}')
+        from importlib import resources
+        schema = resources.files('companion_ever.infrastructure.database').joinpath('account_schema.sql').read_text(encoding='utf-8')
+        statement = ''
+        for line in schema.splitlines(True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                conn.execute(statement)
+                statement = ''
+        conn.execute('PRAGMA user_version=10')
 
 
 def _add_proactive(conn):
@@ -198,7 +235,7 @@ def _remove_persona_runtime(conn):
 
 def _migrate_kinds(conn):
     from companion_ever.infrastructure.database.connection import _read_schema
-    schema = _read_schema()
+    schema = _read_schema(include_accounts=False)
     path = conn.execute('PRAGMA database_list').fetchone()[2]
     if path:
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')

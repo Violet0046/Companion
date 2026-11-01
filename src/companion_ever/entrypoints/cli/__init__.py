@@ -247,6 +247,16 @@ def build_parser() -> argparse.ArgumentParser:
     status=actions.add_parser('status')
     status.add_argument('--task',required=True)
 
+    account = sub.add_parser('account', help='绑定原用户、创建账号、改密与停用')
+    accounts = account.add_subparsers(dest='account_cmd', required=True)
+    accounts.add_parser('list')
+    for action in ('create', 'reset-password', 'disable', 'enable', 'revoke-sessions'):
+        command = accounts.add_parser(action)
+        command.add_argument('--username', required=True)
+        if action == 'create':
+            command.add_argument('--bind-user', help='仅绑定明确指定的原用户；不填则创建空白用户')
+            command.add_argument('--permanent', action='store_true', help='本人设置正式密码，无需首次改密')
+
     # serve（Web / PWA）
     p_serve = sub.add_parser(
         "serve",
@@ -262,6 +272,10 @@ def main(argv: list[str] | None = None) -> int:
     """CLI 入口。"""
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.cmd == 'account':
+        from companion_ever.entrypoints.cli.accounts_cmd import cmd_account
+        return cmd_account(args)
 
     if args.cmd == "setup":
         return cmd_setup(args)

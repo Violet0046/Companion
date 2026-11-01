@@ -76,8 +76,9 @@ class NotificationService:
         return {'configured': True, 'public_key': public}
 
     def _require_user(self, user):
-        if not self.authorizer.user_repo.exists(user):
-            raise PermissionError('用户不存在')
+        row = self.repo.conn.execute('SELECT disabled FROM user WHERE id=?', (user,)).fetchone()
+        if not row or row['disabled']:
+            raise PermissionError('用户不存在或已停用')
 
     def status(self, user, endpoint):
         self._require_user(user)

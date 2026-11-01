@@ -83,9 +83,10 @@ class WebConfig:
 
     host: str = "0.0.0.0"
     port: int = 8000
-    pin: str = ""
     user: str = ""
     persona: str = ""
+    secure_cookie: bool = True
+    public_origin: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "WebConfig":
@@ -94,17 +95,19 @@ class WebConfig:
         环境变量：
         - COMPANION_WEB_HOST   默认 0.0.0.0（允许局域网内手机访问）
         - COMPANION_WEB_PORT   默认 8000
-        - COMPANION_WEB_PIN    默认空 = 不鉴权（仅建议本机/内网使用）
-        - COMPANION_WEB_USER   默认空 = 自动取库里第一个用户
+        - COMPANION_WEB_SECURE_COOKIE 默认 1，HTTP 本机开发可显式设 0
+        - COMPANION_WEB_ORIGIN 反向代理对外的完整 HTTPS origin
+        - COMPANION_WEB_USER   仅为该用户选择默认角色；不能改变登录身份
         - COMPANION_WEB_PERSONA 默认空 = 自动取该用户的第一个 persona
         """
         src = env if env is not None else os.environ
         return cls(
             host=src.get("COMPANION_WEB_HOST", "0.0.0.0"),
             port=int(src.get("COMPANION_WEB_PORT", "8000")),
-            pin=src.get("COMPANION_WEB_PIN", ""),
             user=src.get("COMPANION_WEB_USER", ""),
             persona=src.get("COMPANION_WEB_PERSONA", ""),
+            secure_cookie=src.get("COMPANION_WEB_SECURE_COOKIE", "1") != "0",
+            public_origin=src.get("COMPANION_WEB_ORIGIN", "").rstrip('/'),
         )
 
 

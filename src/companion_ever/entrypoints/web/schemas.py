@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 class ChatIn(BaseModel):
     """发送一条消息。"""
 
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=16000)
     client_message_id: str | None = Field(default=None, max_length=128)
     user_id: str = ""
     persona_id: str = ""

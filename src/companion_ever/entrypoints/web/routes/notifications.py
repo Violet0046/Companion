@@ -1,8 +1,7 @@
-"""PIN-protected device subscription and test notification endpoints."""
-from fastapi import APIRouter, Header, HTTPException, Request
+"""Account-owned device subscriptions and explicit test notification endpoints."""
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from companion_ever.entrypoints.web.deps import check_pin
 from companion_ever.infrastructure.web_push import PushDeliveryError
 
 router = APIRouter(prefix='/api/notifications', tags=['notifications'])
@@ -32,8 +31,7 @@ class TestIn(DeviceIn):
     persona_id: str = Field(min_length=1, max_length=200)
 
 
-def service(request, pin):
-    check_pin(pin, request.app.state.web_cfg)
+def service(request):
     result = request.app.state.ctx.services.notifications
     if result is None:
         raise HTTPException(503, '服务器尚未开启通知')
@@ -54,25 +52,25 @@ def invoke(action, *args):
 
 
 @router.get('/config')
-def config(request: Request, x_pin: str = Header(default='')):
-    return service(request, x_pin).config()
+def config(request: Request):
+    return service(request).config()
 
 
 @router.post('/status')
-def status(request: Request, payload: DeviceIn, x_pin: str = Header(default='')):
-    return invoke(service(request, x_pin).status, payload.user_id, payload.endpoint)
+def status(request: Request, payload: DeviceIn):
+    return invoke(service(request).status, payload.user_id, payload.endpoint)
 
 
 @router.post('/subscriptions')
-def subscribe(request: Request, payload: SubscribeIn, x_pin: str = Header(default='')):
-    return invoke(service(request, x_pin).subscribe, payload.user_id, payload.subscription.model_dump())
+def subscribe(request: Request, payload: SubscribeIn):
+    return invoke(service(request).subscribe, payload.user_id, payload.subscription.model_dump())
 
 
 @router.delete('/subscriptions')
-def unsubscribe(request: Request, payload: DeviceIn, x_pin: str = Header(default='')):
-    return invoke(service(request, x_pin).unsubscribe, payload.user_id, payload.endpoint)
+def unsubscribe(request: Request, payload: DeviceIn):
+    return invoke(service(request).unsubscribe, payload.user_id, payload.endpoint)
 
 
 @router.post('/test')
-def test(request: Request, payload: TestIn, x_pin: str = Header(default='')):
-    return invoke(service(request, x_pin).send_test, payload.user_id, payload.persona_id, payload.endpoint)
+def test(request: Request, payload: TestIn):
+    return invoke(service(request).send_test, payload.user_id, payload.persona_id, payload.endpoint)

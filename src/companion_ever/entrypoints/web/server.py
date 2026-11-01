@@ -17,13 +17,15 @@ import hashlib
 import socket
 from pathlib import Path
 
-from fastapi import FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 
 from companion_ever.bootstrap.app import AppContext, build_app
 from companion_ever.config import AppConfig, WebConfig
-from companion_ever.entrypoints.web.deps import check_pin
+from companion_ever.accounts.service import AccountService
+from companion_ever.entrypoints.web.routes.auth import authorize
 
 # 静态资源目录：src/companion_ever/entrypoints/web/static/
 WEB_DIR = Path(__file__).resolve().parent / "static"
@@ -74,17 +76,22 @@ def create_app(
         description="长期记忆 AI 伴侣 —— Web / PWA 接口",
         version="0.3.0",
         lifespan=_lifespan,
+        dependencies=[Depends(authorize)],
     )
 
     # 挂到 app.state，路由里直接取
     app.state.ctx = ctx
     app.state.owns_context = owns_context
     app.state.web_cfg = web_cfg
+    app.state.accounts = AccountService(ctx.conn)
     app.state.frontend_version = _frontend_version()
 
     @app.middleware('http')
     async def no_cached_state(request,call_next):
         response=await call_next(request)
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'same-origin'
+        response.headers['X-Frame-Options'] = 'DENY'
         if request.url.path.startswith('/api/'):
             response.headers['Cache-Control']='no-store'
         elif request.url.path in ('/','/index.html','/app.js','/notifications.js','/styles.css','/calls.html','/calls.js'):
@@ -92,9 +99,10 @@ def create_app(
         return response
 
     # --- 路由 ---
-    from companion_ever.entrypoints.web.routes import chat, memory, persona, calls, notifications
+    from companion_ever.entrypoints.web.routes import auth, chat, memory, persona, calls, notifications
 
     app.include_router(chat.router)
+    app.include_router(auth.router)
     app.include_router(persona.router)
     app.include_router(memory.router)
     app.include_router(calls.router)
@@ -113,25 +121,26 @@ def create_app(
         否则前端会看到一个无意义的 500，而不是"你没权限访问这个角色"。"""
         return JSONResponse(status_code=403, content={"detail": str(exc)})
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError):
+        # Validation responses must not echo passwords or private request bodies.
+        errors = [{key: error[key] for key in ('loc', 'msg', 'type')} for error in exc.errors()]
+        return JSONResponse(status_code=422, content={'detail': errors})
+
     @app.get("/api/health", include_in_schema=False)
     def health() -> JSONResponse:
-        """健康检查——顺便告诉前端 PIN 是否生效、自动记录间隔多长。"""
+        """Public readiness and frontend version; never returns account identities."""
         idle = int(getattr(app.state.ctx.cfg, "idle_session_minutes", 120) or 0)
         return JSONResponse({
             "ok": True,
-            "auth_required": bool(web_cfg.pin),
+            "auth_required": True,
+            "auth_mode": "account",
             "frontend_version": app.state.frontend_version,
             "idle_minutes": idle,
             "auto_memory": app.state.ctx.cfg.background.enabled,
             "memory_idle_seconds": app.state.ctx.cfg.background.memory_idle_seconds,
             "schema_version": app.state.ctx.conn.execute('PRAGMA user_version').fetchone()[0],
         })
-
-    @app.post("/api/auth/check", include_in_schema=False)
-    def authenticate(x_pin: str = Header(default="")) -> dict:
-        """验证访问凭据；公开健康检查不承担登录校验。"""
-        check_pin(x_pin, web_cfg)
-        return {"ok": True}
 
     # manifest 要用 application/manifest+json，否则 PWA 安装不了
     @app.get("/manifest.webmanifest", include_in_schema=False)
@@ -251,16 +260,8 @@ def run_server(
     app_cfg.check_same_thread = False
 
     web_cfg = WebConfig.from_env()
-    if host:
-        web_cfg = WebConfig(
-            host=host, port=port or web_cfg.port,
-            pin=web_cfg.pin, user=web_cfg.user, persona=web_cfg.persona,
-        )
-    elif port:
-        web_cfg = WebConfig(
-            host=web_cfg.host, port=port,
-            pin=web_cfg.pin, user=web_cfg.user, persona=web_cfg.persona,
-        )
+    from dataclasses import replace
+    web_cfg = replace(web_cfg, host=host or web_cfg.host, port=port or web_cfg.port)
 
     ctx = build_app(app_cfg)
     app = create_app(ctx, web_cfg)
@@ -276,10 +277,9 @@ def run_server(
             print(f"      http://{a['ip']}:{web_cfg.port}    <- {a['iface']}")
     else:
         print("  手机访问:   （未找到可用的局域网地址）")
-    if web_cfg.pin:
-        print("  访问 PIN:   已设置")
-    else:
-        print("  访问 PIN:   未设置（任何人同网段都能访问）")
+    print("  访问认证:   账号登录（旧 PIN 已停用）")
+    if not ctx.conn.execute('SELECT 1 FROM user WHERE login_name IS NOT NULL AND disabled=0').fetchone():
+        print("  首次使用:   请先用 account create --bind-user 绑定原用户")
     print("  手机浏览器打开后 → 菜单里选「添加到主屏幕」")
     print("=" * 52)
 

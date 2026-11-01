@@ -46,7 +46,7 @@ class PersonaService:
         if not isinstance(definition, str) or not definition.strip():
             raise ValueError('角色设定不能为空')
         # {user} 占位符替换成实际 user_id——模板与自定义设定走同一条路。
-        definition = definition.replace(USER_PLACEHOLDER, user_id)
+        definition = definition.replace(USER_PLACEHOLDER, self.user_repo.display_name(user_id))
         with transaction(self.persona_repo.conn):
             if not self.user_repo.exists(user_id):
                 raise ValueError(f"User '{user_id}' 不存在")
@@ -114,7 +114,7 @@ class PersonaService:
             KeyError: 模板不存在
             ValueError: 用户/角色已存在或设定为空
         """
-        definition = build_definition(template_id, user_id)
+        definition = build_definition(template_id, self.user_repo.display_name(user_id))
         self.create_persona(user_id, persona_id, definition)
 
     def list_archived(self, user_id: str) -> list[dict]:

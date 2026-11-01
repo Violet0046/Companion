@@ -68,6 +68,11 @@ class UserRepo:
         ).fetchall()
         return [row_to_user(r) for r in rows]
 
+    def display_name(self, user_id: str) -> str:
+        """Keep internal account IDs out of user-facing persona descriptions."""
+        row = self.conn.execute('SELECT coalesce(login_name,id) AS name FROM user WHERE id=?', (user_id,)).fetchone()
+        return row['name'] if row else user_id
+
     def exists(self, user_id: str) -> bool:
         """检查用户是否存在。"""
         row = self.conn.execute(

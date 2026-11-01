@@ -17,10 +17,35 @@ python -m venv .venv
 Copy-Item .env.example .env
 # 编辑 .env 中的模型配置，再创建示例用户和角色
 .\.venv\Scripts\python.exe -m companion_ever setup --user alice --persona shushu --template hot_girlfriend
+.\.venv\Scripts\python.exe -m companion_ever account create --username alice --bind-user alice --permanent
+# 仅本机 HTTP 开发；服务器 HTTPS 保持默认安全 Cookie
+$env:COMPANION_WEB_SECURE_COOKIE="0"
 .\.venv\Scripts\python.exe -m companion_ever serve
 ```
 
-已有数据时直接启动服务即可。配置说明见 [.env.example](.env.example)。依赖只在 [pyproject.toml](pyproject.toml) 声明，安装直接使用 pip。
+已有数据升级账号版本时，先备份、更新依赖，再用 `account create --bind-user 原用户ID` 绑定原用户；不要重新 setup。配置说明见 [.env.example](.env.example)。依赖只在 [pyproject.toml](pyproject.toml) 声明，安装直接使用 pip。
+
+## 账号与数据隔离
+
+Web 始终要求独立账号登录，共享 PIN 已停用。现有 `user` 表保存登录名和 Argon2id 密码哈希，只新增 `auth_session` 一张表保存可撤销会话。登录凭据使用 HttpOnly Cookie，30 天无活动过期、最多 90 天重新登录；浏览器不保存密码或在 URL 中传凭据。普通账号只可访问自己的角色、聊天、记忆、后台任务、通知及调用记录。
+
+服务器终端管理账号，密码由隐藏输入交互提供，不放进命令参数：
+
+```bash
+# 先确认原用户 ID，再明确绑定本人现有数据
+.venv/bin/python -m companion_ever account list
+.venv/bin/python -m companion_ever account create --username yourname --bind-user 原用户ID --permanent
+# 好友使用独立空白用户；初始密码首次登录必须修改
+.venv/bin/python -m companion_ever account create --username friendname
+.venv/bin/python -m companion_ever account reset-password --username friendname
+.venv/bin/python -m companion_ever account revoke-sessions --username friendname
+.venv/bin/python -m companion_ever account disable --username friendname
+.venv/bin/python -m companion_ever account enable --username friendname
+```
+
+登录名为 3–32 位字母、数字、点、下划线或短横线，密码为 15–128 个字符。账号管理不启动模型或后台任务。停用账号保留数据并拒绝访问与后续执行；重新启用不会恢复旧登录。修改或重置密码撤销全部旧登录和通知订阅，需要重新登录并开启通知。「我」页面提供改密、退出和退出所有设备。
+
+HTTPS 部署保持 `COMPANION_WEB_SECURE_COOKIE=1`；反向代理时可将 `COMPANION_WEB_ORIGIN` 设置为实际 HTTPS 入口（不带路径），供来源校验使用。只有本机 HTTP 开发显式设 `COMPANION_WEB_SECURE_COOKIE=0`。切换账号时清理页面与待发送缓存，首次从旧 PIN 版本登录需要重新开启设备通知。数据仍存储于部署者服务器，聊天内容按配置发送给模型提供商；账号隔离不提供端到端加密。
 
 ## 当前行为
 
@@ -31,7 +56,7 @@ Copy-Item .env.example .env
 - 角色资料中的「主动联系」默认关闭；开启后在本地时区 10:00—22:00、距最近用户输入至少四小时且上一条主动消息已读时才考虑联系，每个用户每天最多安排一次。模型可以选择不联系。
 - 主动提示词复用人设、行为规则、有限真实历史和两个成功摘要，专用说明在 `proactive_system.txt`；首版不从历史抽词检索，不伪造用户输入。正常聊天提示词不加入主动专用章节。
 - 回复优先按 `<message_break>` 分气泡；没有分隔符时，纯文本空行兼容拆分，单换行与 Markdown 代码、列表、表格保留排版，最多三泡。
-- PIN 提交和页面启动时均通过受保护接口验证；正确 PIN 在当前浏览器记住，下次打开自动登录。公开健康检查不验证 PIN，启动日志不输出凭据。
+- 账号密码通过校验后建立服务器会话，再次打开保持登录；HTTP 与 WebSocket 按登录用户校验资源归属，写操作校验 CSRF，登录失败限流。
 - 页面为脚本和样式附加内容版本号，部署后刷新即可获取新版本；访问凭据失效时返回登录页，保留未发送消息。
 - 记忆自动整理：积累 12 条用户新消息，或空闲 10 分钟且至少 3 条；少量积压最长约 24 小时兜底。
 - 整理链路由 LangGraph 编排，模型可只读检索旧笔记及其证据/关系，再统一校验和原子写入。

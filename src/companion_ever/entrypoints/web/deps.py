@@ -23,48 +23,23 @@ def get_web_cfg(request: Request) -> WebConfig:
     return cfg
 
 
-def check_pin(pin: str, cfg: WebConfig) -> None:
-    """校验 PIN。cfg.pin 为空 → 不鉴权（仅建议内网 / 本机使用）。"""
-    if not cfg.pin:
-        return
-    if pin != cfg.pin:
-        raise HTTPException(status_code=401, detail="PIN 不正确")
-
-
 def resolve_target(
     ctx: AppContext,
     cfg: WebConfig,
     user_id: str = "",
     persona_id: str = "",
 ) -> tuple[str, str]:
-    """解析出要操作的 (user_id, persona_id)。
-
-    优先级：
-    1. 显式传入的 user_id / persona_id
-    2. WebConfig 里配置的默认 user / persona
-    3. 数据库里的第一个用户 + 它的第一个 persona
-
-    Raises:
-        HTTPException: 找不到任何 user / persona
-    """
-    user_id = user_id or cfg.user
-    persona_id = persona_id or cfg.persona
-
+    """Resolve a persona inside an already authenticated user's namespace."""
     if not user_id:
-        users = ctx.repos.user.list_all()
-        if not users:
-            raise HTTPException(
-                status_code=404,
-                detail="库里还没有用户，先跑 companion-cli setup 创建",
-            )
-        user_id = users[0].id
-
+        raise HTTPException(401, '请先登录')
+    if not persona_id and cfg.user == user_id:
+        persona_id = cfg.persona
     if not persona_id:
         personas = ctx.repos.user.list_personas(user_id)
         if not personas:
             raise HTTPException(
                 status_code=404,
-                detail=f"用户 '{user_id}' 还没有 persona，先跑 companion-cli setup",
+                detail="还没有角色，请先在通讯录中创建",
             )
         persona_id = personas[0]
 
@@ -74,6 +49,5 @@ def resolve_target(
 __all__ = [
     "get_ctx",
     "get_web_cfg",
-    "check_pin",
     "resolve_target",
 ]

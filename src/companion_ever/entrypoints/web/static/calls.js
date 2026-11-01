@@ -14,7 +14,7 @@ function query(){
   for(const [key,value] of Object.entries(state))if(value&&value!=='all')params.set(key,value);
   return params.toString();
 }
-function headers(){const pin=localStorage.getItem('ce_pin');return pin?{'X-Pin':pin}:{};}
+function headers(){return {};}
 function badge(r){return `<span class="badge ${r.status==='error'?'error':''}">${{ok:'成功',error:'失败',aborted:'中断'}[r.status]||'未知'}</span>`;}
 function kv(label,value,mono=false){return `<div class="kv"><span>${label}</span><span class="${mono?'mono':''}">${esc(value)}</span></div>`;}
 function renderSummary(summary){
@@ -52,7 +52,7 @@ async function loadCalls(){
   const timeout=setTimeout(()=>activeController.abort(),15000);
   try{
     const response=await fetch('/api/calls?'+query(),{headers:headers(),cache:'no-store',signal:activeController.signal});
-    if(!response.ok)throw new Error(response.status===401?'访问 PIN 已失效，请返回应用重新输入。':'无法读取调用记录（HTTP '+response.status+'）');
+    if(!response.ok)throw new Error(response.status===401?'登录已失效，请返回应用重新登录。':'无法读取调用记录（HTTP '+response.status+'）');
     const result=await response.json();if(number!==requestNumber)return;
     state.date=result.date;$('date-filter').value=result.date;
     state.user_id=result.user_id;state.persona_id=result.persona_id;

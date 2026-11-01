@@ -13,18 +13,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from companion_ever.entrypoints.web.deps import check_pin
 from companion_ever.entrypoints.web.schemas import PersonaCreateIn
 
 router = APIRouter()
 
 
-def _ctx_and_cfg(request: Request, x_pin: str) -> tuple[Any, Any]:
+def _ctx_and_cfg(request: Request) -> tuple[Any, Any]:
     ctx: Any = request.app.state.ctx
     cfg: Any = request.app.state.web_cfg
-    check_pin(x_pin, cfg)
     return ctx, cfg
 
 
@@ -40,9 +38,9 @@ def _fail(exc: Exception) -> HTTPException:
 
 
 @router.get("/api/persona-templates")
-def persona_templates(request: Request, x_pin: str = Header(default="")) -> dict:
+def persona_templates(request: Request) -> dict:
     """角色模板目录 + 自定义表单的字段描述。"""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     return ctx.services.persona.templates()
 
 
@@ -51,13 +49,12 @@ def create_persona(
     request: Request,
     user_id: str,
     payload: PersonaCreateIn,
-    x_pin: str = Header(default=""),
 ) -> dict:
     """创建角色。
 
     两条路径：用 template_id 走内置模板，或用 definition 传自己填的 JSON。
     """
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     persona_id = (payload.persona_id or "").strip()
     try:
         if payload.template_id:
@@ -76,10 +73,9 @@ def delete_persona(
     request: Request,
     user_id: str,
     persona_id: str,
-    x_pin: str = Header(default=""),
 ) -> dict:
     """删除角色 = 停用：撤销访问与在途执行，数据全部保留，可恢复。"""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     try:
         ctx.services.persona.deactivate(user_id, persona_id)
     except Exception as exc:
@@ -92,10 +88,9 @@ def restore_persona(
     request: Request,
     user_id: str,
     persona_id: str,
-    x_pin: str = Header(default=""),
 ) -> dict:
     """恢复已删除（停用）的角色。"""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     try:
         ctx.services.persona.restore(user_id, persona_id)
     except Exception as exc:
@@ -107,10 +102,9 @@ def restore_persona(
 def archived_personas(
     request: Request,
     user_id: str,
-    x_pin: str = Header(default=""),
 ) -> list[dict]:
     """已删除（停用）的角色清单——设定还在，可以恢复。"""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     try:
         return ctx.services.persona.list_archived(user_id)
     except Exception as exc:

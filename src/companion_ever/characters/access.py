@@ -13,4 +13,5 @@ class Authorizer:
             raise PermissionError(f"User '{user_id}' 未启用 persona '{persona_id}'")
 
     def owns_persona(self, user_id: str, persona_id: str) -> bool:
-        return self.user_repo.owns_persona(user_id, persona_id)
+        row = self.user_repo.conn.execute('SELECT disabled FROM user WHERE id=?', (user_id,)).fetchone()
+        return bool(row and not row['disabled'] and self.user_repo.owns_persona(user_id, persona_id))

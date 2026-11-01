@@ -14,10 +14,9 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from companion_ever.bootstrap.app import AppContext
-from companion_ever.entrypoints.web.deps import check_pin
 from companion_ever.entrypoints.web.schemas import (
     BlockOut,
     DateEntry,
@@ -39,14 +38,14 @@ router = APIRouter()
 
 
 @router.get('/api/persona/{user_id}/{persona_id}/memory-jobs')
-def memory_jobs(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
-    ctx,_=_ctx_and_cfg(request,x_pin)
+def memory_jobs(request: Request,user_id: str,persona_id: str):
+    ctx,_=_ctx_and_cfg(request)
     return ctx.services.session_close.recent_jobs(user_id,persona_id)
 
 
 @router.post('/api/persona/{user_id}/{persona_id}/memory-jobs/{job_id}/retry')
-def retry_memory_job(request: Request,user_id: str,persona_id: str,job_id: str,x_pin: str=Header(default='')):
-    ctx,_=_ctx_and_cfg(request,x_pin)
+def retry_memory_job(request: Request,user_id: str,persona_id: str,job_id: str):
+    ctx,_=_ctx_and_cfg(request)
     try:
         return ctx.services.session_close.retry_job(user_id,persona_id,job_id)
     except LookupError as exc:
@@ -58,47 +57,46 @@ def retry_memory_job(request: Request,user_id: str,persona_id: str,job_id: str,x
 @router.get('/api/persona/{user_id}/{persona_id}/task-attempts')
 def task_attempts(request: Request,user_id: str,persona_id: str,
                   kind: Optional[str]=Query(default=None,pattern='^(memory|summary)$'),
-                  job_id: Optional[str]=Query(default=None),x_pin: str=Header(default='')):
-    ctx,_=_ctx_and_cfg(request,x_pin)
+                  job_id: Optional[str]=Query(default=None)):
+    ctx,_=_ctx_and_cfg(request)
     return ctx.services.session_close.task_attempts(user_id,persona_id,kind,job_id)
 
 
 @router.post('/api/persona/{user_id}/{persona_id}/summaries/refresh')
-def refresh_summaries(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
-    ctx,_=_ctx_and_cfg(request,x_pin)
+def refresh_summaries(request: Request,user_id: str,persona_id: str):
+    ctx,_=_ctx_and_cfg(request)
     return ctx.services.summary.request(user_id,persona_id)
 
 
 @router.get('/api/persona/{user_id}/{persona_id}/summary-status')
-def summary_status(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
-    ctx,_=_ctx_and_cfg(request,x_pin)
+def summary_status(request: Request,user_id: str,persona_id: str):
+    ctx,_=_ctx_and_cfg(request)
     return ctx.services.summary.status(user_id,persona_id)
 
 
 @router.get('/api/persona/{user_id}/{persona_id}/summary-jobs')
-def summary_jobs(request: Request,user_id: str,persona_id: str,x_pin: str=Header(default='')):
-    ctx,_=_ctx_and_cfg(request,x_pin)
+def summary_jobs(request: Request,user_id: str,persona_id: str):
+    ctx,_=_ctx_and_cfg(request)
     return ctx.services.summary.recent_jobs(user_id,persona_id)
 
 
 @router.get('/api/persona/{user_id}/{persona_id}/fact-changes')
 def fact_changes(request: Request,user_id: str,persona_id: str,after_id: int=Query(default=0,ge=0),
-                 limit: int=Query(default=50,ge=1,le=200),x_pin: str=Header(default='')):
-    ctx,_=_ctx_and_cfg(request,x_pin)
+                 limit: int=Query(default=50,ge=1,le=200)):
+    ctx,_=_ctx_and_cfg(request)
     return ctx.services.summary.fact_changes(user_id,persona_id,after_id,limit)
 
 @router.post('/api/persona/{user_id}/{persona_id}/memories/search')
 def search_memories(request: Request, user_id: str, persona_id: str,
-                    payload: MemorySearch, x_pin: str = Header(default='')):
+                    payload: MemorySearch):
     """Shared read-only search. This is not an LLM tool-call endpoint."""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     return ctx.services.retrieval.search(user_id, persona_id, payload).to_dict()
 
 
-def _ctx_and_cfg(request: Request, x_pin: str) -> tuple[AppContext, Any]:
+def _ctx_and_cfg(request: Request) -> tuple[AppContext, Any]:
     ctx: AppContext = request.app.state.ctx
     cfg = request.app.state.web_cfg
-    check_pin(x_pin, cfg)
     return ctx, cfg
 
 
@@ -117,13 +115,11 @@ def _s(value: Any, tz: int = 0) -> Optional[str]:
 
 
 @router.get("/api/users", response_model=list[UserOut])
-def list_users(request: Request, x_pin: str = Header(default="")) -> list[UserOut]:
-    """所有用户 + 他们拥有的 persona。"""
-    ctx, cfg = _ctx_and_cfg(request, x_pin)
-    return [
-        UserOut(id=u.id, personas=ctx.services.persona.list_user_personas(u.id))
-        for u in ctx.services.persona.list_users()
-    ]
+def list_users(request: Request) -> list[UserOut]:
+    """当前登录用户及其有效角色。"""
+    ctx, cfg = _ctx_and_cfg(request)
+    user = request.state.account['user_id']
+    return [UserOut(id=user, personas=ctx.services.persona.list_user_personas(user))]
 
 
 @router.get("/api/persona/{user_id}/{persona_id}", response_model=PersonaSummary)
@@ -131,10 +127,9 @@ def persona_summary(
     request: Request,
     user_id: str,
     persona_id: str,
-    x_pin: str = Header(default=""),
 ) -> PersonaSummary:
     """角色总览：角色配置、两种摘要与计数。"""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     tz = ctx.cfg.tz_offset_hours
     if not ctx.services.persona.exists(user_id, persona_id):
         raise HTTPException(status_code=404, detail=f"用户 '{user_id}' 没有 persona '{persona_id}'")
@@ -181,12 +176,11 @@ def list_notes(
     request: Request,
     user_id: str,
     persona_id: str,
-    x_pin: str = Header(default=""),
     limit: int = Query(default=100, ge=1, le=1000),
     kind: Optional[str] = Query(default=None),
 ) -> list[NoteOut]:
     """记忆列表（最新优先），只支持 episode/fact。"""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     if 'type' in request.query_params:
         raise HTTPException(400,'旧分类 type 已移除，请使用 kind=episode 或 kind=fact')
     note_kind: Optional[MemoryKind] = None
@@ -222,8 +216,8 @@ def _note_out(n, tz):
 
 @router.patch('/api/persona/{user_id}/{persona_id}/notes/{note_id}', response_model=NoteOut)
 def edit_note(request: Request, user_id: str, persona_id: str, note_id: str,
-              payload: NoteEditIn, x_pin: str=Header(default='')):
-    ctx,_=_ctx_and_cfg(request,x_pin)
+              payload: NoteEditIn):
+    ctx,_=_ctx_and_cfg(request)
     try:
         note=ctx.services.note.edit_content(user_id,persona_id,note_id,payload.content,payload.revision)
     except LookupError as exc:
@@ -237,8 +231,8 @@ def edit_note(request: Request, user_id: str, persona_id: str, note_id: str,
 
 @router.delete('/api/persona/{user_id}/{persona_id}/notes/{note_id}')
 def delete_note(request: Request, user_id: str, persona_id: str, note_id: str,
-                revision: int=Query(ge=1), x_pin: str=Header(default='')):
-    ctx,_=_ctx_and_cfg(request,x_pin)
+                revision: int=Query(ge=1)):
+    ctx,_=_ctx_and_cfg(request)
     try:
         ctx.services.note.delete_note(user_id,persona_id,note_id,revision)
     except LookupError as exc:
@@ -253,10 +247,9 @@ def list_blocks(
     request: Request,
     user_id: str,
     persona_id: str,
-    x_pin: str = Header(default=""),
 ) -> list[BlockOut]:
     """用户画像与关系进展两个摘要。"""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     return [
         BlockOut(block_type=b.block_type.value, fields=b.fields)
         for b in ctx.services.block.get_blocks(user_id, persona_id)
@@ -268,7 +261,6 @@ def list_history(
     request: Request,
     user_id: str,
     persona_id: str,
-    x_pin: str = Header(default=""),
     limit: int = Query(default=50, ge=1, le=500),
     before_id: Optional[int] = Query(
         default=None, description="取这之前的（上翻加载）",
@@ -294,7 +286,7 @@ def list_history(
     思考过程（thinking）默认跟随用户的 show_thinking 设置；
     此到此，**prompt 里从不会出现 think 内容**（它另存在 thinking_log）。
     """
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     tz = ctx.cfg.tz_offset_hours
 
     want_thinking = ctx.services.settings.get_show_thinking(user_id, persona_id)
@@ -329,8 +321,8 @@ def list_history(
 
 @router.get('/api/persona/{user_id}/{persona_id}/unread-count')
 def unread_count(request: Request,user_id: str,persona_id: str,
-                 after_id: int=Query(default=0,ge=0),x_pin: str=Header(default='')):
-    ctx,_=_ctx_and_cfg(request,x_pin)
+                 after_id: int=Query(default=0,ge=0)):
+    ctx,_=_ctx_and_cfg(request)
     return ctx.services.conversation.unread_count(user_id,persona_id,after_id)
 
 
@@ -341,10 +333,9 @@ def list_dates(
     request: Request,
     user_id: str,
     persona_id: str,
-    x_pin: str = Header(default=""),
 ) -> list[DateEntry]:
     """有对话的日期（降序）+ 每天的消息数。"""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     tz = ctx.cfg.tz_offset_hours
     return [
         DateEntry(
@@ -365,13 +356,12 @@ def search_history(
     q: str = Query(description="关键词"),
     scope: str = Query(default="all", description="all | messages | memories"),
     limit: int = Query(default=50, ge=1, le=200),
-    x_pin: str = Header(default=""),
 ) -> list[SearchHit]:
     """搜索对话记录 + 记忆条目。
 
     关键词抽取与记忆检索同一套逻辑（utils/text.py）。
     """
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     tz = ctx.cfg.tz_offset_hours
     q = (q or "").strip()
     if not q:
@@ -404,10 +394,9 @@ def get_settings(
     request: Request,
     user_id: str,
     persona_id: str,
-    x_pin: str = Header(default=""),
 ) -> SettingsOut:
     """读设置（当前只有 show_thinking）。"""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     return SettingsOut(**ctx.services.settings.get_settings(user_id, persona_id))
 
 
@@ -417,10 +406,9 @@ def put_settings(
     user_id: str,
     persona_id: str,
     payload: SettingsIn,
-    x_pin: str = Header(default=""),
 ) -> SettingsOut:
     """改设置（当前只有 show_thinking）。"""
-    ctx, _ = _ctx_and_cfg(request, x_pin)
+    ctx, _ = _ctx_and_cfg(request)
     return SettingsOut(**ctx.services.settings.set_show_thinking(
         user_id, persona_id, payload.show_thinking,
     ))
