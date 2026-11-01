@@ -14,7 +14,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import locale
+import re
 import socket
+import sys
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
@@ -192,6 +195,50 @@ def create_app(
     return app
 
 
+_IPV4_RE = re.compile(r'^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$')
+_DOT_LEADER_RE = re.compile(r'\.\s+\.\s+\.')
+
+
+def _decode_ipconfig(raw: bytes) -> str:
+    """按 Windows 实际使用的代码页解码 ipconfig 的输出。
+
+    ipconfig 是独立进程，它按控制台输出代码页写字节；认错编码的话
+    适配器名会变成乱码。控制台代码页最权威，其次才是系统首选编码。
+    """
+    candidates: list[str] = []
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            code_page = ctypes.windll.kernel32.GetConsoleOutputCP()
+            if code_page:
+                candidates.append(f'cp{code_page}')
+        except Exception:
+            pass
+    preferred = locale.getpreferredencoding(False)
+    if preferred:
+        candidates.append(preferred)
+    candidates += ['utf-8', 'gbk']
+    for encoding in candidates:
+        try:
+            return raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode(candidates[0] if candidates else 'utf-8', errors='replace')
+
+
+def _is_ipv4_line(line: str) -> bool:
+    """ipconfig 的 IPv4 行。
+
+    "IPv4" 这个标记在所有语言里都一样，但值前面的词是本地化的
+    （中文 Windows 写"地址"，英文写"Address"），所以只靠标记加行尾
+    的合法地址来判断，不去匹配本地化词。
+    """
+    if 'IPv4' not in line:
+        return False
+    match = _IPV4_RE.match(line.rsplit(':', 1)[-1].strip())
+    return bool(match) and all(int(part) <= 255 for part in match.groups())
+
+
 def local_ip_addresses() -> list[dict]:
     """列出本机所有可用的 IPv4 地址（含适配器名称）。
 
@@ -209,23 +256,23 @@ def local_ip_addresses() -> list[dict]:
     # 1) 通过读适配器列表拿所有 IPv4
     try:
         import subprocess
-        raw = subprocess.run(
-            ["ipconfig"], capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-        ).stdout
+        raw = subprocess.run(["ipconfig"], capture_output=True).stdout
+        text = _decode_ipconfig(raw)
         current_iface = ""
-        for line in raw.splitlines():
+        for line in text.splitlines():
             stripped = line.strip()
-            if stripped.endswith(":") and ("adapter" in stripped.lower() or "适配器" in stripped):
-                current_iface = stripped.rstrip(":")
+            if not stripped:
                 continue
-            if "IPv4" in stripped and "Address" in stripped:
-                parts = stripped.split(":", 1)
-                if len(parts) == 2:
-                    ip = parts[1].strip()
-                    if ip and not ip.startswith("127.") and ip not in seen:
-                        seen.add(ip)
-                        out.append({"iface": current_iface, "ip": ip})
+            if _is_ipv4_line(stripped):
+                ip = stripped.rsplit(":", 1)[-1].strip()
+                if ip and not ip.startswith("127.") and ip not in seen:
+                    seen.add(ip)
+                    out.append({"iface": current_iface, "ip": ip})
+                continue
+            # 适配器标题行：以冒号结尾，且没有 ipconfig 的 ". . ." 引导点
+            # （"特定配置 DNS 后缀 . . . :" 这种行也以冒号结尾，不能当标题）
+            if stripped.endswith(":") and not _DOT_LEADER_RE.search(stripped):
+                current_iface = stripped.rstrip(":").strip()
     except Exception:
         pass
 
@@ -234,10 +281,11 @@ def local_ip_addresses() -> list[dict]:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
-                sock.connect(("10.255.255.255", 1))
+                # UDP connect 不发包，只用来问系统"走默认路由时源地址是哪个"
+                sock.connect(("8.8.8.8", 1))
                 ip = sock.getsockname()[0]
                 if ip and not ip.startswith("127."):
-                    out.append({"iface": "default", "ip": ip})
+                    out.append({"iface": "默认出口", "ip": ip})
             finally:
                 sock.close()
         except OSError:
