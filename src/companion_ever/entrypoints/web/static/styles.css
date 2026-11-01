@@ -887,6 +887,10 @@ body {
 }
 .dlg-btn-primary { background: var(--accent); color: #fff; }
 
+.notification-action { border: 0; background: transparent; color: var(--accent); font: inherit; cursor: pointer; padding: 8px 0 8px 12px; }
+.notification-action:disabled { opacity: .5; cursor: default; }
+.notification-hint { padding: 0 16px 12px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+
 .dlg-danger {
   margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line);
 }

@@ -141,6 +141,7 @@ class AppConfig:
         "idle_session_minutes",
         "extraction_timeout",
         "background",
+        "push_subject",
     )
 
     def __init__(
@@ -155,6 +156,7 @@ class AppConfig:
         idle_session_minutes: int = 120,
         extraction_timeout: float = 120.0,
         background: BackgroundConfig | dict | None = None,
+        push_subject: str = "",
     ):
         self.db_path = Path(db_path)
         self.tz_offset_hours = tz_offset_hours
@@ -173,6 +175,7 @@ class AppConfig:
             raise ValueError('extraction_timeout 必须为有限正数')
         self.extraction_timeout = extraction_timeout
         self.background=background if isinstance(background,BackgroundConfig) else BackgroundConfig(**(background or {}))
+        self.push_subject = push_subject.strip()
 
     @classmethod
     def from_env(
@@ -212,6 +215,7 @@ class AppConfig:
             history_max_messages=int(env_source.get("COMPANION_HISTORY_MAX", "50")),
             idle_session_minutes=int(env_source.get("COMPANION_IDLE_MINUTES", "120")),
             extraction_timeout=float(env_source.get("COMPANION_EXTRACTION_TIMEOUT", "120")),
+            push_subject=env_source.get('COMPANION_PUSH_SUBJECT', ''),
             background=BackgroundConfig(
                 enabled=env_source.get('COMPANION_AUTO_MEMORY','1').lower() not in ('0','false','off'),
                 memory_message_threshold=int(env_source.get('COMPANION_MEMORY_TRIGGER_MESSAGES','12')),

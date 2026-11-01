@@ -17,7 +17,7 @@ def _read_schema() -> str:
         .read_text(encoding="utf-8")
     )
     return base + '\n' + '\n'.join(resources.files('companion_ever.infrastructure.database').joinpath(name).read_text(encoding='utf-8')
-                                  for name in ('summary_schema.sql','task_schema.sql'))
+                                  for name in ('summary_schema.sql','task_schema.sql','notification_schema.sql'))
 
 
 def connect(
@@ -56,7 +56,7 @@ def apply_schema(conn: sqlite3.Connection) -> None:
         migrate(conn)
     else:
         try:
-            conn.executescript('BEGIN IMMEDIATE;\n' + _read_schema() + '\nPRAGMA user_version=7;\nCOMMIT;')
+            conn.executescript('BEGIN IMMEDIATE;\n' + _read_schema() + '\nPRAGMA user_version=8;\nCOMMIT;')
         except BaseException:
             conn.rollback()
             raise

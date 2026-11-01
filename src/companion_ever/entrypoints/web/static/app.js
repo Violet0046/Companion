@@ -165,6 +165,7 @@ function showView(name) {
     t.classList.toggle('active', t.dataset.view === name);
   });
   if (name === 'chat') anchorBottom();
+  if (name === 'me') window.CompanionNotifications?.refresh();
 }
 
 /* ---------- 角色清单 ---------- */
@@ -1464,7 +1465,12 @@ async function boot() {
   await loadSettings();
   await loadUsers();
   await Promise.all([loadPersona(), loadHistory(true)]);
-  showView('messages');
+  const initialView = new URLSearchParams(location.search).get('open') === 'chat'
+    && S.users.some(u => u.id === S.user && (u.personas || []).includes(S.persona)) ? 'chat' : 'messages';
+  showView(initialView);
+  window.CompanionNotifications?.init({api, toast, debug: S.debug,
+    target: () => ({user_id: S.user, persona_id: S.persona}),
+    active: () => S.view === 'me' && !$('app').classList.contains('hidden')});
   connect();
   loadConvs();          // 聊天列表比较慢，放后台拉
 }

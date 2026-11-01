@@ -7,7 +7,7 @@ import re
 
 def migrate(conn):
     version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > 7:
+    if version > 8:
         raise ValueError('数据库版本比当前程序新，拒绝降级运行')
     if version < 1:
         _migrate_jobs(conn)
@@ -23,6 +23,23 @@ def migrate(conn):
         _constrain_persona_definitions(conn)
     if conn.execute('PRAGMA user_version').fetchone()[0] < 7:
         _remove_note_pinning(conn)
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 8:
+        _add_notifications(conn)
+
+
+def _add_notifications(conn):
+    """Add notification-owned tables without rewriting conversation or memory data."""
+    from importlib import resources
+    from companion_ever.infrastructure.database.connection import transaction
+    schema = resources.files('companion_ever.infrastructure.database').joinpath('notification_schema.sql').read_text(encoding='utf-8')
+    with transaction(conn):
+        statement = ''
+        for line in schema.splitlines(True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                conn.execute(statement)
+                statement = ''
+        conn.execute('PRAGMA user_version=8')
 
 
 def _remove_note_pinning(conn):

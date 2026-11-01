@@ -4,11 +4,12 @@
    局域网 http://192.168.x.x:8000 下这里会注册失败，属于预期。
    ============================================================ */
 
-const CACHE = 'ce-shell-v6';
+const CACHE = 'ce-shell-v7';
 const SHELL = [
   '/',
   '/index.html',
   '/app.js',
+  '/notifications.js',
   '/styles.css',
   '/manifest.webmanifest',
   '/icon.png',
@@ -59,26 +60,36 @@ self.addEventListener('fetch', (e) => {
 self.addEventListener('push', (e) => {
   let data = {};
   try { data = e.data ? e.data.json() : {}; } catch (err) { data = {}; }
+  if (!data || typeof data !== 'object') data = {};
   const title = data.title || '同行';
   const options = {
     body: data.body || '',
     icon: '/icon.png',
     badge: '/icon.png',
     tag: data.tag || 'ce',
-    renotify: true,
+    renotify: false,
     data: { url: '/' },
   };
   e.waitUntil(self.registration.showNotification(title, options));
 });
 
+function notificationURL(value) {
+  try {
+    const url = new URL(value || '/', self.location.origin);
+    if (url.origin === self.location.origin && url.pathname === '/') return url.href;
+  } catch (error) { /* Invalid payload falls back to the app home page. */ }
+  return self.location.origin + '/';
+}
+
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
+  const destination = notificationURL(e.notification.data?.url);
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then((list) => {
-        const c = list.find((x) => 'focus' in x);
-        if (c) { c.focus(); return; }
-        if (self.clients.openWindow) return self.clients.openWindow('/');
+        const c = list.find((x) => 'focus' in x && 'navigate' in x && new URL(x.url).origin === self.location.origin);
+        if (c) return c.navigate(destination).then(client => client?.focus());
+        if (self.clients.openWindow) return self.clients.openWindow(destination);
       })
   );
 });

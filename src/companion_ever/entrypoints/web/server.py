@@ -31,7 +31,7 @@ WEB_DIR = Path(__file__).resolve().parent / "static"
 
 def _frontend_version() -> str:
     digest = hashlib.sha256()
-    for name in ('index.html', 'app.js', 'styles.css', 'calls.html', 'calls.js', 'sw.js', 'icon.png', 'manifest.webmanifest'):
+    for name in ('index.html', 'app.js', 'notifications.js', 'styles.css', 'calls.html', 'calls.js', 'sw.js', 'icon.png', 'manifest.webmanifest'):
         path = WEB_DIR / name
         if path.is_file():
             digest.update(name.encode('utf-8'))
@@ -87,17 +87,18 @@ def create_app(
         response=await call_next(request)
         if request.url.path.startswith('/api/'):
             response.headers['Cache-Control']='no-store'
-        elif request.url.path in ('/','/index.html','/app.js','/styles.css','/calls.html','/calls.js'):
+        elif request.url.path in ('/','/index.html','/app.js','/notifications.js','/styles.css','/calls.html','/calls.js'):
             response.headers['Cache-Control']='no-cache'
         return response
 
     # --- 路由 ---
-    from companion_ever.entrypoints.web.routes import chat, memory, persona, calls
+    from companion_ever.entrypoints.web.routes import chat, memory, persona, calls, notifications
 
     app.include_router(chat.router)
     app.include_router(persona.router)
     app.include_router(memory.router)
     app.include_router(calls.router)
+    app.include_router(notifications.router)
 
     # 记录（抽取记忆）跑完后，服务端**主动推送** record_done 给前端。
     # 前端收到就刷新关系状态 / 记忆 / 计数——不用「退出重进」才能看到变化。
@@ -156,7 +157,7 @@ def create_app(
 
         def render_shell(name: str) -> HTMLResponse:
             content = (WEB_DIR / name).read_text(encoding='utf-8')
-            for asset in ('app.js', 'styles.css', 'calls.js', 'apple-touch-icon.png'):
+            for asset in ('app.js', 'notifications.js', 'styles.css', 'calls.js', 'apple-touch-icon.png'):
                 content = content.replace(f'"/{asset}"', f'"/{asset}?v={app.state.frontend_version}"')
             return HTMLResponse(content)
 

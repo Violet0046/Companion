@@ -36,6 +36,9 @@ from companion_ever.memory.summaries.repository import SummaryRepo
 from companion_ever.infrastructure.tracing import CallLogStore, default_call_dir
 from companion_ever.infrastructure.llm.traced_client import TracedLLMClient
 from companion_ever.bootstrap.lifecycle import ApplicationLifecycle, build_lifecycle
+from companion_ever.notifications.repository import NotificationRepo
+from companion_ever.notifications.service import NotificationService
+from companion_ever.infrastructure.web_push import WebPushSender
 
 
 @dataclass
@@ -65,6 +68,7 @@ class Services:
     session_close: SessionCloseService
     summary: SummaryService
     background: MemoryScheduler
+    notifications: NotificationService | None = None
 
 
 @dataclass
@@ -189,6 +193,7 @@ def build_app(cfg: AppConfig) -> AppContext:
         session_close=session_close_svc,
         summary=summary_svc,
         background=background_svc,
+        notifications=NotificationService(NotificationRepo(conn), authorizer, WebPushSender(), cfg.push_subject),
     )
     workflows = Workflows(extraction=extraction_svc.graph,summary=summary_svc.graph)
 

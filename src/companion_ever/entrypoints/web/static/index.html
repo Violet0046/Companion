@@ -75,6 +75,9 @@
               <label class="switch-row switch-inline"><input type="checkbox" id="toggle-thinking" checked><i class="switch"></i></label>
             </div>
             <div class="row"><span>自动记录</span><span class="row-val" id="me-interval">…</span></div>
+            <div class="row"><span>消息通知</span><button type="button" class="notification-action" id="notification-toggle" disabled>检查中…</button></div>
+            <div class="notification-hint" id="notification-hint" role="status"></div>
+            <div class="row hidden" id="notification-test-row"><span>测试通知</span><button type="button" class="notification-action" id="notification-test" disabled>发送</button></div>
             <div class="row"><span>服务器地址</span><span class="row-val" id="me-server">…</span></div>
             <div class="row"><span>关于</span><span class="row-val" id="me-version">v0.3.0</span></div>
             <a class="row hidden" id="call-log-link" href="/calls.html"><span>模型调用记录</span><span class="row-val">查看 ›</span></a>
@@ -245,6 +248,7 @@
     </div>
   </div>
 
+  <script src="/notifications.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
