@@ -12,7 +12,9 @@ CREATE TABLE IF NOT EXISTS user (
     disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1)),
     must_change_password INTEGER NOT NULL DEFAULT 0 CHECK(must_change_password IN (0,1)),
     auth_failures INTEGER NOT NULL DEFAULT 0,
-    auth_locked_until REAL NOT NULL DEFAULT 0
+    auth_locked_until REAL NOT NULL DEFAULT 0,
+    daily_message_limit INTEGER CHECK(daily_message_limit>=0),
+    concurrent_reply_limit INTEGER CHECK(concurrent_reply_limit>=0)
 );
 -- === Wiki 笔记表（核心）===
 -- 用途：所有抽取的事实，经历与事实，角色设定独立存储

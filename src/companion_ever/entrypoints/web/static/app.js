@@ -172,7 +172,7 @@ function showView(name) {
     t.classList.toggle('active', t.dataset.view === name);
   });
   if (name === 'chat') anchorBottom();
-  if (name === 'me') window.CompanionNotifications?.refresh();
+  if (name === 'me') { window.CompanionNotifications?.refresh(); refreshUsage(); }
 }
 
 /* ---------- 角色清单 ---------- */
@@ -757,6 +757,36 @@ function renderMe() {
   $('me-interval').textContent = S.automaticMemory ? '已开启' : '已关闭';
   $('me-version').textContent = 'v0.3.0';
   $('me-hint').textContent = `共 ${sessions} 次记录。切换角色请到「通讯录」。`;
+}
+
+let usageRequest = 0;
+async function refreshUsage() {
+  if (!S.account) return;
+  const request = ++usageRequest, user = S.account.user_id;
+  const box = $('usage-stats');
+  box.textContent = '正在读取…';
+  try {
+    const usage = await api('/api/usage');
+    if (request !== usageRequest || user !== S.account?.user_id) return;
+    const messages = usage.messages, replies = usage.replies, calls = usage.calls;
+    const number = value => Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
+    const tokens = key => number(calls[key]) + (calls[key + '_reported_calls'] < calls.calls ? '（部分）' : '');
+    const row = (label, value) => `<div class="row"><span>${esc(label)}</span><span class="row-val">${esc(value)}</span></div>`;
+    box.innerHTML = row('已发消息', `${messages.used} / ${messages.limit || '不限'} 条`)
+      + row('正在回复', `${replies.active} / ${replies.limit || '不限'} 个${replies.waiting ? ` · 等待 ${replies.waiting} 个` : ''}`)
+      + row('已记录模型调用', usage.read_error ? '暂不可用' : `${calls.calls} 次 · 失败 ${calls.errors} 次`)
+      + row('输入 / 输出 token', `${tokens('input_tokens')} / ${tokens('output_tokens')}`)
+      + row('其中缓存输入', tokens('cached_input_tokens'))
+      + row('模型累计耗时', usage.read_error ? '—' : `${(calls.elapsed_ms / 1000).toFixed(1)} 秒`);
+    const hint = document.createElement('p'); hint.className = 'hint';
+    hint.textContent = usage.read_error ? '暂时无法读取模型用量，消息额度正常计数。'
+      : !usage.recording_enabled ? '调用日志当前已关闭，模型用量记录可能不完整；消息额度正常计数。'
+      : usage.write_error ? '调用日志曾写入失败，模型用量可能不完整。'
+      : `聊天 ${usage.layers.chat.calls} · 整理 ${usage.layers.extraction.calls} · 摘要 ${usage.layers.summary.calls}。消息额度每天 ${fmtTime(usage.resets_at).slice(-5)} 重置；统计仅含已记录调用，未上报的 token 不计为零。`;
+    box.appendChild(hint);
+  } catch (_) {
+    if (request === usageRequest && user === S.account?.user_id) box.textContent = '暂时无法读取用量，请稍后刷新';
+  }
 }
 
 /* ---------- 切换角色 / 打开会话 ---------- */
@@ -1588,11 +1618,16 @@ async function loadHistory(reset, opts) {
     const clients = new Set(msgs.map(m => m.client_message_id).filter(Boolean));
     const latest = Math.max(0, ...msgs.map(m => m.id));
     const tail = S.messages.filter(m => !ids.has(m.id) && !clients.has(m.client_message_id)
-      && (m.pending || (Number.isSafeInteger(m.id) && !m.localOnly && m.id > latest)));
+      && (m.pending || m.rejected || (Number.isSafeInteger(m.id) && !m.localOnly && m.id > latest)));
     S.messages = msgs.concat(tail);
     const pending = readOutbox();
     for (const id of clients) delete pending[id];
     writeOutbox(pending);
+    for (const [id, entry] of Object.entries(pending)) {
+      if (typeof entry !== 'object' || !entry || !entry.error || S.messages.some(m => m.client_message_id === id)) continue;
+      S.messages.push({id:'unsent-'+id, role:'user', content:entry.content, created_at:entry.created_at,
+        client_message_id:id, rejected:entry.error, localOnly:true});
+    }
     S.hasMore = msgs.length >= PAGE;
     S.viewMode = 'live';
     S.viewLabel = '';
@@ -1732,6 +1767,13 @@ function renderChat() {
     }
     prevAt = m.created_at;
     box.appendChild(renderMsg(m.role, m.content, m.thinking, m.id));
+    if (m.rejected) {
+      const status = document.createElement('div'); status.className = 'reply-status';
+      const label = document.createElement('span'); label.textContent = '未发送：' + m.rejected;
+      const retry = document.createElement('button'); retry.className = 'btn-mini'; retry.textContent = '重试发送';
+      retry.onclick = () => retryUnsent(m.client_message_id);
+      status.appendChild(label); status.appendChild(retry); box.appendChild(status);
+    }
   });
   S.sinceLastSep = since;
   if (S.streamEl && S.viewMode === 'live') box.appendChild(S.streamEl);
@@ -2118,17 +2160,53 @@ function readOutbox(user=S.user,persona=S.persona) {
 }
 function writeOutbox(value,user=S.user,persona=S.persona) { localStorage.setItem(outboxKey(user,persona), JSON.stringify(value)); }
 
+function blockOutboxMessage(user, persona, id, reason) {
+  const pending = readOutbox(user,persona), content = pending[id];
+  if (typeof content !== 'string') return;
+  pending[id] = {content, error:reason, created_at:new Date().toISOString()};
+  writeOutbox(pending,user,persona);
+  if (user === S.user && persona === S.persona) {
+    const message = S.messages.find(m => m.client_message_id === id);
+    if (message) { message.pending = false; message.rejected = reason; }
+    if (id === S.latestClientMessageId) resetSending();
+    if (S.viewMode === 'live') renderChat();
+    toast(reason,4000);
+  }
+}
+
+async function retryUnsent(id) {
+  const pending = readOutbox(), entry = pending[id];
+  if (!entry || typeof entry !== 'object') return;
+  pending[id] = entry.content; writeOutbox(pending);
+  const message = S.messages.find(m => m.client_message_id === id);
+  if (message) { message.pending = true; delete message.rejected; }
+  S.latestClientMessageId = id;
+  renderChat();
+  const scope = base(), previous = outboxFlushes.get(pkey(S.user,S.persona));
+  if (previous) { try { await previous; } catch (_) {} }
+  if (scope !== base()) return;
+  await recoverReply(true);
+}
+
 const outboxFlushes = new Map();
 function flushOutbox(user,persona) {
   const key=pkey(user,persona), scope=`/api/persona/${enc(user)}/${enc(persona)}`;
   if (outboxFlushes.has(key)) return outboxFlushes.get(key);
   const work=(async () => {
     for (const [id,content] of Object.entries(readOutbox(user,persona))) {
-      const receipt=await api('/api/messages',{method:'POST',body:JSON.stringify({user_id:user,persona_id:persona,content,client_message_id:id})});
+      if (typeof content !== 'string') continue;
+      let receipt;
+      try {
+        receipt=await api('/api/messages',{method:'POST',body:JSON.stringify({user_id:user,persona_id:persona,content,client_message_id:id})});
+      } catch (error) {
+        if (error.status !== 429) throw error;
+        blockOutboxMessage(user,persona,id,error.message);
+        continue;
+      }
       const pending=readOutbox(user,persona); delete pending[id]; writeOutbox(pending,user,persona);
       if (scope===base()) {
         const saved=S.messages.find(m=>m.client_message_id===id);
-        if (saved) { saved.id=receipt.message_id; saved.pending=false; }
+        if (saved) { saved.id=receipt.message_id; saved.pending=false; delete saved.rejected; }
         if (!S.latestClientMessageId || S.latestClientMessageId===id) S.generationId=receipt.generation_id;
       }
     }
@@ -2151,7 +2229,7 @@ async function recoverReply(refreshHistory = false) {
   const epoch = replyRecoveryEpoch, scope = base(), clientId = S.latestClientMessageId;
   const current = () => epoch === replyRecoveryEpoch && scope === base() && clientId === S.latestClientMessageId;
   try {
-    while (Object.keys(readOutbox()).length) {
+    while (Object.values(readOutbox()).some(entry => typeof entry === 'string')) {
       await flushOutbox(S.user,S.persona);
       if (!current()) return;
     }
@@ -2187,7 +2265,7 @@ function handleWs(m) {
   switch (m.type) {
     case 'received': {
       const saved = S.messages.find(x => x.client_message_id === m.client_message_id);
-      if (saved) { saved.id = m.message_id; saved.pending = false; }
+      if (saved) { saved.id = m.message_id; saved.pending = false; delete saved.rejected; }
       const pending = readOutbox();
       delete pending[m.client_message_id];
       writeOutbox(pending);
@@ -2218,6 +2296,7 @@ function handleWs(m) {
     case 'ready':
       // Retry only unacknowledged input, with its original idempotency key.
       for (const [id, content] of Object.entries(readOutbox())) {
+        if (typeof content !== 'string') continue;
         S.latestClientMessageId = id;
         S.ws.send(JSON.stringify({type: 'chat', content, client_message_id: id}));
       }
@@ -2300,6 +2379,11 @@ function handleWs(m) {
       break;
     }
     case 'error': {
+      if (['daily_messages','concurrent_replies'].includes(m.code) && m.client_message_id) {
+        blockOutboxMessage(S.user,S.persona,m.client_message_id,m.message);
+        recoverReply(true);
+        break;
+      }
       stopReplyRecovery();
       if (m.generation_id) S.replyState = {id:m.generation_id, scope:base(), status:'failed', last_error:m.message};
       renderReplyStatus();
@@ -2426,6 +2510,7 @@ function send() {
 /* ---------- 事件绑定 ---------- */
 
 $('btn-send').onclick = send;
+$('usage-refresh').onclick = refreshUsage;
 $('btn-search').onclick = openSearch;
 $('btn-search-close').onclick = closeSearch;
 $('btn-back-live').onclick = backToLive;

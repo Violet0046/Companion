@@ -40,6 +40,7 @@ from companion_ever.notifications.repository import NotificationRepo
 from companion_ever.notifications.service import NotificationService
 from companion_ever.infrastructure.web_push import WebPushSender
 from companion_ever.conversations.proactive import ProactiveService
+from companion_ever.accounts.usage import AccountUsage
 
 
 @dataclass
@@ -71,6 +72,7 @@ class Services:
     background: MemoryScheduler
     notifications: NotificationService | None = None
     proactive: ProactiveService | None = None
+    usage: AccountUsage | None = None
 
 
 @dataclass
@@ -100,6 +102,10 @@ class AppContext:
             self.call_logs = CallLogStore(default_call_dir(self.cfg.db_path), tz_offset_hours=self.cfg.tz_offset_hours)
         if isinstance(self.llm, TracedLLMClient):
             self.llm.store = self.call_logs
+        if self.services.usage is None:
+            self.services.usage = AccountUsage(self.conn, self.cfg.account_limits,
+                tz_offset_hours=self.cfg.tz_offset_hours, call_logs=self.call_logs)
+        self.services.chat.generations.usage = self.services.usage
         if self.lifecycle is None:
             self.lifecycle = build_lifecycle(self.cfg, self.conn, self.services)
 

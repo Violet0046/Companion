@@ -9,6 +9,7 @@ from companion_ever.infrastructure.database.connection import transaction
 from companion_ever.infrastructure.tracing import call_context
 from companion_ever.runtime.errors import describe_error
 from companion_ever.utils.time import parse_sqlite_ts
+from companion_ever.accounts.usage import LimitExceeded
 
 
 class ProactiveService:
@@ -33,6 +34,10 @@ class ProactiveService:
             return {'allowed':False,'reason':'请先与这个角色聊过一句'}
         if snapshot['busy']:
             return {'allowed':False,'reason':'已有回复或主动任务待处理'}
+        try:
+            self.repo.usage.require_capacity(user)
+        except LimitExceeded as exc:
+            return {'allowed':False,'reason':str(exc)}
         if not test:
             now=datetime.now(self.zone)
             day_start=now.replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')

@@ -2,6 +2,8 @@
 from companion_ever.infrastructure.tracing import call_context
 import logging
 import uuid
+import time
+from itertools import chain
 from companion_ever.conversations.reply import split_assistant_reply, split_messages
 from companion_ever.conversations.stream_filter import visible_prefix
 from companion_ever.conversations.generation_repository import GenerationRepo
@@ -135,16 +137,57 @@ class ChatService:
                 if not completed:
                     self.generations.finish(gid,'cancelled')
 
+    def _inline_events(self, user_id, persona_id, user_input, client_message_id, *, stream):
+        """Commit receipt and claim together; follow an existing execution to completion.
+
+        Priming stops at the start event, before prompt construction or model I/O.
+        Recovery cannot observe a new, unclaimed receipt between these two writes.
+        """
+        generation = None
+        seen = set()
+        deadline = time.monotonic() + 300
+        while True:
+            events = None
+            state = None
+            try:
+                with transaction(self.generations.conn):
+                    if generation is None:
+                        generation, _ = self.receive(user_id, persona_id, user_input, client_message_id)
+                    else:
+                        current = self.generations.get(generation['id'])
+                        if current['status'] == 'running' and (current['lease_expires_at'] or 0) <= time.time():
+                            self.generations.finish(current['id'], 'failed', '生成中断，请重试回复')
+                    events = self.reply_events(generation, stream=stream)
+                    first = next(events, None)
+                for event in chain([first] if first else [], events):
+                    state = event['type']
+                    if state == 'message_done':
+                        mid = event['message']['id']
+                        if mid in seen:
+                            continue
+                        seen.add(mid)
+                    yield event
+            finally:
+                if events is not None:
+                    events.close()
+            if state == 'failed':
+                raise ValueError(self.generations.get(generation['id'])['last_error'] or '回复生成失败')
+            if state not in ('queued', 'running'):
+                return
+            if time.monotonic() >= deadline:
+                raise TimeoutError('回复仍在处理中，请稍后查看')
+            time.sleep(.05)
+
     def chat(self,user_id,persona_id,user_input,client_message_id=None):
-        generation,_=self.receive(user_id,persona_id,user_input,client_message_id)
         replies=[]
-        for event in self.reply_events(generation,stream=False):
+        for event in self._inline_events(user_id,persona_id,user_input,client_message_id,stream=False):
             if event['type']=='message_done':
                 replies.append(event.get('raw',event['message']['content']))
         return '\n\n'.join(replies)
 
     def stream_chat(self,user_id,persona_id,user_input,client_message_id=None):
-        generation,_=self.receive(user_id,persona_id,user_input,client_message_id)
-        for event in self.reply_events(generation):
+        for event in self._inline_events(user_id,persona_id,user_input,client_message_id,stream=True):
             if event['type']=='delta':
                 yield event['content']
+            elif event['type']=='message_done' and event.get('replayed'):
+                yield event['message']['content']

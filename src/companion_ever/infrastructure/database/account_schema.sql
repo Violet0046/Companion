@@ -10,4 +10,5 @@ CREATE TABLE IF NOT EXISTS auth_session (
     absolute_expires_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_auth_session_user ON auth_session(user_id);
+CREATE INDEX IF NOT EXISTS idx_log_account_day ON conversation_log(user_id,role,created_at);
 

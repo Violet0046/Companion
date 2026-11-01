@@ -18,6 +18,7 @@ from companion_ever.bootstrap.app import AppContext
 from companion_ever.infrastructure.llm.json_output import strip_thinking
 from companion_ever.entrypoints.web.deps import resolve_target
 from companion_ever.accounts.service import AuthError, COOKIE
+from companion_ever.accounts.usage import LimitExceeded
 from companion_ever.entrypoints.web.schemas import ChatIn, CloseSessionIn, CloseSessionOut, ReadIn, ProactiveIn
 from companion_ever.memory.extraction.sessions import SessionCloseReport
 
@@ -73,6 +74,8 @@ def retry_generation(request: Request,user_id: str,persona_id: str,generation_id
     ctx=_authorized_ctx(request,user_id,persona_id)
     try:
         return _present_snapshot(ctx.services.generation.retry(user_id,persona_id,generation_id))
+    except LimitExceeded:
+        raise
     except LookupError as exc:
         raise HTTPException(404,str(exc)) from exc
     except ValueError as exc:
@@ -95,6 +98,8 @@ def receive_message(request: Request,payload: ChatIn):
     user,persona=resolve_target(ctx,request.app.state.web_cfg,request.state.account['user_id'],payload.persona_id)
     try:
         g,created=ctx.services.generation.submit(user,persona,payload.content,payload.client_message_id)
+    except LimitExceeded:
+        raise
     except ValueError as exc:
         raise HTTPException(409,str(exc)) from exc
     return {'message_id':g['trigger_message_id'],'generation_id':g['id'],'status':g['status'],'duplicate':not created}
@@ -373,6 +378,11 @@ async def ws_chat(
                     generation, created = await run_in_threadpool(
                         ctx.services.generation.submit, user_id, persona_id, content,
                         str(msg.get('client_message_id') or '') or None, on_event=emit)
+                except LimitExceeded as exc:
+                    channel[1].set()
+                    await conn.send({'type':'error','message':str(exc),'code':exc.code,
+                                     'client_message_id':msg.get('client_message_id')})
+                    continue
                 except (ValueError, PermissionError) as exc:
                     channel[1].set()
                     await conn.send({'type':'error','message':str(exc)})

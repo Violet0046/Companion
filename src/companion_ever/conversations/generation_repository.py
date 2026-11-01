@@ -3,12 +3,14 @@ import time
 import uuid
 from companion_ever.infrastructure.database.connection import transaction
 from companion_ever.conversations.repository import ConversationRepo
+from companion_ever.accounts.usage import AccountUsage
 
 
 class GenerationRepo:
     def __init__(self, conn):
         self.conn = conn
         self.messages = ConversationRepo(conn)
+        self.usage = AccountUsage(conn)
 
     def get(self, generation_id):
         row = self.conn.execute(
@@ -37,6 +39,7 @@ class GenerationRepo:
                         raise ValueError('同一 client_message_id 不能用于不同内容')
                     gid = self.conn.execute("SELECT id FROM generation WHERE trigger_message_id=? AND origin='reply' ORDER BY rowid DESC LIMIT 1", (row['id'],)).fetchone()[0]
                     return self.get(gid), False
+            self.usage.require_capacity(user_id, replacing_persona=persona_id, new_message=True)
             self.conn.execute("UPDATE generation SET status='cancelled',completed_at=CURRENT_TIMESTAMP, "
                               "last_error=CASE WHEN origin='proactive' THEN '用户已发来新消息' ELSE last_error END "
                               "WHERE conversation_id=? AND status IN ('queued','running')", (cid,))
@@ -68,6 +71,7 @@ class GenerationRepo:
                 raise ValueError('请重试最新的失败任务')
             if self.outputs(gid):
                 raise ValueError('已有部分回复保存，请继续发送消息')
+            self.usage.require_capacity(old['user_id'])
             retry_id=uuid.uuid4().hex
             self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status) VALUES (?,?,?,'queued')",
                               (retry_id,old['conversation_id'],old['trigger_message_id']))
@@ -75,6 +79,9 @@ class GenerationRepo:
 
     def claim(self, gid):
         with transaction(self.conn):
+            generation = self.get(gid)
+            if not generation or generation['status'] != 'queued' or not self.usage.can_start(generation['user_id']):
+                return False
             cur = self.conn.execute("UPDATE generation SET status='running',started_at=CURRENT_TIMESTAMP,lease_expires_at=? "
                                     "WHERE id=? AND status='queued'", (time.time()+300, gid))
             return cur.rowcount == 1

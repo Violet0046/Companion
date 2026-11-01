@@ -250,12 +250,18 @@ def build_parser() -> argparse.ArgumentParser:
     account = sub.add_parser('account', help='绑定原用户、创建账号、改密与停用')
     accounts = account.add_subparsers(dest='account_cmd', required=True)
     accounts.add_parser('list')
-    for action in ('create', 'reset-password', 'disable', 'enable', 'revoke-sessions'):
+    for action in ('create', 'reset-password', 'disable', 'enable', 'revoke-sessions', 'limits', 'usage'):
         command = accounts.add_parser(action)
         command.add_argument('--username', required=True)
         if action == 'create':
             command.add_argument('--bind-user', help='仅绑定明确指定的原用户；不填则创建空白用户')
             command.add_argument('--permanent', action='store_true', help='本人设置正式密码，无需首次改密')
+        elif action == 'limits':
+            command.add_argument('--daily-messages', type=int, help='每天新消息额度；0 不限')
+            command.add_argument('--concurrent-replies', type=int, help='同时回复任务数；0 不限')
+            command.add_argument('--reset', action='store_true', help='恢复为环境配置的默认额度')
+        elif action == 'usage':
+            command.add_argument('--date', help='YYYY-MM-DD，默认今天')
 
     # serve（Web / PWA）
     p_serve = sub.add_parser(

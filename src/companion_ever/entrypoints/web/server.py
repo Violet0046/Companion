@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from companion_ever.bootstrap.app import AppContext, build_app
 from companion_ever.config import AppConfig, WebConfig
 from companion_ever.accounts.service import AccountService
+from companion_ever.accounts.usage import LimitExceeded
 from companion_ever.entrypoints.web.routes.auth import authorize
 
 # 静态资源目录：src/companion_ever/entrypoints/web/static/
@@ -129,6 +130,10 @@ def create_app(
         # Validation responses must not echo passwords or private request bodies.
         errors = [{key: error[key] for key in ('loc', 'msg', 'type')} for error in exc.errors()]
         return JSONResponse(status_code=422, content={'detail': errors})
+
+    @app.exception_handler(LimitExceeded)
+    async def quota_error(request: Request, exc: LimitExceeded):
+        return JSONResponse(status_code=429, content={'detail': str(exc), 'code': exc.code})
 
     @app.get("/api/health", include_in_schema=False)
     def health() -> JSONResponse:

@@ -1,10 +1,13 @@
 """Local operator commands; credentials are never supplied as command arguments."""
 import getpass
+import json
 from pathlib import Path
 
 from companion_ever.accounts.service import AccountService, MIN_PASSWORD
 from companion_ever.config import AppConfig
 from companion_ever.infrastructure.database.connection import init_db
+from companion_ever.accounts.usage import AccountUsage
+from companion_ever.infrastructure.tracing import CallLogStore, default_call_dir
 
 
 def cmd_account(args):
@@ -32,6 +35,16 @@ def cmd_account(args):
         elif action == 'revoke-sessions':
             service.revoke_sessions(args.username)
             print('[OK] 已撤销全部登录与通知订阅')
+        elif action in ('limits', 'usage'):
+            cfg = AppConfig.from_env()
+            usage = AccountUsage(conn, cfg.account_limits, tz_offset_hours=cfg.tz_offset_hours,
+                                 call_logs=CallLogStore(default_call_dir(path), tz_offset_hours=cfg.tz_offset_hours))
+            if action == 'usage':
+                print(json.dumps(usage.for_login(args.username, args.date), ensure_ascii=False, indent=2))
+            else:
+                user_id = usage.set_limits(args.username, daily=args.daily_messages, concurrent=args.concurrent_replies, reset=args.reset)
+                limits = usage.limits(user_id)
+                print(f"[OK] {args.username}: 每日新消息 {limits['daily_messages'] or '不限'}，同时回复 {limits['concurrent_replies'] or '不限'}")
         else:
             service.set_disabled(args.username, action == 'disable')
             print('[OK] 账号状态已更新')

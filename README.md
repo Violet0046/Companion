@@ -27,6 +27,8 @@ $env:COMPANION_WEB_SECURE_COOKIE="0"
 
 ## 账号与数据隔离
 
+完整管理命令和操作步骤见 [管理命令手册](ADMIN_COMMANDS.md)。
+
 Web 始终要求独立账号登录，共享 PIN 已停用。现有 `user` 表保存登录名和 Argon2id 密码哈希，只新增 `auth_session` 一张表保存可撤销会话。登录凭据使用 HttpOnly Cookie，30 天无活动过期、最多 90 天重新登录；浏览器不保存密码或在 URL 中传凭据。普通账号只可访问自己的角色、聊天、记忆、后台任务、通知及调用记录。
 
 服务器终端管理账号，密码由隐藏输入交互提供，不放进命令参数：
@@ -41,11 +43,21 @@ Web 始终要求独立账号登录，共享 PIN 已停用。现有 `user` 表保
 .venv/bin/python -m companion_ever account revoke-sessions --username friendname
 .venv/bin/python -m companion_ever account disable --username friendname
 .venv/bin/python -m companion_ever account enable --username friendname
+# 查看账号当天用量；可加 --date YYYY-MM-DD
+.venv/bin/python -m companion_ever account usage --username friendname
+# 单独设置好友额度，0 表示不限；--reset 恢复默认额度
+.venv/bin/python -m companion_ever account limits --username friendname --daily-messages 100 --concurrent-replies 1
 ```
 
 登录名为 3–32 位字母、数字、点、下划线或短横线，密码为 6–128 个字符。账号管理不启动模型或后台任务。停用账号保留数据并拒绝访问与后续执行；重新启用不会恢复旧登录。修改或重置密码撤销全部旧登录和通知订阅，需要重新登录并开启通知。「我」页面提供改密、退出和退出所有设备。
 
 HTTPS 部署保持 `COMPANION_WEB_SECURE_COOKIE=1`；反向代理时可将 `COMPANION_WEB_ORIGIN` 设置为实际 HTTPS 入口（不带路径），供来源校验使用。只有本机 HTTP 开发显式设 `COMPANION_WEB_SECURE_COOKIE=0`。切换账号时清理页面与待发送缓存，首次从旧 PIN 版本登录需要重新开启设备通知。数据仍存储于部署者服务器，聊天内容按配置发送给模型提供商；账号隔离不提供端到端加密。
+
+「我 → 今日用量」汇总当前账号全部角色的三层调用、输入/输出及缓存 token、累计模型耗时和失败次数。统计只包含已记录调用，缺失 token 显示未上报，不视为零；输入 token 已包含其中的缓存部分。消息额度直接读取数据库，不依赖日志是否启用。
+
+默认每个账号每天最多接收 200 条新用户消息，同时最多启动 2 个有效回复任务。默认值由 `COMPANION_DAILY_MESSAGES`、`COMPANION_CONCURRENT_REPLIES` 配置，单账号可通过上述命令覆盖。自然日按 `COMPANION_TZ_OFFSET_HOURS` 重置；已接收的消息即使模型失败仍计数，重复提交及失败回复重试不重复计算新消息，重试的实际调用仍进入用量统计。同一会话的新输入可替换旧回复；主动联系同样受回复并发约束，整理与摘要沿用各自调度。
+
+额度不足时不保存新消息、不取消原回复，前端保留未发送文本并提供手动重试，刷新或重连不会反复提交被拒消息。下调并发额度不终止已运行任务，待执行任务在有空位后继续。schema v11 仅增加用户额度覆盖字段与查询索引，不新增表；从旧库升级前自动生成 `.bak-before-account-limits-...` 一致性备份，保留原账号与数据。部署前仍先主动备份，旧代码不能直接读取更新版本的库。
 
 ## 当前行为
 

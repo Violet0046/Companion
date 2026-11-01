@@ -129,6 +129,16 @@ class BackgroundConfig:
             raise ValueError('后台触发阈值必须为正数')
 
 
+@dataclass(frozen=True)
+class AccountLimitsConfig:
+    daily_messages: int = 200
+    concurrent_replies: int = 2
+
+    def __post_init__(self):
+        if any(type(value) is not int or value < 0 for value in (self.daily_messages, self.concurrent_replies)):
+            raise ValueError('账号额度不能为负数，0 表示不限')
+
+
 class AppConfig:
     """全局应用配置（不可变）。
 
@@ -145,6 +155,7 @@ class AppConfig:
         "extraction_timeout",
         "background",
         "push_subject",
+        "account_limits",
     )
 
     def __init__(
@@ -160,6 +171,7 @@ class AppConfig:
         extraction_timeout: float = 120.0,
         background: BackgroundConfig | dict | None = None,
         push_subject: str = "",
+        account_limits: AccountLimitsConfig | dict | None = None,
     ):
         self.db_path = Path(db_path)
         self.tz_offset_hours = tz_offset_hours
@@ -179,6 +191,7 @@ class AppConfig:
         self.extraction_timeout = extraction_timeout
         self.background=background if isinstance(background,BackgroundConfig) else BackgroundConfig(**(background or {}))
         self.push_subject = push_subject.strip()
+        self.account_limits = account_limits if isinstance(account_limits, AccountLimitsConfig) else AccountLimitsConfig(**(account_limits or {}))
 
     @classmethod
     def from_env(
@@ -219,6 +232,10 @@ class AppConfig:
             idle_session_minutes=int(env_source.get("COMPANION_IDLE_MINUTES", "120")),
             extraction_timeout=float(env_source.get("COMPANION_EXTRACTION_TIMEOUT", "120")),
             push_subject=env_source.get('COMPANION_PUSH_SUBJECT', ''),
+            account_limits=AccountLimitsConfig(
+                daily_messages=int(env_source.get('COMPANION_DAILY_MESSAGES', '200')),
+                concurrent_replies=int(env_source.get('COMPANION_CONCURRENT_REPLIES', '2')),
+            ),
             background=BackgroundConfig(
                 enabled=env_source.get('COMPANION_AUTO_MEMORY','1').lower() not in ('0','false','off'),
                 memory_message_threshold=int(env_source.get('COMPANION_MEMORY_TRIGGER_MESSAGES','12')),

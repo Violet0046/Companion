@@ -7,7 +7,7 @@ import re
 
 def migrate(conn):
     version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > 10:
+    if version > 11:
         raise ValueError('数据库版本比当前程序新，拒绝降级运行')
     if version < 1:
         _migrate_jobs(conn)
@@ -29,6 +29,29 @@ def migrate(conn):
         _add_proactive(conn)
     if conn.execute('PRAGMA user_version').fetchone()[0] < 10:
         _add_accounts(conn)
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 11:
+        _add_account_limits(conn)
+
+
+def _add_account_limits(conn):
+    from companion_ever.infrastructure.database.connection import transaction
+    path = conn.execute('PRAGMA database_list').fetchone()[2]
+    if path:
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')
+        backup_path = Path(path + '.bak-before-account-limits-' + stamp)
+        backup_path.touch(mode=0o600, exist_ok=False)
+        backup = sqlite3.connect(backup_path)
+        try:
+            conn.backup(backup)
+        finally:
+            backup.close()
+    with transaction(conn):
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(user)')}
+        for field in ('daily_message_limit', 'concurrent_reply_limit'):
+            if field not in columns:
+                conn.execute(f'ALTER TABLE user ADD COLUMN {field} INTEGER CHECK({field}>=0)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_log_account_day ON conversation_log(user_id,role,created_at)')
+        conn.execute('PRAGMA user_version=11')
 
 
 def _add_accounts(conn):

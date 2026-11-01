@@ -12,6 +12,14 @@ from companion_ever.infrastructure.tracing import summarize_calls
 router = APIRouter()
 
 
+@router.get('/api/usage')
+def account_usage(request: Request, date: str = ''):
+    try:
+        return request.app.state.ctx.services.usage.summary(request.state.account['user_id'], date or None)
+    except ValueError as exc:
+        raise HTTPException(400, '日期必须使用 YYYY-MM-DD') from exc
+
+
 def _records(request, day, user_id, persona_id, layer, status, job_id):
     ctx = request.app.state.ctx
     cfg = request.app.state.web_cfg
