@@ -74,6 +74,7 @@ const S = {
 };
 
 const PAGE = 50;
+let bootRequest = 0;
 /* 关系阶段：block 里存的是英文 key，这里翻成中文 */
 const REL_STAGE = { stranger: '初识', familiar: '熟悉', close: '亲近', deep_bond: '深交' };
 let wasAtBottom = true;
@@ -122,7 +123,7 @@ function dayLabel(day) {
 
 async function api(path, opts = {}) {
   const headers = Object.assign({}, opts.headers || {});
-  if (S.pin) headers['X-Pin'] = S.pin;
+  if (S.pin && headers['X-Pin'] === undefined) headers['X-Pin'] = S.pin;
   if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const controller = new AbortController();
   const timer = setTimeout(()=>controller.abort(),15000);
@@ -133,6 +134,9 @@ async function api(path, opts = {}) {
       try { detail = (await res.json()).detail || detail; } catch (e) { /* ignore */ }
       const err = new Error(detail);
       err.status = res.status;
+      if (res.status === 401 && path !== '/api/auth/check' && (headers['X-Pin'] || '') === S.pin) {
+        invalidateAccess();
+      }
       throw err;
     }
     return await res.json();
@@ -1401,18 +1405,43 @@ document.addEventListener('visibilitychange', () => {
 
 /* ---------- 启动 ---------- */
 
+async function verifyAccess(pin) {
+  const result = await api('/api/auth/check', {method: 'POST', headers: {'X-Pin': pin}});
+  if (result.ok !== true) throw new Error('访问校验未完成');
+}
+
+function invalidateAccess() {
+  ++bootRequest;
+  const hadPin = Boolean(S.pin);
+  S.pin = '';
+  localStorage.removeItem('ce_pin');
+  clearTimeout(S.reconnectTimer);
+  stopReplyRecovery();
+  const ws = S.ws;
+  S.ws = null;
+  S.connected = false;
+  S.user = null;
+  S.persona = null;
+  if (ws) { try { ws.close(); } catch (_) { /* 已断开 */ } }
+  resetSending();
+  $('dialog-persona').classList.add('hidden');
+  $('gate-error').textContent = hadPin ? 'PIN 已失效，请重新输入' : '请输入访问 PIN';
+  showGate();
+}
+
 async function boot() {
+  const request = ++bootRequest;
+  const pin = S.pin;
   try {
+    await verifyAccess(pin);
+    if (request !== bootRequest || S.pin !== pin) return;
     const health = await api('/api/health');
+    if (request !== bootRequest || S.pin !== pin) return;
     S.automaticMemory=health.auto_memory !== false;
-    if (health.auth_required && !S.pin) { showGate(); return; }
-    if (health.auth_required) await api('/api/auth/check', {method: 'POST'});
   } catch (e) {
+    if (request !== bootRequest || S.pin !== pin) return;
     if (e.status === 401) {
-      S.pin = '';
-      localStorage.removeItem('ce_pin');
-      $('gate-error').textContent = 'PIN 已失效，请重新输入';
-      showGate();
+      invalidateAccess();
     } else {
       showGate(true);
     }
@@ -2426,16 +2455,18 @@ $('pin-submit').onclick = async () => {
   const button = $('pin-submit');
   if (button.disabled) return;
   button.disabled = true;
-  S.pin = $('pin-input').value.trim();
+  ++bootRequest;
+  showGate();
+  const pin = $('pin-input').value.trim();
   try {
-    await api('/api/auth/check', {method: 'POST'});
+    await verifyAccess(pin);
+    S.pin = pin;
     localStorage.setItem('ce_pin', S.pin);
     $('pin-input').value = '';
     $('gate-error').textContent = '';
     await boot();
   } catch (e) {
     $('gate-error').textContent = e.status === 401 ? 'PIN 不对' : '暂时无法验证，请稍后重试';
-    S.pin = localStorage.getItem('ce_pin') || '';
   } finally {
     button.disabled = false;
   }
@@ -2500,7 +2531,7 @@ window.addEventListener('online', () => { if (S.user && S.persona) { connect(); 
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => { /* 非 HTTPS 会失败 */ });
+    navigator.serviceWorker.register('/sw.js', {updateViaCache: 'none'}).catch(() => { /* 非 HTTPS 会失败 */ });
   });
 }
 

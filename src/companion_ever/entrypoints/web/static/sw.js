@@ -4,7 +4,7 @@
    局域网 http://192.168.x.x:8000 下这里会注册失败，属于预期。
    ============================================================ */
 
-const CACHE = 'ce-shell-v5';
+const CACHE = 'ce-shell-v6';
 const SHELL = [
   '/',
   '/index.html',
@@ -25,7 +25,7 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('ce-shell-') && k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -35,16 +35,23 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/')) return;
 
   e.respondWith(
-    fetch(req)
+    fetch(req, {cache: 'no-cache'})
       .then((res) => {
+        if (!res.ok) return res;
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
         return res;
       })
-      .catch(() => caches.match(req).then((r) => r || caches.match('/index.html')))
+      .catch(async () => {
+        const saved = await caches.match(req);
+        if (saved) return saved;
+        if (req.mode === 'navigate') return await caches.match('/index.html') || Response.error();
+        return Response.error();
+      })
   );
 });
 

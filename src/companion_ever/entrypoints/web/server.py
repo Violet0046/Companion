@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import socket
 from pathlib import Path
 
 from fastapi import FastAPI, Header, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from companion_ever.bootstrap.app import AppContext, build_app
@@ -26,6 +27,16 @@ from companion_ever.entrypoints.web.deps import check_pin
 
 # 静态资源目录：src/companion_ever/entrypoints/web/static/
 WEB_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _frontend_version() -> str:
+    digest = hashlib.sha256()
+    for name in ('index.html', 'app.js', 'styles.css', 'calls.html', 'calls.js', 'sw.js'):
+        path = WEB_DIR / name
+        if path.is_file():
+            digest.update(name.encode('utf-8'))
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
 
 
 @contextlib.asynccontextmanager
@@ -69,6 +80,7 @@ def create_app(
     app.state.ctx = ctx
     app.state.owns_context = owns_context
     app.state.web_cfg = web_cfg
+    app.state.frontend_version = _frontend_version()
 
     @app.middleware('http')
     async def no_cached_state(request,call_next):
@@ -106,6 +118,7 @@ def create_app(
         return JSONResponse({
             "ok": True,
             "auth_required": bool(web_cfg.pin),
+            "frontend_version": app.state.frontend_version,
             "idle_minutes": idle,
             "auto_memory": app.state.ctx.cfg.background.enabled,
             "memory_idle_seconds": app.state.ctx.cfg.background.memory_idle_seconds,
@@ -136,6 +149,21 @@ def create_app(
 
     # --- 静态资源（PWA 壳）---
     if WEB_DIR.is_dir():
+        def render_shell(name: str) -> HTMLResponse:
+            content = (WEB_DIR / name).read_text(encoding='utf-8')
+            for asset in ('app.js', 'styles.css', 'calls.js'):
+                content = content.replace(f'"/{asset}"', f'"/{asset}?v={app.state.frontend_version}"')
+            return HTMLResponse(content)
+
+        @app.get('/', include_in_schema=False)
+        @app.get('/index.html', include_in_schema=False)
+        def index() -> HTMLResponse:
+            return render_shell('index.html')
+
+        @app.get('/calls.html', include_in_schema=False)
+        def call_page() -> HTMLResponse:
+            return render_shell('calls.html')
+
         app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
     else:  # pragma: no cover — 打包异常时的兜底
         @app.get("/", include_in_schema=False)
