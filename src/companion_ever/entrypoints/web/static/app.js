@@ -333,6 +333,7 @@ function setTyping(on) {
   } else {
     el.textContent = S.personaTitle || S.persona || '';
   }
+  updateContinueButton();
 }
 
 /**
@@ -2251,6 +2252,7 @@ function buildThinkBlock(thinking) {
  * 点一下直接跳到底部。
  */
 function updateJumpButton() {
+  updateContinueButton();
   const btn = $('btn-jump-latest');
   if (!btn) return;
   const show = !S.locating && (!!S.quoteReturn || (S.viewMode==='live' || S.viewMode==='quote') && (!wasAtBottom || S.hasNewer));
@@ -2259,6 +2261,48 @@ function updateJumpButton() {
   const text=S.quoteReturn ? '回到引用位置' : S.newCount > 0 ? `${S.newCount} 条新消息` : '回到最新';
   if (label) label.textContent=text;
   btn.setAttribute?.('aria-label',text);
+}
+
+function continueKey() {return `ce_group_continue:${S.user}:${S.group?.id}`;}
+function updateContinueButton() {
+  const button=$('btn-group-continue');
+  button.classList.toggle('hidden',!S.group);
+  button.disabled=!S.group || S.typing || S.sending || S.locating || S.viewMode!=='live'
+    || S.continueSubmitting===base() || !S.messages.length || Object.values(readOutbox()).some(pendingEntry);
+  button.textContent=S.group && localStorage.getItem(continueKey()) ? '重试续聊' : '继续聊聊';
+}
+
+async function continueGroup() {
+  if(!S.group || $('btn-group-continue').disabled)return;
+  const scope=base(),key=continueKey(),actor=S.account?.csrf_token,navigation=S.targetRequest,clientId=S.latestClientMessageId;
+  const current=()=>scope===base() && actor===S.account?.csrf_token && navigation===S.targetRequest && clientId===S.latestClientMessageId;
+  let request;
+  try{request=JSON.parse(localStorage.getItem(key) || 'null');}catch(_){}
+  if(!request){
+    const last=S.messages.filter(m=>Number.isSafeInteger(m.id) && !m.localOnly && !m.pending).at(-1);
+    if(!last)return;
+    request={request_key:globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,after_message_id:last.id};
+    localStorage.setItem(key,JSON.stringify(request));
+  }
+  S.continueSubmitting=scope;updateContinueButton();
+  try{
+    const result=await api(`${scope}/continue`,{method:'POST',body:JSON.stringify(request)});
+    localStorage.removeItem(key);
+    if(!current())return;
+    S.generationId=result.generation_id;S.latestClientMessageId=null;
+    setTyping(['queued','running'].includes(result.status));
+    await recoverReply(true);
+  } catch(error){
+    if(error.status>=400 && error.status<500)localStorage.removeItem(key);
+    if(current()){
+      if(error.status)toast(error.message);
+      await recoverReply(true);
+      if(!error.status && scope===base() && localStorage.getItem(key))toast('续聊请求尚未确认，可点“重试续聊”');
+    }
+  } finally{
+    if(S.continueSubmitting===scope)S.continueSubmitting=null;
+    updateContinueButton();
+  }
 }
 
 /** 重新渲染当前这屏，但保持用户正在看的位置 */
@@ -2614,6 +2658,9 @@ async function recoverReply(refreshHistory = false) {
     }
     const g = await api(`${scope}/generation`);
     if (!current()) return;
+    if(S.group && g?.request_key){
+      try{if(JSON.parse(localStorage.getItem(continueKey()) || 'null')?.request_key===g.request_key)localStorage.removeItem(continueKey());}catch(_){}
+    }
     if (refreshHistory && S.viewMode === 'live') {
       await loadHistory(true, { keepScroll: !wasAtBottom });
       if (!current()) return;
@@ -2864,6 +2911,7 @@ function send() {
   const text = S.group ? input.value : input.value.trim();
   if (!text.trim()) return;
   if (!S.user || (!S.persona && !S.group)) return;
+  if(S.group)localStorage.removeItem(continueKey());
   const context={quoted_message_id:S.quote?.id || null,quoted_message:S.quote ? {...S.quote} : null,mentions:sendMentions(text)};
   if(S.viewMode!=='live'){
     cancelLocation();S.quoteReturn=null;S.viewMode='live';S.hasNewer=false;updateHistoryBar();
@@ -2900,6 +2948,7 @@ function send() {
   setTimeout(()=>{ if (S.latestClientMessageId===requestId && readOutbox()[requestId]) recoverReply(true); },1500);
   S.sending = true;
   $('btn-send').disabled = false;
+  updateContinueButton();
   scrollBottom();
   // 键盘弹起时视口会变小，待底部重新滚动，避免新消息被掩住
   setTimeout(() => {
@@ -2911,6 +2960,7 @@ function send() {
 /* ---------- 事件绑定 ---------- */
 
 $('btn-send').onclick = send;
+$('btn-group-continue').onclick=continueGroup;
 $('usage-refresh').onclick = refreshUsage;
 $('btn-search').onclick = openSearch;
 $('btn-search-close').onclick = closeSearch;
@@ -3088,7 +3138,7 @@ async function finishLocalLogout() {
     await subscription?.unsubscribe();
   } catch (_) {}
   for (const key of Object.keys(localStorage)) {
-    if (key.startsWith('companion-outbox:') || key.startsWith('companion-group-outbox:') || key.startsWith('ce_read_') || ['ce_pin','ce_user','ce_persona'].includes(key)) localStorage.removeItem(key);
+    if (key.startsWith('companion-outbox:') || key.startsWith('companion-group-outbox:') || key.startsWith('ce_group_continue:') || key.startsWith('ce_read_') || ['ce_pin','ce_user','ce_persona'].includes(key)) localStorage.removeItem(key);
   }
   invalidateAccess();
   location.replace('/');

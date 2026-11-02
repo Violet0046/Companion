@@ -1,5 +1,6 @@
 """Owned group conversations and bounded, durable invitations on the shared generation runtime."""
 import json
+import logging
 import time
 from datetime import datetime,timezone,timedelta
 
@@ -11,6 +12,16 @@ from companion_ever.infrastructure.tracing import call_context
 from companion_ever.conversations.reply import split_assistant_reply
 from companion_ever.runtime.errors import describe_error
 from companion_ever.conversations.group_repository import GroupRepo
+from companion_ever.infrastructure.llm.json_output import clean_response
+
+
+MAX_GROUP_SPEAKERS=3
+
+
+class Handoff(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    persona_id: StrictStr
+    message_index: StrictInt = Field(ge=0,le=2)
 
 
 class GroupReply(BaseModel):
@@ -18,6 +29,7 @@ class GroupReply(BaseModel):
     decision: Literal['speak','skip']
     channel: Literal['group'] | None
     messages: list[StrictStr] = Field(max_length=3)
+    handoff: Handoff | None = None
 
 
 class Invitation(BaseModel):
@@ -162,6 +174,28 @@ class GroupService:
             gid=self.group_repo.receive(user,cid,content,client_id,quoted_message_id,normalized,targets)
             return self.repo.get(gid),True
 
+    def continue_group(self,user,cid,request_key,after_message_id=None):
+        if not isinstance(request_key,str) or not request_key.strip() or len(request_key)>128:
+            raise ValueError('续聊请求标识无效')
+        with transaction(self.conn):
+            self.require(user,cid)
+            old=self.group_repo.continuation(cid,request_key)
+            if old:
+                generation=self.repo.get(old)
+                if after_message_id is not None and after_message_id!=generation['context_message_id']:
+                    raise ValueError('同一续聊请求标识不能用于不同消息')
+                return generation,False
+            if self.conn.execute("SELECT 1 FROM generation WHERE conversation_id=? AND status IN ('queued','running')",(cid,)).fetchone():
+                raise ValueError('群里正在回复，请等这一轮结束后再继续')
+            history=self.group_repo.history(cid,limit=1)
+            if not history:raise ValueError('先发一条消息，再邀请大家接话')
+            anchor=history[0]['id']
+            if after_message_id is not None and after_message_id!=anchor:
+                raise ValueError('群聊已有新消息，请回到最新后再继续')
+            self.repo.usage.require_capacity(user,new_message=True)
+            gid=self.group_repo.continue_group(cid,anchor,request_key)
+            return self.repo.get(gid),True
+
     def _history_for(self,g,persona=None):
         user=g['user_id'];cid=g['conversation_id']
         history=self.history(user,cid,limit=self.prompt.history_max_messages)
@@ -196,8 +230,8 @@ class GroupService:
         else:
             prompt=self.prompt.build_group_coordination(g['user_id'],members=members,eligible_ids=eligible,
                 history=self._history_for(g),trigger_message_id=g['trigger_message_id'],spoken_ids=done,remaining=remaining,
-                conversation_id=g['conversation_id'],proactive=g['origin']=='proactive')
-            plan=Plan.model_validate_json(self._request(g,'coordination',None,prompt['messages'],'group_coordination'))
+                conversation_id=g['conversation_id'],proactive=g['origin']=='proactive',manual=g['trigger_kind']=='manual_continue')
+            plan=Plan.model_validate_json(clean_response(self._request(g,'coordination',None,prompt['messages'],'group_coordination')))
             if len(plan.invitations)>remaining:raise ValueError('协调邀请超过名额')
             seen=set()
             for inv in plan.invitations:
@@ -213,18 +247,52 @@ class GroupService:
 
     def _reply(self,g,persona):
         member=self.require_member(g['user_id'],g['conversation_id'],persona)
-        hint=self.group_repo.suggestion(g['id'],persona)
-        prompt=self.prompt.build_group(g['user_id'],persona,history=self._history_for(g,persona),
-            trigger_message_id=g['trigger_message_id'],suggestion=hint if hint is not None else '用户明确 @ 你，优先回应用户。',
-            conversation_id=g['conversation_id'],proactive=g['origin']=='proactive')
-        reply=GroupReply.model_validate_json(self._request(g,'chat',persona,prompt['messages'],'group_reply'))
+        invitation=self.group_repo.invitation(g['id'],persona)
+        history=self._history_for(g,persona)
+        targets=json.loads(g['target_persona_ids']);done=json.loads(g['completed_persona_ids'])
+        members=[m['persona_id'] for m in self.members(g['user_id'],g['conversation_id'])]
+        pending=[p for p in targets if p not in done and p!=persona]
+        limit=1 if g['origin']=='proactive' else MAX_GROUP_SPEAKERS
+        source_id=invitation['source_message_id'] if invitation else None
+        source=next((m for m in history if m['id']==(source_id or g['trigger_message_id'])),None)
+        invocation={
+            'kind':'ai_mention' if source_id else 'coordination' if invitation else 'user_mention',
+            'round_trigger':'idle' if g['origin']=='proactive' else g['trigger_kind'],
+            'root_message_id':g['trigger_message_id'],
+            'source_message_id':source_id or g['trigger_message_id'],
+            'source_message':source,
+            'members':members,'already_spoken_ids':done,'pending_persona_ids':pending,
+            'handoff_eligible_ids':[p for p in members if p!=persona and p not in done and (p in pending or len(targets)<limit)],
+            'remaining_new_speakers':max(0,limit-len(targets)),
+        }
+        hint=invitation['suggestion'] if invitation else ''
+        prompt=self.prompt.build_group(g['user_id'],persona,history=history,
+            trigger_message_id=g['trigger_message_id'],suggestion=hint,
+            conversation_id=g['conversation_id'],proactive=g['origin']=='proactive',invocation=invocation)
+        reply=GroupReply.model_validate_json(clean_response(self._request(g,'chat',persona,prompt['messages'],'group_reply')))
         if (reply.decision=='skip' and (reply.channel is not None or reply.messages)) or (reply.decision=='speak' and (reply.channel!='group' or not reply.messages or any(not m.strip() or len(m)>16000 for m in reply.messages))):
             raise ValueError('群回复格式无效')
         saved=[]
         with transaction(self.conn):
             current_member=self.require_member(g['user_id'],g['conversation_id'],persona)
             if current_member['revision']!=member['revision'] or not self.active(g['id']):return []
-            saved=[self.present(row) for row in self.group_repo.save_reply(g,persona,reply.messages)]
+            # Output and its next invitation commit together. An interruption can
+            # retry the recipient without regenerating an already delivered speaker.
+            texts=[m.strip() for m in reply.messages];mentions={};handoff=reply.handoff
+            if handoff and (not texts or handoff.message_index>=len(texts) or handoff.persona_id not in invocation['handoff_eligible_ids']):
+                logging.getLogger(__name__).warning('忽略无效群交棒：generation=%s persona=%s',g['id'],persona)
+                handoff=None
+            if handoff:
+                self.require_member(g['user_id'],g['conversation_id'],handoff.persona_id)
+                i=handoff.message_index;token='@'+handoff.persona_id
+                # Program-generated suffix keeps display and Unicode mention offsets
+                # identical. Textual @ alone never schedules a model.
+                if not texts[i].endswith(token):texts[i]+=' '+token
+                if len(texts[i])>16000:raise ValueError('交棒消息过长')
+                mentions[i]=[{'persona_id':handoff.persona_id,'start':len(texts[i])-len(token),'end':len(texts[i])}]
+            rows=self.group_repo.save_reply(g,persona,texts,mentions,reply_to=source_id)
+            if handoff:self.group_repo.save_handoff(g,handoff.persona_id,rows[handoff.message_index]['id'])
+            saved=[self.present(row) for row in rows]
             if saved:self._notify_saved(g['id'])
         return saved
 

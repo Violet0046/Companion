@@ -36,6 +36,11 @@ class VisibleIn(BaseModel):
     visible:bool
 
 
+class ContinueIn(BaseModel):
+    request_key:str=Field(min_length=1,max_length=128)
+    after_message_id:StrictInt|None=Field(default=None,gt=0)
+
+
 def target(request,cid):
     ctx=request.app.state.ctx;user=request.state.account['user_id']
     ctx.services.groups.require(user,cid)
@@ -101,6 +106,13 @@ def receive(request:Request,cid:int,payload:GroupChatIn):
 @router.get('/api/groups/{cid}/generation')
 def latest(request:Request,cid:int):
     ctx,user=target(request,cid);return _present_snapshot(ctx.services.generation.group_snapshot(user,cid))
+
+
+@router.post('/api/groups/{cid}/continue')
+def continue_group(request:Request,cid:int,payload:ContinueIn):
+    ctx,user=target(request,cid)
+    g,created=checked(ctx.services.generation.continue_group,user,cid,payload.request_key,payload.after_message_id)
+    return {'generation_id':g['id'],'status':g['status'],'duplicate':not created}
 
 
 @router.get('/api/groups/{cid}/generations/{gid}')

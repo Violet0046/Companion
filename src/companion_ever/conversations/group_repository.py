@@ -100,10 +100,21 @@ class GroupRepo:
 
     def retry(self,old):
         gid=uuid.uuid4().hex
-        self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,actor_persona_id,target_persona_ids,completed_persona_ids,coordination_done) "
-            "VALUES (?,?,?,'queued',?,?,?,?)",(gid,old['conversation_id'],old['trigger_message_id'],old['actor_persona_id'],old['target_persona_ids'],old['completed_persona_ids'],old['coordination_done']))
-        self.conn.execute('INSERT INTO group_invitation SELECT ?,persona_id,suggestion,anchor_message_ids FROM group_invitation WHERE generation_id=?',(gid,old['id']))
+        self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,actor_persona_id,target_persona_ids,completed_persona_ids,coordination_done,trigger_kind,request_key,context_message_id) "
+            "VALUES (?,?,?,'queued',?,?,?,?,?,?,?)",(gid,old['conversation_id'],old['trigger_message_id'],old['actor_persona_id'],old['target_persona_ids'],old['completed_persona_ids'],old['coordination_done'],old['trigger_kind'],old['request_key'],old['context_message_id']))
+        self.conn.execute('INSERT INTO group_invitation(generation_id,persona_id,suggestion,anchor_message_ids,source_message_id) '
+            'SELECT ?,persona_id,suggestion,anchor_message_ids,source_message_id FROM group_invitation WHERE generation_id=?',(gid,old['id']))
         return gid
+
+    def continue_group(self,cid,anchor,request_key):
+        gid=uuid.uuid4().hex
+        self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,trigger_kind,request_key,context_message_id) "
+            "VALUES (?,?,?,'queued','manual_continue',?,?)",(gid,cid,anchor,request_key,anchor))
+        return gid
+
+    def continuation(self,cid,request_key):
+        row=self.conn.execute('SELECT id FROM generation WHERE conversation_id=? AND request_key=? ORDER BY rowid DESC LIMIT 1',(cid,request_key)).fetchone()
+        return row['id'] if row else None
 
     def receive(self,user,cid,content,client_id,quoted_message_id,mentions,targets):
         self.conn.execute("UPDATE generation SET status='cancelled',completed_at=CURRENT_TIMESTAMP WHERE conversation_id=? AND status IN ('queued','running')",(cid,))
@@ -112,7 +123,7 @@ class GroupRepo:
             "VALUES (?,?,'user',?,?,'user',?,?,?,?)",(user,turn,content,cid,user,client_id or uuid.uuid4().hex,quoted_message_id,json.dumps(mentions))).lastrowid
         gid=uuid.uuid4().hex
         self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,actor_persona_id,target_persona_ids,coordination_done) VALUES (?,?,?,'queued',?,?,?)",
-            (gid,cid,mid,targets[0] if targets else None,json.dumps(targets),int(len(targets)==2)))
+            (gid,cid,mid,targets[0] if targets else None,json.dumps(targets),int(bool(targets))))
         return gid
 
     def reserve_call(self,gid):
@@ -125,17 +136,28 @@ class GroupRepo:
         self.conn.execute('UPDATE generation SET target_persona_ids=?,coordination_done=1 WHERE id=?',
             (json.dumps(targets+[inv.persona_id for inv in invitations]),gid))
 
-    def suggestion(self,gid,persona):
-        row=self.conn.execute('SELECT suggestion FROM group_invitation WHERE generation_id=? AND persona_id=?',(gid,persona)).fetchone()
-        return row[0] if row else None
+    def invitation(self,gid,persona):
+        row=self.conn.execute('SELECT * FROM group_invitation WHERE generation_id=? AND persona_id=?',(gid,persona)).fetchone()
+        return dict(row) if row else None
 
-    def save_reply(self,g,persona,messages):
+    def save_handoff(self,g,persona,source_id):
+        targets=json.loads(g['target_persona_ids'])
+        if persona not in targets:targets.append(persona)
+        # User-selected members have no invitation row; their explicit order and
+        # trigger take precedence. Existing coordinator invitations can be clarified.
+        if persona not in json.loads(g['target_persona_ids']) or self.invitation(g['id'],persona):
+            self.conn.execute('INSERT INTO group_invitation(generation_id,persona_id,suggestion,anchor_message_ids,source_message_id) '
+                "VALUES (?,?,'',?,?) ON CONFLICT(generation_id,persona_id) DO UPDATE SET suggestion='',source_message_id=excluded.source_message_id,anchor_message_ids=excluded.anchor_message_ids",
+                (g['id'],persona,json.dumps([source_id]),source_id))
+        self.conn.execute('UPDATE generation SET target_persona_ids=? WHERE id=?',(json.dumps(targets),g['id']))
+
+    def save_reply(self,g,persona,messages,mentions=None,reply_to=None):
         saved=[]
         index=self.conn.execute('SELECT count(*) FROM conversation_log WHERE generation_id=?',(g['id'],)).fetchone()[0]
         turn=self.conn.execute('SELECT turn_index FROM conversation_log WHERE id=?',(g['trigger_message_id'],)).fetchone()[0]
         for offset,text in enumerate(messages):
-            mid=self.conn.execute("INSERT INTO conversation_log(user_id,turn_index,role,content,conversation_id,sender_kind,sender_id,reply_to_message_id,generation_id,output_index) "
-                "VALUES (?,?,'assistant',?,?,'persona',?,?,?,?)",(g['user_id'],turn,text.strip(),g['conversation_id'],persona,g['trigger_message_id'],g['id'],index+offset)).lastrowid
+            mid=self.conn.execute("INSERT INTO conversation_log(user_id,turn_index,role,content,conversation_id,sender_kind,sender_id,reply_to_message_id,generation_id,output_index,mentions_json) "
+                "VALUES (?,?,'assistant',?,?,'persona',?,?,?,?,?)",(g['user_id'],turn,text.strip(),g['conversation_id'],persona,reply_to or g['trigger_message_id'],g['id'],index+offset,json.dumps((mentions or {}).get(offset,[])))).lastrowid
             saved.append(self.conn.execute('SELECT * FROM conversation_log WHERE id=?',(mid,)).fetchone())
         done=json.loads(g['completed_persona_ids']);done.append(persona)
         self.conn.execute('UPDATE generation SET completed_persona_ids=? WHERE id=?',(json.dumps(done),g['id']))

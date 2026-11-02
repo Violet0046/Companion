@@ -7,7 +7,7 @@ import re
 
 def migrate(conn):
     version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > 13:
+    if version > 14:
         raise ValueError('数据库版本比当前程序新，拒绝降级运行')
     if version < 1:
         _migrate_jobs(conn)
@@ -35,6 +35,33 @@ def migrate(conn):
         _add_group_conversations(conn)
     if conn.execute('PRAGMA user_version').fetchone()[0] < 13:
         _add_group_automation(conn)
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 14:
+        _add_group_handoffs(conn)
+
+
+def _add_group_handoffs(conn):
+    """Add invocation provenance without rewriting messages or existing invitations."""
+    from companion_ever.infrastructure.database.connection import transaction
+    path=conn.execute('PRAGMA database_list').fetchone()[2]
+    if path and conn.execute('SELECT 1 FROM user LIMIT 1').fetchone():
+        backup_path=Path(path+'.bak-before-group-handoffs-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
+        backup_path.touch(mode=0o600,exist_ok=False)
+        backup=sqlite3.connect(backup_path)
+        try:conn.backup(backup)
+        finally:backup.close()
+    with transaction(conn):
+        for table,column,definition in (
+            ('generation','trigger_kind',"TEXT NOT NULL DEFAULT 'user_message'"),
+            ('generation','request_key','TEXT'),
+            ('group_invitation','source_message_id','INTEGER REFERENCES conversation_log(id)'),
+        ):
+            if column not in {r['name'] for r in conn.execute('PRAGMA table_info('+table+')')}:
+                conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_generation_manual_request ON generation(conversation_id,request_key) WHERE request_key IS NOT NULL')
+        conn.execute("UPDATE generation SET coordination_done=1 WHERE conversation_id IN (SELECT id FROM conversation WHERE kind='group') "
+            "AND origin='reply' AND coordination_done=0 AND json_array_length(target_persona_ids)>0")
+        if conn.execute('PRAGMA foreign_key_check').fetchone():raise ValueError('群交棒迁移外键检查失败')
+        conn.execute('PRAGMA user_version=14')
 
 
 def _add_group_automation(conn):

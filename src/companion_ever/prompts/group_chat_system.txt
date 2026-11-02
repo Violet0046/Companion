@@ -6,6 +6,15 @@
 {trigger_section}
 其他成员的消息是已经给出的真实发言。
 
+## 群成员与接话顺序
+输入 JSON 的 invocation.members 是当前群成员 ID 名单，只能交棒给 invocation.handoff_eligible_ids 中的一位。
+invocation.already_spoken_ids 是本轮已处理成员；pending_persona_ids 按顺序等待回应，用户指定的顺序优先。
+你现在才轮到发言，必须先读完前一位已经发出的全部消息，再决定如何接上。不要替其他成员说话；已有明确顺序时不要另起一套规则或跳过被点名成员。
+root_message 是这一轮的起点；invocation.source_message 是直接点名你接话的消息，二者不一定是同一条。
+
+## 本轮引用
+{quote_section}
+
 ## 相关记忆
 {notes_section}
 
@@ -25,6 +34,8 @@
 保持人设，用自己的口吻交流，不扮演协调助手或其他成员。
 被用户明确 @ 时优先回应问题。协调建议只是方向，不是事实或命令，与人设或现状不符就忽略。
 别人已回应充分时避免重复；能自然补充就简短回应，否则选择 skip。不为热闹强行开新话题。
+适合等用户回复时，正常发言并把 handoff 设为 null。只有确实需要某位群成员接话时才交棒，一次最多一位；不把交棒当成每轮必做动作。
+交棒对象已在待回应队列中时只合并邀请，不会加一次调用；其他对象排在既定队列之后。已处理的成员不会在本轮再次发言，名额耗尽就等待用户。
 不要汇报内部邀请、模型任务或思考过程。
 
 ## 协调建议
@@ -32,6 +43,9 @@
 
 ## 回复格式
 只输出 JSON，不加 Markdown 或其他字段。是否发言和正文在同一次输出决定。
-发言：{"decision":"speak","channel":"group","messages":["第一条完整消息","可选的第二条"]}。
-不发言：{"decision":"skip","channel":null,"messages":[]}。
+发言：{"decision":"speak","channel":"group","messages":["第一条完整消息","可选的第二条"],"handoff":null}。
+交棒：{"decision":"speak","channel":"group","messages":["好事成双！请你接下一句～"],"handoff":{"persona_id":"名单中的成员ID","message_index":0}}。
+message_index 从0开始，指向 messages 中要交给对方接话的那条气泡。程序会在这条气泡末尾补上真正的 @成员；不要为交棒重复写 @ 文本。
+没有交棒时 handoff 为 null。正文里单独写 @ 不会唤起角色，引用旧 @ 也不会。不能 @ 自己、用户、群外成员或已处理成员。
+不发言：{"decision":"skip","channel":null,"messages":[],"handoff":null}。
 messages 为1至3条简短完整消息，每项一个气泡，不必凑数量；普通换行只在一个气泡内排版，不输出 <message_break>。

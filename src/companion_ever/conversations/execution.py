@@ -64,6 +64,11 @@ class GenerationService:
         if created or generation['status']=='queued' or on_event is not None:self._start(generation,on_event)
         return generation,created
 
+    def continue_group(self,user,cid,request_key,after_message_id=None):
+        generation,created=self.groups.continue_group(user,cid,request_key,after_message_id)
+        if created or generation['status']=='queued':self._start(generation)
+        return generation,created
+
     def group_snapshot(self,user,cid,gid=None):
         import json
         self.groups.require(user,cid)

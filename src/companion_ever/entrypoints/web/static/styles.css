@@ -228,6 +228,11 @@ body {
   border-top: 1px solid var(--line);
 }
 .composer-row { display: flex; align-items: flex-end; gap: 8px; }
+.group-continue {
+  display: block; margin: 0 0 7px auto; padding: 5px 12px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--surface); color: var(--text-dim); font: inherit; font-size: 12px;
+}
+.group-continue:disabled { opacity: .45; }
 
 #input {
   flex: 1 1 auto; resize: none;

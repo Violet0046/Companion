@@ -5,6 +5,8 @@
 
 可用模板：
 - chat_system.txt: 聊天 system prompt 的完整骨架（章节标题 + 行为指引）
+- group_chat_system.txt: 群角色身份、顺序接话、交棒与 JSON 回复契约
+- group_coordination_system.txt: 一次协调产生有顺序的成员邀请
 - memory_draft_system.txt: 后台整理两层笔记的系统提示
 - summary_system.txt: 从 fact 操作独立演化两个摘要的系统提示
 - repair_evidence.txt / repair_citation.txt: 校验失败后的来源约束（按场景区分）
@@ -13,6 +15,8 @@
 - chat_system.txt 用 `{name}` 占位符填充小节正文；小节标题是字面文本，
   行为指引直接引用同一批标题，因此"提示词引用的章节"与"实际渲染的章节"
   不会走偏。占位符为空的小节连同标题一起消失。
+- 私聊与群聊的本轮引用均由 PromptService 统一组装；没有引用时不增加说明。
+- 群角色共用一个模板，通过 invocation 区分用户 @、AI 交棒、协调邀请和手动续聊，不为组合新增模板。
 - 其余模板由调用方自行拼接（摘要、纠错说明等），只提供静态文本。
 """
 from __future__ import annotations
