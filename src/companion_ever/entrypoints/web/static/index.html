@@ -80,9 +80,10 @@
         <div class="scroll">
           <div class="me-card">
             <div class="ava ava-xl ava-s3" id="me-avatar">·</div>
-            <div>
+            <div class="me-details">
               <div class="me-name" id="me-name">…</div>
               <div class="me-sub" id="me-sub"></div>
+              <div class="me-sub" id="me-memory-sub"></div>
             </div>
           </div>
           <div class="group">
@@ -99,10 +100,9 @@
             <a class="row hidden" id="call-log-link" href="/calls.html"><span>模型调用记录</span><span class="row-val">查看 ›</span></a>
           </div>
           <div class="group">
-            <div class="row"><span>今日用量</span><button class="notification-action" id="usage-refresh" type="button">刷新</button></div>
-            <div id="usage-stats" aria-live="polite">查看今日消息额度与模型用量</div>
+            <div class="row"><span>今日用量</span><button class="notification-action" id="usage-refresh" type="button" aria-label="刷新今日用量">刷新</button></div>
+            <div id="usage-stats" aria-live="polite"></div>
           </div>
-          <div class="hint" id="me-hint"></div>
         </div>
       </section>
 

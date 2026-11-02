@@ -831,21 +831,21 @@ async function restorePersona(user, persona) {
 
 function renderMe() {
   if (!$('me-name')) return;
-  let notes = 0, msgs = 0, sessions = 0;
-  S.convs.forEach((c) => {
+  const user=S.account?.user_id || S.user;
+  const overview=usageSnapshot && usageSnapshot.user===user ? usageSnapshot.value.overview : null;
+  let notes = 0, msgs = 0;
+  S.convs.filter(c=>c.user===user).forEach((c) => {
     if (!c.summary) return;
     notes += c.summary.note_count || 0;
     msgs += c.summary.message_count || 0;
-    sessions += c.summary.session_count || 0;
   });
   renderAccountAvatar();
   $('me-name').textContent = S.account?.username || '我';
-  const user=S.account?.user_id || S.user;
   const roles=allPersonas().filter(p=>p.user===user).length,groups=S.convs.filter(c=>c.group_id && c.user===user).length;
-  $('me-sub').textContent = `${roles} 个角色${groups ? ` · ${groups} 个群聊` : ''} · 共 ${notes} 条记忆 · ${msgs} 条消息`;
+  $('me-sub').textContent = `${roles} 个角色 · ${groups} 个群聊 · ${overview?.message_count ?? msgs} 条消息`;
+  $('me-memory-sub').textContent = `${overview?.extraction_count ?? '—'} 次整理 · 共 ${overview?.note_count ?? notes} 条记忆`;
   $('me-server').textContent = location.host;
   $('me-version').textContent = 'v0.3.0';
-  $('me-hint').textContent = `共 ${sessions} 次记录。切换角色请到「通讯录」。`;
 }
 
 function renderAccountAvatar() {
@@ -858,17 +858,27 @@ function renderAccountAvatar() {
 }
 
 let usageRequest = 0;
+let usageSnapshot = null;
 async function refreshUsage() {
   if (!S.account) return;
   const request = ++usageRequest, user = S.account.user_id;
   const box = $('usage-stats');
-  box.textContent = '正在读取…';
+  const button = $('usage-refresh');
+  button.disabled = true; button.textContent = '刷新中'; button.classList.add('is-loading');
+  box.setAttribute('aria-busy', 'true');
+  box.querySelector('[data-usage-error]')?.remove();
+  if (usageSnapshot?.user !== user) {
+    box.innerHTML = ['已发消息','正在回复','已记录模型调用','输入 / 输出 token','其中缓存输入','模型累计耗时']
+      .map(label=>`<div class="row"><span>${label}</span><span class="usage-skeleton" aria-hidden="true"></span></div>`).join('');
+  }
   try {
     const usage = await api('/api/usage');
     if (request !== usageRequest || user !== S.account?.user_id) return;
+    usageSnapshot = {user, value: usage};
+    renderMe();
     const messages = usage.messages, replies = usage.replies, calls = usage.calls;
     const number = value => Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
-    const tokens = key => number(calls[key]) + (calls[key + '_reported_calls'] < calls.calls ? '（部分）' : '');
+    const tokens = key => calls[key] == null ? '—' : number(calls[key]) + (calls[key + '_reported_calls'] < calls.calls ? '（部分）' : '');
     const row = (label, value) => `<div class="row"><span>${esc(label)}</span><span class="row-val">${esc(value)}</span></div>`;
     box.innerHTML = row('已发消息', `${messages.used} / ${messages.limit || '不限'} 条`)
       + row('正在回复', `${replies.active} / ${replies.limit || '不限'} 个${replies.waiting ? ` · 等待 ${replies.waiting} 个` : ''}`)
@@ -876,14 +886,27 @@ async function refreshUsage() {
       + row('输入 / 输出 token', `${tokens('input_tokens')} / ${tokens('output_tokens')}`)
       + row('其中缓存输入', tokens('cached_input_tokens'))
       + row('模型累计耗时', usage.read_error ? '—' : `${(calls.elapsed_ms / 1000).toFixed(1)} 秒`);
-    const hint = document.createElement('p'); hint.className = 'hint';
-    hint.textContent = usage.read_error ? '暂时无法读取模型用量，消息额度正常计数。'
-      : !usage.recording_enabled ? '调用日志当前已关闭，模型用量记录可能不完整；消息额度正常计数。'
-      : usage.write_error ? '调用日志曾写入失败，模型用量可能不完整。'
-      : `聊天 ${usage.layers.chat.calls} · 整理 ${usage.layers.extraction.calls} · 摘要 ${usage.layers.summary.calls}。消息额度每天 ${fmtTime(usage.resets_at).slice(-5)} 重置；统计仅含已记录调用，未上报的 token 不计为零。`;
+    const hint = document.createElement('div'); hint.className = 'usage-notes';
+    const lines = [];
+    if (!usage.read_error) lines.push(`已记录调用：聊天 ${usage.layers.chat.calls} · 整理 ${usage.layers.extraction.calls} · 摘要 ${usage.layers.summary.calls}${usage.layers.coordination?.calls ? ` · 协调 ${usage.layers.coordination.calls}` : ''}`);
+    lines.push(`消息额度每天 ${fmtTime(usage.resets_at).slice(-5)} 重置。`);
+    lines.push('Token 仅汇总已上报用量，缺失项以「—」或「部分」标注。');
+    if (usage.read_error) lines.push('暂时无法读取模型用量，消息额度正常计数。');
+    else if (!usage.recording_enabled) lines.push('调用日志当前已关闭，模型用量记录可能不完整。');
+    else if (usage.write_error) lines.push('调用日志曾写入失败，模型用量可能不完整。');
+    hint.innerHTML = lines.map(text=>`<p>${esc(text)}</p>`).join('');
     box.appendChild(hint);
   } catch (_) {
-    if (request === usageRequest && user === S.account?.user_id) box.textContent = '暂时无法读取用量，请稍后刷新';
+    if (request === usageRequest && user === S.account?.user_id) {
+      const error = '<p class="usage-notes" data-usage-error role="status">暂时无法更新用量，请稍后刷新。</p>';
+      if (usageSnapshot?.user === user) box.insertAdjacentHTML('beforeend', error);
+      else box.innerHTML = error;
+    }
+  } finally {
+    if (request === usageRequest && user === S.account?.user_id) {
+      button.disabled = false; button.textContent = '刷新'; button.classList.remove('is-loading');
+      box.setAttribute('aria-busy', 'false');
+    }
   }
 }
 
@@ -1819,6 +1842,9 @@ document.addEventListener('visibilitychange', () => {
 localStorage.removeItem('ce_pin');
 
 function invalidateAccess() {
+  ++usageRequest; usageSnapshot = null;
+  $('usage-stats').innerHTML='';$('usage-stats').setAttribute('aria-busy','false');
+  $('usage-refresh').disabled=false;$('usage-refresh').textContent='刷新';$('usage-refresh').classList.remove('is-loading');
   closeCreateMenu();
   S.usersRequest=(S.usersRequest || 0)+1;S.convsRequest=(S.convsRequest || 0)+1;
   releaseGroupPresence();

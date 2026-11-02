@@ -2,8 +2,10 @@
 from datetime import date, datetime, timedelta, timezone
 import os
 import time
+import json
 
 from companion_ever.config import AccountLimitsConfig
+from companion_ever.characters.users import UserRepo
 from companion_ever.infrastructure.tracing import LAYERS, summarize_calls
 from companion_ever.infrastructure.database.connection import transaction
 
@@ -115,6 +117,7 @@ class AccountUsage:
             (now, now, user)).fetchone()
         return {
             'date': day, 'resets_at': resets_at,
+            'overview': self.overview(user),
             'messages': {'used': used, 'limit': limits['daily_messages'],
                          'remaining': max(0, limits['daily_messages'] - used) if limits['daily_messages'] else None},
             'replies': {'active': counts[0], 'waiting': counts[1], 'limit': limits['concurrent_replies']},
@@ -124,6 +127,22 @@ class AccountUsage:
             'write_error': bool(self.call_logs and self.call_logs.write_error),
             'read_error': read_error,
         }
+
+    def overview(self, user):
+        """Lifetime totals for active personas; group messages count once, not per member."""
+        personas = UserRepo(self.conn).list_personas(user)
+        row = self.conn.execute(
+            'WITH active(persona_id) AS (SELECT value FROM json_each(?)), '
+            'scopes AS (SELECT id,kind FROM conversation WHERE user_id=? '
+            "AND (kind='group' OR persona_id IN active)) SELECT "
+            "(SELECT count(*) FROM scopes WHERE kind='group') AS group_count, "
+            "(SELECT count(*) FROM conversation_log WHERE user_id=? AND role IN ('user','assistant') "
+            'AND conversation_id IN (SELECT id FROM scopes)) AS message_count, '
+            ' (SELECT count(*) FROM note WHERE user_id=? AND persona_id IN active AND is_archived=0) AS note_count, '
+            ' (SELECT count(*) FROM memory_job WHERE conversation_id IN (SELECT id FROM scopes) '
+            "AND persona_id IN active AND status='succeeded') AS extraction_count",
+            (json.dumps(personas), user, user, user)).fetchone()
+        return {'persona_count': len(personas), **dict(row)}
 
     def for_login(self, name, day=None):
         row = self.conn.execute('SELECT id FROM user WHERE login_name=?', (name.strip().lower(),)).fetchone()
