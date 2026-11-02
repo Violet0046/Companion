@@ -828,7 +828,7 @@ async function refreshUsage() {
 
 async function switchTarget(user, persona) {
   releaseGroupPresence();
-  S.targetRequest=(S.targetRequest || 0)+1;
+  const targetRequest=S.targetRequest=(S.targetRequest || 0)+1;
   const changed = !!S.group || (user !== S.user) || (persona !== S.persona);
   if(changed)stashComposerDraft();
   S.group=null;
@@ -846,10 +846,10 @@ async function switchTarget(user, persona) {
   if (changed) {
     stopReplyRecovery();
     S.latestClientMessageId = null; S.generationId = null; S.replyState = null;
-    S.messages = [];
-    if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
+    resetChatView();
     connect();               // WS 的 URL 里带 user/persona，换角色必须重连
     await loadPersona();
+    if(targetRequest!==S.targetRequest)return;
     await loadHistory(true);
   }
 }
@@ -858,6 +858,15 @@ async function openChat(user, persona) {
   await switchTarget(user, persona);
   if (S.user !== user || S.persona !== persona) return;
   showView('chat');
+}
+
+function resetChatView() {
+  S.historyRequest+=1;S.olderRequest=(S.olderRequest || 0)+1;
+  S.messages=[];S.hasMore=true;S.loadingOlder=false;
+  S.viewMode='live';S.viewLabel='';S.newCount=0;S.sinceLastSep=0;S.streamThinking='';
+  if(S.streamEl){S.streamEl.remove();S.streamEl=null;}
+  $('load-more-hint').classList.add('hidden');
+  resetSending();updateHistoryBar();renderChat();updateJumpButton();
 }
 
 async function openGroup(id) {
@@ -871,11 +880,11 @@ async function openGroup(id) {
     stopReplyRecovery();clearComposerContext();
     S.group=group;S.user=group.user_id;S.persona=null;S.personaTitle=group.name;
     restoreComposerDraft();
-    S.generationId=null;S.latestClientMessageId=null;S.replyState=null;S.messages=[];
-    if(S.streamEl){S.streamEl.remove();S.streamEl=null;}
+    S.generationId=null;S.latestClientMessageId=null;S.replyState=null;
     $('persona-name').textContent=group.name;
     $('btn-avatar').classList.add('hidden');$('btn-search').classList.add('hidden');
     $('btn-group-settings').classList.remove('hidden');
+    resetChatView();
     showView('chat');connect();await loadHistory(true);
   } catch(error){toast(error.message);}
 }
@@ -1885,7 +1894,7 @@ async function loadHistory(reset, opts) {
       S.group && m.role==='assistant' ? m.sender_id : '',m.quoted_message?.id,m.quoted_message?.content,m.quoted_message?.role==='assistant' ? m.quoted_message?.sender_id : '',
       Math.floor(Date.parse(m.created_at)/60000)]));
     const renderedIds=new Set(Array.from(box.querySelectorAll('.msg[data-id]')).map(el=>el.dataset.id));
-    if(!S.streamEl && stamp(previousMessages)===stamp(S.messages) && S.messages.every(m=>renderedIds.has(String(m.id)))){
+    if(!S.streamEl && box.dataset.scope===scope && renderedIds.size===S.messages.length && stamp(previousMessages)===stamp(S.messages) && S.messages.every(m=>renderedIds.has(String(m.id)))){
       renderReplyStatus();markVisibleChatRead();
     } else renderChat();
     if (opts.keepScroll) {
@@ -1903,13 +1912,16 @@ async function loadOlder() {
   if (S.loadingOlder || !S.hasMore) return;
   if (!S.messages.length) return;
   S.loadingOlder = true;
+  const scope=base(),navigation=S.targetRequest,history=S.historyRequest;
+  const request=S.olderRequest=(S.olderRequest || 0)+1;
   $('load-more-hint').classList.remove('hidden');
   const box = $('chat');
   const prevH = box.scrollHeight;
   const prevTop = box.scrollTop;
   try {
     const oldest = S.messages[0].id;
-    const older = await api(`${base()}/history?limit=${PAGE}&before_id=${oldest}`);
+    const older = await api(`${scope}/history?limit=${PAGE}&before_id=${oldest}`);
+    if(scope!==base() || navigation!==S.targetRequest || history!==S.historyRequest || request!==S.olderRequest)return;
     if (!older.length) { S.hasMore = false; return; }
     S.messages = older.concat(S.messages);
     S.hasMore = older.length >= PAGE;
@@ -1919,8 +1931,10 @@ async function loadOlder() {
   } catch (e) {
     /* ignore */
   } finally {
-    S.loadingOlder = false;
-    $('load-more-hint').classList.add('hidden');
+    if(scope===base() && request===S.olderRequest){
+      S.loadingOlder = false;
+      $('load-more-hint').classList.add('hidden');
+    }
   }
 }
 
@@ -1998,6 +2012,7 @@ function appendChatMsg(el, createdAt) {
 
 function renderChat() {
   const box = $('chat');
+  box.dataset.scope=base();
   box.innerHTML = '';
   if (!S.messages.length) {
     const hint = document.createElement('div');
