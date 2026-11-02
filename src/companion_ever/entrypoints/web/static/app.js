@@ -25,7 +25,12 @@ const S = {
   messages: [],
   hasMore: true,
   loadingOlder: false,
-  viewMode: 'live',      // live | date | jump
+  hasNewer: false,
+  loadingNewer: false,
+  locating: false,
+  locationRequest: 0,
+  quoteReturn: null,
+  viewMode: 'live',      // live | jump | quote
   viewLabel: '',
   dates: [],
   /* 搜索 */
@@ -168,6 +173,7 @@ const pkey = (user, persona) => `${user}/${persona}`;
 
 /** 切换视图。子页面（会话/资料/记忆）不显示底部 tab */
 function showView(name) {
+  if(name!=='chat' && S.locating)cancelLocation();
   S.view = name;
   document.querySelectorAll('.view').forEach((v) => {
     v.classList.toggle('active', v.id === 'view-' + name);
@@ -176,7 +182,7 @@ function showView(name) {
   document.querySelectorAll('.tab').forEach((t) => {
     t.classList.toggle('active', t.dataset.view === name);
   });
-  if (name === 'chat') anchorBottom();
+  if (name === 'chat' && S.viewMode==='live' && !S.locating) anchorBottom();
   if (name === 'me') { window.CompanionNotifications?.refresh(); refreshUsage(); }
   syncGroupPresence();
 }
@@ -230,7 +236,7 @@ function setReadMark(user, persona, id, groupId = persona == null ? S.group?.id 
 }
 
 function markVisibleChatRead() {
-  if (S.view !== 'chat' || document.visibilityState !== 'visible' || S.viewMode !== 'live' || !wasAtBottom) return;
+  if (S.view !== 'chat' || document.visibilityState !== 'visible' || S.viewMode !== 'live' || S.locating || !wasAtBottom) return;
   const replies = S.messages.filter(m => m.role === 'assistant' && Number.isSafeInteger(m.id) && !m.localOnly);
   if (!replies.length) return;
   setReadMark(S.user,S.persona,Math.max(...replies.map(m => m.id)));
@@ -322,7 +328,7 @@ function setTyping(on) {
   S.typing = !!on;
   const el = $('persona-name');
   if (!el) return;
-  if (on) {
+  if (on && !S.group) {
     el.innerHTML = '对方正在输入<span class="dots"><i></i><i></i><i></i></span>';
   } else {
     el.textContent = S.personaTitle || S.persona || '';
@@ -826,7 +832,7 @@ async function refreshUsage() {
 
 /* ---------- 切换角色 / 打开会话 ---------- */
 
-async function switchTarget(user, persona) {
+async function switchTarget(user, persona, opts={}) {
   releaseGroupPresence();
   const targetRequest=S.targetRequest=(S.targetRequest || 0)+1;
   const changed = !!S.group || (user !== S.user) || (persona !== S.persona);
@@ -850,7 +856,7 @@ async function switchTarget(user, persona) {
     connect();               // WS 的 URL 里带 user/persona，换角色必须重连
     await loadPersona();
     if(targetRequest!==S.targetRequest)return;
-    await loadHistory(true);
+    if(!opts.skipHistory)await loadHistory(true);
   }
 }
 
@@ -861,7 +867,7 @@ async function openChat(user, persona) {
 }
 
 function resetChatView() {
-  S.historyRequest+=1;S.olderRequest=(S.olderRequest || 0)+1;
+  cancelLocation();S.quoteReturn=null;S.hasNewer=false;S.loadingNewer=false;
   S.messages=[];S.hasMore=true;S.loadingOlder=false;
   S.viewMode='live';S.viewLabel='';S.newCount=0;S.sinceLastSep=0;S.streamThinking='';
   if(S.streamEl){S.streamEl.remove();S.streamEl=null;}
@@ -951,7 +957,7 @@ function renderComposerQuote() {
   $('composer-quote-text').textContent=S.quote ? quoteLabel(S.quote)+'：'+S.quote.content : '';
 }
 function clearComposerContext() {
-  S.quote=null;S.mentions=[];S.inputBefore=$('input').value;
+  S.quote=null;S.mentions=[];mentionDeletion=null;S.inputBefore=$('input').value;
   renderComposerQuote();closeMessageActions();closeMentionPicker(false);
 }
 function selectQuote(message) {
@@ -1008,23 +1014,57 @@ async function copyMessage() {
   finally{closeMessageActions();}
 }
 
-let mentionRange=null;
-function updateMentions(next) {
+let mentionRange=null,mentionDeletion=null;
+function updateMentions(next, edit=null) {
   const prev=S.inputBefore || '';let left=0,right=0;
   while(left<prev.length && left<next.length && prev[left]===next[left])left++;
   while(right<prev.length-left && right<next.length-left && prev[prev.length-right-1]===next[next.length-right-1])right++;
-  const oldEnd=prev.length-right,delta=next.length-prev.length;
+  if(edit)left=edit.start;
+  const oldEnd=edit ? edit.end : prev.length-right,delta=next.length-prev.length;
   S.mentions=S.mentions.flatMap(m=>m.end<=left ? [m] : m.start>=oldEnd ? [{...m,start:m.start+delta,end:m.end+delta}] : [])
     .filter(m=>next.slice(m.start,m.end)==='@'+m.persona_id && !/[\p{L}\p{N}_]/u.test(next[m.end] || ''));
   S.inputBefore=next;
 }
 function mentionInput(event) {
   const input=$('input');const prev=S.inputBefore || '';
+  // Some mobile keyboards deliver a non-cancelable beforeinput. Expand the
+  // resulting deletion here as well, so a mention cannot be left half removed.
+  if(S.group && event.inputType?.startsWith('delete')){
+    let start=0,end=prev.length,tail=input.value.length;
+    while(start<end && start<tail && prev[start]===input.value[start])start++;
+    while(end>start && tail>start && prev[end-1]===input.value[tail-1]){end--;tail--;}
+    if(mentionDeletion?.prev===prev){start=mentionDeletion.start;end=mentionDeletion.end;}
+    if(tail===start || mentionDeletion?.prev===prev)deleteMentionRange(start,end,false);
+  }
+  mentionDeletion=null;
   updateMentions(input.value);
   const cursor=input.selectionStart;
-  if(S.group && !event.isComposing && input.value[cursor-1]==='@' && input.value!==prev){
+  if(S.group && !event.isComposing && !event.inputType?.startsWith('delete') && input.value[cursor-1]==='@' && input.value!==prev){
     mentionRange={start:cursor-1,end:cursor};openMentionPicker();
   }
+}
+function deleteMentionRange(start,end,notify=true) {
+  const input=$('input'),prev=S.inputBefore || '';
+  const tokens=S.mentions.map(m=>({...m,end:m.end+(prev[m.end]===' ' ? 1 : 0)}));
+  const touched=tokens.filter(m=>start<m.end && end>m.start);
+  if(!touched.length)return false;
+  start=Math.min(start,...touched.map(m=>m.start));end=Math.max(end,...touched.map(m=>m.end));
+  const next=prev.slice(0,start)+prev.slice(end);
+  updateMentions(next,{start,end});input.value=next;input.setSelectionRange(start,start);
+  if(notify)input.dispatchEvent(new Event('input',{bubbles:true}));
+  return true;
+}
+function mentionBeforeInput(event) {
+  mentionDeletion=null;
+  if(!S.group || !event.inputType?.startsWith('delete') || event.isComposing)return;
+  const input=$('input');let start=input.selectionStart,end=input.selectionEnd;
+  if(start===end){
+    if(event.inputType==='deleteContentBackward')start=Math.max(0,start-1);
+    else if(event.inputType==='deleteContentForward')end++;
+    else return;
+  }
+  if(!event.cancelable){mentionDeletion={prev:input.value,start,end};return;}
+  if(deleteMentionRange(start,end))event.preventDefault();
 }
 function openMentionPicker() {
   if(!S.group)return;
@@ -1052,7 +1092,7 @@ function pickMention(persona) {
   if(new Set(S.mentions.map(m=>m.persona_id).concat(persona)).size>2){toast('一次最多 @ 两位角色');return;}
   const input=$('input'),range=mentionRange,token='@'+persona;
   const next=input.value.slice(0,range.start)+token+' '+input.value.slice(range.end);
-  updateMentions(next);input.value=next;
+  updateMentions(next,{start:range.start,end:range.end});input.value=next;
   S.mentions.push({persona_id:persona,start:range.start,end:range.start+token.length});S.mentions.sort((a,b)=>a.start-b.start);
   closeMentionPicker(false);input.focus();input.setSelectionRange(range.start+token.length+1,range.start+token.length+1);
   input.dispatchEvent(new Event('input',{bubbles:true}));
@@ -1111,8 +1151,11 @@ function renderCalendar() {
       const info = S.calDates[el.dataset.date];
       const date = el.dataset.date;
       closeCalendar();
-      await switchTarget(S.calUser, S.calPersona);
-      await jumpToDate(date, info && info.first_id);
+      const user=S.calUser,persona=S.calPersona;
+      const switching=switchTarget(user,persona,{skipHistory:true});
+      showView('chat');
+      const jump=jumpToDate(date,info && info.first_id);
+      await Promise.all([switching,jump]);
     };
   });
 }
@@ -1180,25 +1223,16 @@ function updateCalTitle() {
 }
 
 /**
- * 定位到某条消息：加载「它之前的一页」+「它之后的全部」。
- *
- * 这样看到的是**普通聊天界面**（能一直往上/往下翻全部历史），
- * 而不是把视图锁在那一段里。
+ * 只加载目标附近的两页，后续随滚动分页，避免拉取整段历史。
  */
 async function loadAround(firstId) {
   const scope=base();
   // 注意：before_id 是**排他**的（id < X），所以要传 firstId + 1
   // 才能把目标消息本身也包含进来（否则定位不到它）
-  const older = await api(`${scope}/history?before_id=${firstId + 1}&limit=${PAGE}`);
-  let newer = [];
-  let after = firstId;
-  for (;;) {
-    const part = await api(`${scope}/history?after_id=${after}&limit=500`);
-    if (!part.length) break;
-    newer = newer.concat(part);
-    if (part.length < 500) break;
-    after = part[part.length - 1].id;
-  }
+  const [older,newer]=await Promise.all([
+    api(`${scope}/history?before_id=${firstId + 1}&limit=${PAGE}`),
+    api(`${scope}/history?after_id=${firstId}&limit=${PAGE}`),
+  ]);
   return { older, newer };
 }
 
@@ -1726,6 +1760,7 @@ localStorage.removeItem('ce_pin');
 
 function invalidateAccess() {
   releaseGroupPresence();
+  cancelLocation();S.quoteReturn=null;S.viewMode='live';S.hasNewer=false;
   ++bootRequest;
   S.account = null;
   clearTimeout(S.reconnectTimer);
@@ -1856,6 +1891,7 @@ async function loadSettings() {
 
 async function loadHistory(reset, opts) {
   opts = opts || {};
+  if(S.locating || S.viewMode!=='live')return;
   const scope = base(), clientId = S.latestClientMessageId;
   const request = ++S.historyRequest;
   const box = $('chat');
@@ -1886,6 +1922,7 @@ async function loadHistory(reset, opts) {
         client_message_id:id, rejected:entry.error, localOnly:true,quoted_message_id:entry.quoted_message_id,quoted_message:entry.quoted_message,mentions:entry.mentions});
     }
     S.hasMore = msgs.length >= PAGE;
+    S.hasNewer=false;
     S.viewMode = 'live';
     S.viewLabel = '';
     S.newCount = 0;
@@ -1909,7 +1946,7 @@ async function loadHistory(reset, opts) {
 
 /** 往上翻：加载更早的一页 */
 async function loadOlder() {
-  if (S.loadingOlder || !S.hasMore) return;
+  if (S.locating || S.loadingOlder || !S.hasMore) return;
   if (!S.messages.length) return;
   S.loadingOlder = true;
   const scope=base(),navigation=S.targetRequest,history=S.historyRequest;
@@ -1936,6 +1973,21 @@ async function loadOlder() {
       $('load-more-hint').classList.add('hidden');
     }
   }
+}
+
+async function loadNewer() {
+  if(S.locating || S.loadingNewer || !S.hasNewer || !S.messages.length)return;
+  const scope=base(),navigation=S.targetRequest,history=S.historyRequest;
+  S.loadingNewer=true;
+  try {
+    const part=await api(`${scope}/history?after_id=${S.messages[S.messages.length-1].id}&limit=${PAGE}`);
+    if(scope!==base() || navigation!==S.targetRequest || history!==S.historyRequest)return;
+    const box=$('chat'),top=box.scrollTop,ids=new Set(S.messages.map(m=>m.id));
+    S.messages=S.messages.concat(part.filter(m=>!ids.has(m.id)));
+    S.hasNewer=part.length>=PAGE;
+    renderChat();box.scrollTop=top;updateJumpButton();
+  } catch(_){toast('加载后续消息失败，请稍后再试');}
+  finally{if(scope===base() && history===S.historyRequest)S.loadingNewer=false;}
 }
 
 /* ---------- 时间分隔条 ---------- */
@@ -2103,8 +2155,10 @@ function renderMsg(role, content, thinking, id, message = null) {
   }
   if (message?.quoted_message) {
     const quote=document.createElement('button');quote.className='message-quote';quote.type='button';
-    quote.textContent=quoteLabel(message.quoted_message)+ '：' + message.quoted_message.content;
-    quote.onclick=()=>jumpToMessage(message.quoted_message.id);
+    const preview=document.createElement('span');preview.className='message-quote-text';
+    preview.textContent=quoteLabel(message.quoted_message)+ '：' + message.quoted_message.content;
+    quote.appendChild(preview);
+    quote.onclick=()=>jumpToQuote(message.quoted_message.id);
     el.appendChild(quote);
   }
   if (Number.isSafeInteger(id) && !message?.localOnly) bindMessageActions(el,{...message,id,role,content});
@@ -2199,10 +2253,12 @@ function buildThinkBlock(thinking) {
 function updateJumpButton() {
   const btn = $('btn-jump-latest');
   if (!btn) return;
-  const show = S.viewMode === 'live' && !wasAtBottom;
+  const show = !S.locating && (!!S.quoteReturn || (S.viewMode==='live' || S.viewMode==='quote') && (!wasAtBottom || S.hasNewer));
   btn.classList.toggle('hidden', !show);
   const label = $('jump-latest-label');
-  if (label) label.textContent = S.newCount > 0 ? `${S.newCount} 条新消息` : '回到最新';
+  const text=S.quoteReturn ? '回到引用位置' : S.newCount > 0 ? `${S.newCount} 条新消息` : '回到最新';
+  if (label) label.textContent=text;
+  btn.setAttribute?.('aria-label',text);
 }
 
 /** 重新渲染当前这屏，但保持用户正在看的位置 */
@@ -2250,7 +2306,7 @@ function anchorBottom() {
 }
 
 function shouldFollowLatest() {
-  return S.view === 'chat' && S.viewMode === 'live' && document.visibilityState === 'visible'
+  return S.view === 'chat' && S.viewMode === 'live' && !S.locating && document.visibilityState === 'visible'
     && !$('app').classList.contains('hidden') && (wasAtBottom || Date.now() < keyboardStickUntil);
 }
 
@@ -2267,61 +2323,91 @@ if (window.ResizeObserver) {
 
 function updateHistoryBar() {
   const bar = $('history-bar');
-  if (S.viewMode === 'live') { bar.classList.add('hidden'); return; }
+  if (S.viewMode !== 'jump') { bar.classList.add('hidden'); return; }
   bar.classList.remove('hidden');
   $('history-label').textContent = S.viewLabel || '正在查看历史聊天';
 }
 
-async function jumpToDate(date, firstId) {
-  try {
-    if (!firstId) { toast('这一天没有聊天记录'); return; }
-    // 定位到那天**第一条**消息，但视图仍然是普通聊天界面
-    const { older, newer } = await loadAround(firstId);
-    S.messages = older.concat(newer);
-    S.viewMode = 'jump';
-    S.viewLabel = `正在查看 ${dayLabel(date)} 附近的聊天`;
-    S.hasMore = older.length >= PAGE;
-    updateHistoryBar();
-    renderChat();
+function cancelLocation() {
+  S.locationRequest++;S.historyRequest++;S.loadingNewer=false;
+  S.olderRequest=(S.olderRequest || 0)+1;S.loadingOlder=false;
+  $('load-more-hint').classList.add('hidden');
+  chatScrollEpoch++;keyboardStickUntil=0;S.locating=false;
+  $('chat-location-loading').classList.add('hidden');$('input').readOnly=false;
+}
+
+function positionMessage(id,block='center') {
+  const scope=base(),request=S.locationRequest,epoch=chatScrollEpoch;
+  const position=()=>{
+    if(scope!==base() || request!==S.locationRequest || epoch!==chatScrollEpoch || S.view!=='chat')return;
+    const box=$('chat'),el=box.querySelector(`.msg[data-id="${id}"]`);
+    if(el)box.scrollTop+=el.getBoundingClientRect().top-box.getBoundingClientRect().top
+      -(block==='center' ? Math.max(0,(box.clientHeight-el.getBoundingClientRect().height)/2) : 8);
+    wasAtBottom=box.scrollHeight-box.scrollTop-box.clientHeight<80;
     updateJumpButton();
-    showView('chat');
-    setTimeout(() => {
-      const el = $('chat').querySelector(`.msg[data-id="${firstId}"]`);
-      // 跨日期定位要瞬移（不是平滑滚），不然要滚好久
-      if (el) el.scrollIntoView({ block: 'start', behavior: 'instant' });
-      else anchorBottom();
-    }, 80);
-    toast(S.viewLabel);
-  } catch (e) { toast('加载失败'); }
+  };
+  position();requestAnimationFrame(position);
+}
+
+async function locateMessage(id,mode,label,returnPoint=null) {
+  cancelLocation();
+  const scope=base(),navigation=S.targetRequest,request=S.locationRequest;
+  const current=()=>scope===base() && navigation===S.targetRequest && request===S.locationRequest && S.view==='chat';
+  S.locating=true;$('input').blur();$('input').readOnly=true;
+  closeSearch();showView('chat');
+  $('chat-location-loading').classList.remove('hidden');updateJumpButton();
+  try {
+    if(!S.messages.some(m=>m.id===id) || mode==='jump'){
+      const {older,newer}=await loadAround(id);
+      if(!current())return;
+      if(!older.concat(newer).some(m=>m.id===id))throw new Error('missing');
+      S.messages=older.concat(newer);S.hasMore=older.length>=PAGE;S.hasNewer=newer.length>=PAGE;
+    }
+    if(!current())return;
+    if(S.streamEl){S.streamEl.remove();S.streamEl=null;}
+    S.quoteReturn=returnPoint;S.viewMode=mode;S.viewLabel=label;
+    S.locating=false;$('chat-location-loading').classList.add('hidden');$('input').readOnly=false;
+    updateHistoryBar();renderChat();positionMessage(id,mode==='jump'?'start':'center');
+  } catch(error){if(current())toast(error.message==='missing'?'原消息暂不可查看':'加载失败，请重试');}
+  finally{
+    if(current()){
+      S.locating=false;$('chat-location-loading').classList.add('hidden');$('input').readOnly=false;updateJumpButton();
+    }
+  }
+}
+
+async function jumpToDate(date, firstId) {
+  if(!firstId){toast('这一天没有聊天记录');return;}
+  await locateMessage(Number(firstId),'jump',`正在查看 ${dayLabel(date)} 附近的聊天`);
 }
 
 async function jumpToMessage(id) {
-  try {
-    const scope=base();
-    // 目标消息本身也要在列表里，所以取「它之前的一页」+「它之后的全部」
-    const { older, newer } = await loadAround(Number(id));
-    if(scope!==base())return;
-    if(!older.concat(newer).some(m=>m.id===Number(id))){toast('原消息暂不可查看');return;}
-    S.messages = older.concat(newer);
-    S.viewMode = 'jump';
-    S.viewLabel = '正在查看历史聊天';
-    S.hasMore = older.length >= PAGE;
-    updateHistoryBar();
-    renderChat();
-    updateJumpButton();
-    closeSearch();
-    showView('chat');
-    // 滚到目标消息
-    setTimeout(() => {
-      const el = $('chat').querySelector(`.msg[data-id="${id}"]`);
-      if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      else anchorBottom();
-    }, 80);
-    toast('已跳转到那条消息');
-  } catch (e) { toast('跳转失败'); }
+  await locateMessage(Number(id),'jump','正在查看历史聊天');
+}
+
+async function jumpToQuote(id) {
+  const returnPoint=S.quoteReturn || {scope:base(),messages:S.messages.slice(),scrollTop:$('chat').scrollTop,
+    viewMode:S.viewMode,viewLabel:S.viewLabel,hasMore:S.hasMore,hasNewer:S.hasNewer};
+  await locateMessage(Number(id),'quote','',returnPoint);
+}
+
+function rememberQuoteReply(message) {
+  const point=S.quoteReturn;
+  if(point?.scope===base() && point.viewMode==='live' && !point.hasNewer && !point.messages.some(m=>m.id===message.id))point.messages.push(message);
+}
+
+function returnToQuote() {
+  const point=S.quoteReturn;if(!point || point.scope!==base())return;
+  cancelLocation();S.quoteReturn=null;S.messages=point.messages;
+  S.viewMode=point.viewMode;S.viewLabel=point.viewLabel;S.hasMore=point.hasMore;S.hasNewer=point.hasNewer;
+  updateHistoryBar();renderChat();$('chat').scrollTop=point.scrollTop;
+  wasAtBottom=$('chat').scrollHeight-$('chat').scrollTop-$('chat').clientHeight<80;
+  updateJumpButton();recoverReply();
 }
 
 async function backToLive() {
+  cancelLocation();S.quoteReturn=null;S.viewMode='live';S.viewLabel='';S.hasNewer=false;
+  updateHistoryBar();
   await loadHistory(true);
   toast('已回到最新');
 }
@@ -2535,7 +2621,7 @@ async function recoverReply(refreshHistory = false) {
     if (!g) return;
     S.generationId = g.id;
     S.replyState = {...g, scope};
-    if (S.viewMode === 'live') {
+    if (S.viewMode === 'live' && !S.locating) {
       for (const message of g.messages) {
         if (!S.messages.some(m => m.id === message.id)) handleWs({type: 'message_done', generation_id: g.id, message});
       }
@@ -2557,9 +2643,10 @@ function handleWs(m) {
       && m.generation_id !== S.generationId) return;
   switch (m.type) {
     case 'group_message': {
-      if(m.user_id===S.user && S.group?.id===m.conversation_id && S.viewMode==='live'){
+      if(m.user_id===S.user && S.group?.id===m.conversation_id){
         const message=m.message;
-        if(!S.messages.some(x=>x.id===message.id)){
+        rememberQuoteReply(message);
+        if(S.viewMode==='live' && !S.locating && !S.messages.some(x=>x.id===message.id)){
           S.messages.push(message);
           appendChatMsg(renderMsg('assistant',message.content,null,message.id,message),message.created_at);
           renderReplyStatus();markVisibleChatRead();if(wasAtBottom)anchorBottom();
@@ -2578,6 +2665,8 @@ function handleWs(m) {
       break;
     }
     case 'message_done': {
+      rememberQuoteReply(m.message);
+      if(S.viewMode!=='live' || S.locating)break;
       if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
       const saved = m.message;
       if (!S.messages.some(x => x.id === saved.id)) {
@@ -2622,6 +2711,7 @@ function handleWs(m) {
       break;
     }
     case 'delta': {
+      if(S.viewMode!=='live' || S.locating)break;
       if (!S.streamEl) {
         // 第一段文字到了才真正建气泡（等待期间只有顶栏的提示）
         const el = renderMsg('assistant', '', null, null);
@@ -2769,11 +2859,15 @@ function handleWs(m) {
 /* ---------- 发送 ---------- */
 
 function send() {
+  if(S.locating)return;
   const input = $('input');
   const text = S.group ? input.value : input.value.trim();
   if (!text.trim()) return;
   if (!S.user || (!S.persona && !S.group)) return;
   const context={quoted_message_id:S.quote?.id || null,quoted_message:S.quote ? {...S.quote} : null,mentions:sendMentions(text)};
+  if(S.viewMode!=='live'){
+    cancelLocation();S.quoteReturn=null;S.viewMode='live';S.hasNewer=false;updateHistoryBar();
+  }
   stopReplyRecovery();
   // A new user message interrupts only the unfinished assistant draft.
   if (S.streamEl) { S.streamEl.remove(); S.streamEl = null; }
@@ -2822,6 +2916,8 @@ $('btn-search').onclick = openSearch;
 $('btn-search-close').onclick = closeSearch;
 $('btn-back-live').onclick = backToLive;
 $('btn-jump-latest').onclick = () => {
+  if(S.quoteReturn){returnToQuote();return;}
+  if(S.hasNewer || S.viewMode!=='live'){backToLive();return;}
   S.newCount = 0;
   wasAtBottom = true;
   anchorBottom();
@@ -2847,6 +2943,7 @@ $('message-copy-action').onclick=copyMessage;
 $('mention-close').onclick=()=>closeMentionPicker();
 $('mention-search').addEventListener('input',renderMentionMembers);
 $('input').addEventListener('input',mentionInput);
+$('input').addEventListener('beforeinput',mentionBeforeInput);
 $('chat').addEventListener('scroll',()=>{activePressCancel?.();closeMessageActions();},{passive:true});
 $('mention-sheet').addEventListener('click',event=>{if(event.target===$('mention-sheet'))closeMentionPicker();});
 $('dialog-group').addEventListener('click',event=>{if(event.target===$('dialog-group'))$('dialog-group').classList.add('hidden');});
@@ -3027,6 +3124,7 @@ $('dialog-persona').addEventListener('click', (e) => {
 $('chat').addEventListener('scroll', () => {
   const box = $('chat');
   if (box.scrollTop < 80) loadOlder();
+  if(box.scrollHeight-box.scrollTop-box.clientHeight<160)loadNewer();
   // 记住是否贴在底部（发送时不要把用户拉走）
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   wasAtBottom = atBottom || (Date.now() < keyboardStickUntil && S.view === 'chat' && S.viewMode === 'live');
