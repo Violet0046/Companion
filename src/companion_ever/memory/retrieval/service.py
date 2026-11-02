@@ -27,18 +27,21 @@ class RetrievalService:
         self.cfg = cfg
         self.links = NoteLinkRepo(note_repo.conn)
 
-    def retrieve(self, user_id, persona_id, query, top_k=None,*,conversation_id=None):
+    def retrieve(self, user_id, persona_id, query, top_k=None,*,conversation_id=None,include_private=False):
         """Compatibility entry for prompts; all selection happens in search()."""
         limit = self.cfg.top_k if top_k is None else top_k
         if limit <= 0:
             self.authorizer.require_persona(user_id, persona_id)
             return []
-        return self.search(user_id, persona_id, MemorySearch(query=query,limit=min(limit,50),conversation_id=conversation_id)).notes
+        return self.search(user_id, persona_id, MemorySearch(query=query,limit=min(limit,50),conversation_id=conversation_id),
+                           include_private=include_private).notes
 
-    def search(self, user_id, persona_id, request):
+    def search(self, user_id, persona_id, request, *, include_private=False):
         """Retrieve seeds, expand at most two hops, then select scoped evidence."""
         self.authorizer.require_persona(user_id,persona_id)
         request = MemorySearch.model_validate(request)
+        if include_private and (request.purpose != 'chat' or request.conversation_id is None):
+            raise ValueError('私聊来源扩展仅允许在群聊回复的记忆读取中使用')
         if request.purpose == 'chat' and request.recent_limit:
             raise ValueError('近期兜底仅可用于记忆整理；聊天不自动填充无关记忆')
         warnings = []
@@ -46,7 +49,7 @@ class RetrievalService:
         edges = {}
         truncated = False
         now = datetime.now(timezone.utc)
-        visible=self.note_repo.visible_ids(user_id,persona_id,request.conversation_id) if request.conversation_id is not None else None
+        visible=self.note_repo.visible_ids(user_id,persona_id,request.conversation_id,include_private=include_private) if request.conversation_id is not None else None
         def allowed(note):
             return note is not None and note.user_id==user_id and note.persona_id==persona_id and (visible is None or note.id in visible)
         def offer(note, reason, score, path):

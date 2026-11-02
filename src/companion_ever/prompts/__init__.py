@@ -7,6 +7,7 @@
 - chat_system.txt: 聊天 system prompt 的完整骨架（章节标题 + 行为指引）
 - group_chat_system.txt: 群角色身份、顺序接话、交棒与 JSON 回复契约
 - group_coordination_system.txt: 一次协调产生有顺序的成员邀请
+- external_context.txt: 私聊/群聊有未整理外部原文时才动态附加的来源说明
 - proactive_system.txt: 角色主动机会，一次 JSON 输出选择私聊或群聊并生成正文
 - memory_draft_system.txt: 后台整理两层笔记的系统提示
 - summary_system.txt: 从 fact 操作独立演化两个摘要的系统提示

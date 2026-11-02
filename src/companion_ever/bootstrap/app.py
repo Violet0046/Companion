@@ -165,7 +165,7 @@ def build_app(cfg: AppConfig) -> AppContext:
                         memory_jobs.revoke_persona, summary_jobs.revoke_persona),
         on_restored=(memory_jobs.restore_persona, summary_jobs.restore_persona),
     )
-    conversation_svc = ConversationService(authorizer, repos.conversation)
+    conversation_svc = ConversationService(authorizer, repos.conversation, memory_jobs=memory_jobs, background=cfg.background)
     retrieval_svc = RetrievalService(repos.note, authorizer, cfg.retrieval)
     setting_svc = SettingService(authorizer, setting_repo)
     prompt_svc = PromptService(

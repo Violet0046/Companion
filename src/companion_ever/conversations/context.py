@@ -114,6 +114,9 @@ class PromptService:
             current_input = ''
 
         # 2. 拼装 system_prompt
+        # Collect before note retrieval: a concurrent memory commit may duplicate
+        # evidence briefly, but must not remove raw text before notes are readable.
+        external = self.conversation_service.external_context(user_id, persona_id)
         related_notes = []
         if query:
             related_notes = self.retrieval_service.retrieve(
@@ -130,11 +133,13 @@ class PromptService:
             related_notes=related_notes,
             derived=derived,
             current_input=current_input,
+            note_sources=self.note_service.sources(user_id, persona_id, [n.id for n in related_notes]) if related_notes else None,
         )
         if current_message_id is not None and current is not None and current.quoted_message_id is not None:
             quoted = self.conversation_service.quote(user_id,persona_id,current.quoted_message_id)
             quoted['created_at']=_utc_ts_to_local(quoted['created_at'],self.tz_offset_hours)
             system_prompt += '\n\n## 本轮引用\n' + self._render_current_quote(quoted)
+        system_prompt += self._render_external_context(user_id, persona_id, external)
 
         # 3. 拼装 messages 列表
         #    历史对话只在这里出现一次（作为原生 role 消息）——
@@ -166,11 +171,12 @@ class PromptService:
     def build_group(self,user,persona,*,history,trigger_message_id,suggestion,conversation_id=None,invocation=None):
         """Group identities stay in the data envelope, never native assistant history."""
         self.authorizer.require_persona(user,persona)
+        external = self.conversation_service.external_context(user, persona, current_group_id=conversation_id) if conversation_id is not None else []
         notes=[]
         current=next((m for m in history if m['id']==trigger_message_id),None)
         source=(invocation or {}).get('source_message') or current
         if conversation_id is not None and source is not None:
-            notes=self.retrieval_service.retrieve(user,persona,source['content'][:2000],conversation_id=conversation_id)
+            notes=self.retrieval_service.retrieve(user,persona,source['content'][:2000],conversation_id=conversation_id,include_private=True)
         derived=self.summary_service.prompt_text(user,persona,conversation_id=conversation_id) if self.summary_service is not None and conversation_id is not None else ''
         kind=(invocation or {}).get('kind','coordination')
         if kind=='ai_mention':
@@ -185,8 +191,9 @@ class PromptService:
         system=compose(load('group_chat_system.txt'),{
             'persona_section':self._render_persona_basics(self._get_persona_basics(user,persona)),
             'self_persona_id':persona,'now':format_now(self.tz_offset_hours),'suggestion':suggestion,
-            'notes_section':self._render_related_notes(notes),'summary_section':derived,
+            'notes_section':self._render_related_notes(notes,self.note_service.sources(user,persona,[n.id for n in notes]) if notes else None),'summary_section':derived,
             'quote_section':self._render_current_quote(quoted),'trigger_section':trigger})
+        system += self._render_external_context(user, persona, external)
         return {'system_prompt':system,'messages':[{'role':'system','content':system},{'role':'user','content':json.dumps({
             'trigger_message_id':trigger_message_id,'root_message':current,'invocation':invocation or {},'messages':history},ensure_ascii=False)}]}
 
@@ -266,6 +273,20 @@ class PromptService:
             )
 
     # === 内部 helper ===
+
+    def _render_external_context(self, user, persona, sources):
+        if not sources:
+            return ''
+        sources = self.conversation_service.visible_external_context(user, persona, sources)
+        if not sources:
+            return ''
+        payload = []
+        for source in sources:
+            messages = [{**m, 'created_at': _utc_ts_to_local(m['created_at'], self.tz_offset_hours)}
+                        for m in source['messages']]
+            payload.append({k: source[k] for k in ('conversation_id', 'kind', 'name', 'omitted_earlier')})
+            payload[-1]['messages'] = messages
+        return '\n\n' + load('external_context.txt').strip() + '\n' + json.dumps(payload, ensure_ascii=False)
 
     def _get_recent_messages(
         self,
@@ -351,6 +372,7 @@ class PromptService:
         related_notes: list | None = None,
         derived: str = "",
         current_input: str = "",
+        note_sources: dict | None = None,
     ) -> str:
         """按 chat_system.txt 渲染完整 system prompt。
 
@@ -368,7 +390,7 @@ class PromptService:
         return compose(CHAT_SYSTEM, {
             'time_section':self._render_time_section(last_conv_at,current_input),
             'persona_section': self._render_persona_basics(persona_basics),
-            'notes_section': self._render_related_notes(related_notes or []),
+            'notes_section': self._render_related_notes(related_notes or [], note_sources),
             'summary_section': derived,
         })
 
@@ -456,7 +478,7 @@ class PromptService:
             persona_basics, ensure_ascii=False, indent=2
         ) + "\n```"
 
-    def _render_related_notes(self, notes: list) -> str:
+    def _render_related_notes(self, notes: list, sources: dict | None = None) -> str:
         """相关记忆（query 召回，来自历史 session 抽取的 notes）。"""
         if not notes:
             return ""
@@ -467,8 +489,9 @@ class PromptService:
                 if isinstance(n.content, str)
                 else json.dumps(n.content, ensure_ascii=False)
             )
+            origin = ' 来源=' + json.dumps(sources.get(n.id, []), ensure_ascii=False) if sources and sources.get(n.id) else ''
             lines.append(
-                f"- ({n.kind.value}, reality={n.reality}, event_time={n.event_time or '未知/不适用'}, importance={n.importance:.2f}) {content}"
+                f"- ({n.kind.value}, reality={n.reality}, event_time={n.event_time or '未知/不适用'}, importance={n.importance:.2f}){origin} {content}"
             )
         return "\n".join(lines)
 

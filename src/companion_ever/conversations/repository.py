@@ -79,6 +79,21 @@ class ConversationRepo:
             "AND role IN ('user','assistant') ORDER BY id DESC LIMIT ?",(cid,lower,until_id,until_id,limit)).fetchall()
         return [row_to_conversation_message(r) for r in reversed(rows)]
 
+    def external_source_ids(self, user, persona, current_group_id=None):
+        """Chat context only: private -> joined groups; group -> own private."""
+        if current_group_id is not None:
+            scope = self.memory_scope(user, persona, current_group_id)
+            if scope['kind'] != 'group':
+                raise ValueError('外部群上下文必须指定群聊')
+            return [r[0] for r in self.conn.execute(
+                "SELECT id FROM conversation WHERE user_id=? AND persona_id=? AND kind='private'", (user, persona))]
+        return [r[0] for r in self.conn.execute(
+            'SELECT c.id FROM conversation c JOIN conversation_member m ON m.conversation_id=c.id '
+            "WHERE c.user_id=? AND c.kind='group' AND m.persona_id=? AND m.left_after_message_id IS NULL", (user, persona))]
+
+    def message_upper_bound(self, user):
+        return self.conn.execute('SELECT coalesce(max(id),0) FROM conversation_log WHERE user_id=?', (user,)).fetchone()[0]
+
     def quote(self, conversation_id, message_id):
         if type(message_id) is not int or message_id <= 0:
             raise ValueError('引用消息 ID 无效')

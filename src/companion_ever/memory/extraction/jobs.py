@@ -36,9 +36,11 @@ class MemoryJobRepo:
                                      (conversation_id,persona_id,persona_id)).fetchone())
 
     def progress(self, conversation):
+        conversation = dict(conversation)
+        lower = max(conversation['memory_start_message_id'], conversation.get('joined_after_message_id') or 0)
         return self.conn.execute('SELECT max(?,coalesce(max(through_message_id),0)) FROM memory_job '
             "WHERE conversation_id=? AND persona_id=? AND status='succeeded'",
-            (conversation['memory_start_message_id'], conversation['id'],conversation['persona_id'])).fetchone()[0]
+            (lower, conversation['id'],conversation['persona_id'])).fetchone()[0]
 
     def busy(self, user, persona):
         return bool(self.conn.execute('SELECT 1 FROM memory_job j JOIN conversation c ON c.id=j.conversation_id '

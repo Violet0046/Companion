@@ -53,10 +53,21 @@ class NoteRepo:
 
     # === 查询 ===
 
-    def visible_ids(self,user_id,persona_id,conversation_id):
+    def visible_ids(self,user_id,persona_id,conversation_id,*,include_private=False):
         scope=self.conn.execute("SELECT m.joined_after_message_id FROM conversation c JOIN conversation_member m ON m.conversation_id=c.id "
             "WHERE c.id=? AND c.user_id=? AND c.kind='group' AND m.persona_id=? AND m.left_after_message_id IS NULL",(conversation_id,user_id,persona_id)).fetchone()
         if scope is None:raise PermissionError('当前角色不可访问这个群聊')
+        if include_private:
+            # Chat-only reading. Extraction and summaries retain the default group-only scope.
+            return {r[0] for r in self.conn.execute(
+                'SELECT n.id FROM note n WHERE n.user_id=? AND n.persona_id=? '
+                'AND EXISTS(SELECT 1 FROM note_evidence e WHERE e.note_id=n.id) AND NOT EXISTS('
+                'SELECT 1 FROM note_evidence e LEFT JOIN conversation_log l ON l.id=e.message_id '
+                'LEFT JOIN conversation c ON c.id=l.conversation_id WHERE e.note_id=n.id AND '
+                '(l.id IS NULL OR c.id IS NULL OR l.user_id!=? OR c.user_id!=? OR coalesce('
+                "(c.kind='private' AND c.persona_id=? AND l.persona_id=?) OR "
+                "(c.kind='group' AND c.id=? AND l.id>?),0)=0))",
+                (user_id,persona_id,user_id,user_id,persona_id,persona_id,conversation_id,scope[0]))}
         return {r[0] for r in self.conn.execute('SELECT n.id FROM note n WHERE n.user_id=? AND n.persona_id=? '
             'AND EXISTS(SELECT 1 FROM note_evidence e WHERE e.note_id=n.id) AND NOT EXISTS('
             'SELECT 1 FROM note_evidence e JOIN conversation_log l ON l.id=e.message_id WHERE e.note_id=n.id '

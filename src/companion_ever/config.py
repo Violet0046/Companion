@@ -123,6 +123,11 @@ class BackgroundConfig:
     failure_cooldown_seconds: int = 900
     model_thinking: bool = False
 
+    @property
+    def external_context_message_limit(self):
+        # 跨会话原文补充复用整理条数阈值，调整触发参数时同步调整输入预算。
+        return min(40, self.memory_message_threshold * 2)
+
     def __post_init__(self):
         if min(self.memory_message_threshold,self.memory_idle_seconds,self.memory_idle_min_messages,
                self.memory_max_wait_seconds,self.summary_fact_threshold,self.summary_interval_seconds,self.failure_cooldown_seconds)<1:

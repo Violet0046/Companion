@@ -17,9 +17,69 @@ class ConversationService:
         self,
         authorizer: Authorizer,
         conv_repo: ConversationRepo,
+        *, memory_jobs=None, background=None,
     ):
         self.authorizer = authorizer
         self.conv_repo = conv_repo
+        self.memory_jobs = memory_jobs
+        self.background = background
+
+    def external_context(self, user, persona, *, current_group_id=None):
+        """Bounded, unprocessed source messages; collecting never schedules memory."""
+        self.authorizer.require_persona(user, persona)
+        if self.memory_jobs is None or self.background is None:
+            return []
+        limit = self.background.external_context_message_limit
+        upper = self.conv_repo.message_upper_bound(user)
+        sources = []
+        for cid in self.conv_repo.external_source_ids(user, persona, current_group_id):
+            try:
+                scope = self.conv_repo.memory_scope(user, persona, cid)
+                lower = self.memory_jobs.progress({**scope, 'persona_id': persona})
+                messages = self.conv_repo.memory_messages(user, persona, cid, since_id=lower,
+                                                           until_id=upper, limit=limit + 1)
+            except PermissionError:
+                continue
+            if messages:
+                sources.append({'conversation_id': cid, 'kind': scope['kind'], 'name': scope['name'],
+                                'member_revision': scope['member_revision'], 'messages': messages})
+        sources.sort(key=lambda s: (s['messages'][-1].created_at, s['messages'][-1].id), reverse=True)
+        sources = sources[:2]
+        newest = sorted((m for s in sources for m in s['messages']),
+                        key=lambda m: (m.created_at, m.id), reverse=True)[:limit]
+        chosen = {}
+        remaining = 4000
+        for message in newest:
+            if remaining <= 0:
+                break
+            text = message.content[:remaining]
+            remaining -= len(text)
+            chosen[message.id] = {'id': message.id, 'created_at': message.created_at,
+                                  'sender_kind': message.sender_kind, 'sender_id': message.sender_id,
+                                  'content': text, 'truncated': len(text) < len(message.content)}
+            # Quoted text is deliberately not expanded across source/size boundaries.
+            if message.quoted_message_id is not None:
+                chosen[message.id]['quoted_message_id'] = message.quoted_message_id
+        result = []
+        for source in sources:
+            messages = [chosen[m.id] for m in source['messages'] if m.id in chosen]
+            if messages:
+                result.append({**source, 'messages': messages,
+                               'omitted_earlier': source['messages'][0].id != messages[0]['id']})
+        return self.visible_external_context(user, persona, result)
+
+    def visible_external_context(self, user, persona, sources):
+        """Fence leave/rejoin and role deactivation after collecting source text."""
+        self.authorizer.require_persona(user, persona)
+        visible = []
+        for source in sources:
+            try:
+                scope = self.conv_repo.memory_scope(user, persona, source['conversation_id'])
+            except PermissionError:
+                continue
+            if scope['member_revision'] == source['member_revision']:
+                visible.append(source)
+        return visible
 
     def quote(self,user,persona,message_id):
         self.authorizer.require_persona(user,persona)
