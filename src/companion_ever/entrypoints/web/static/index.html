@@ -49,14 +49,13 @@
         <div class="nav">
           <div class="nav-title">消息</div>
           <div class="spacer"></div>
-          <button id="btn-conv-search" class="nav-btn nav-btn-ico" aria-label="搜索会话">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
-          </button>
           <div class="nav-actions">
-            <button id="btn-new-conv" class="nav-btn nav-add" aria-label="添加" aria-haspopup="menu" aria-expanded="false" aria-controls="create-menu">+</button>
+            <button id="btn-new-conv" class="nav-btn nav-btn-ico" aria-label="添加" aria-haspopup="menu" aria-expanded="false" aria-controls="create-menu">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6Z"/></svg>
+            </button>
             <div id="create-menu" class="create-menu hidden" role="menu" aria-labelledby="btn-new-conv">
               <button id="create-persona-action" type="button" role="menuitem">
-                <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path fill="currentColor" d="M9 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-4.4 0-8 2.2-8 5v2h13v-2c0-1.7.8-3.2 2-4.3A15.4 15.4 0 0 0 9 14Zm10-4v4h-4v2h4v4h2v-4h3v-2h-3v-4Z"/></svg>
+                <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path fill="currentColor" d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-4.4 0-8 2.2-8 5v2h16v-2c0-2.8-3.6-5-8-5Z"/></svg>
                 <span>新建角色</span>
               </button>
               <button id="create-group-action" type="button" role="menuitem">
@@ -66,20 +65,12 @@
             </div>
           </div>
         </div>
-        <div class="searchbar hidden" id="conv-searchbar">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
-          <input id="conv-search" type="search" placeholder="搜索会话" autocomplete="off" aria-label="搜索会话">
-        </div>
         <div class="list" id="conv-list"></div>
       </section>
 
       <!-- ===== 通讯录（Tab 2） ===== -->
       <section id="view-contacts" class="view">
         <div class="nav"><div class="nav-title">通讯录</div></div>
-        <div class="searchbar">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
-          <input id="contact-search" type="search" placeholder="搜索角色" autocomplete="off" aria-label="搜索角色">
-        </div>
         <div class="list" id="contact-list"></div>
       </section>
 
@@ -289,14 +280,14 @@
   </div>
   <div id="dialog-group" class="dlg hidden" role="dialog" aria-modal="true" aria-labelledby="group-title">
     <div class="dlg-card">
-      <div class="dlg-head"><div class="dlg-title" id="group-title">新建群聊</div></div>
+      <div class="dlg-head"><div class="dlg-title" id="group-title" tabindex="-1">新建群聊</div></div>
       <div class="dlg-body">
         <label class="dlg-label" for="group-name">群聊名称</label>
         <input id="group-name" class="account-input" maxlength="60" placeholder="给这段相处起个名字" autocomplete="off">
         <div class="dlg-label">选择一起聊天的角色（2—8位）</div>
         <div id="group-member-options"></div>
       </div>
-      <div class="dlg-foot"><button id="group-cancel" class="btn-secondary" type="button">取消</button><button id="group-save" class="btn-primary" type="button">创建群聊</button></div>
+      <div class="dlg-foot"><button id="group-cancel" class="dlg-btn" type="button">取消</button><button id="group-save" class="dlg-btn dlg-btn-primary" type="button">创建群聊</button></div>
     </div>
   </div>
   <div id="toast" class="toast hidden"></div>

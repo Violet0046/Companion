@@ -60,8 +60,6 @@ const S = {
   memoryNotes: [],
   memoryFilter: 'all',
   memoryAction: null,
-  convQuery: '',
-  contactQuery: '',
   automaticMemory: true,
   /* 日历 */
   calUser: null,
@@ -458,14 +456,9 @@ function renderConvs() {
   for (const c of S.convs) {
     if (Number.isSafeInteger(c.unreadThrough) && (readMark(c.user,c.persona,c.group_id) ?? -1) >= c.unreadThrough) c.unread = 0;
   }
-  const q = (S.convQuery || '').trim().toLowerCase();
-  const items = S.convs.filter((c) => {
-    if (!q) return true;
-    const last = c.last ? (c.last.content || '') : '';
-    return (c.name || c.persona).toLowerCase().includes(q) || last.toLowerCase().includes(q);
-  });
+  const items = S.convs;
   if (!items.length) {
-    box.innerHTML = `<div class="empty">${q ? '没有匹配的会话' : '还没有角色'}</div>`;
+    box.innerHTML = '<div class="empty">还没有角色</div>';
     return;
   }
   box.innerHTML = items.map((c) => {
@@ -521,8 +514,7 @@ function personaTag(p) {
 function renderContacts() {
   const box = $('contact-list');
   if (!box) return;
-  const q = (S.contactQuery || '').trim().toLowerCase();
-  const ps = allPersonas().filter((p) => !q || p.persona.toLowerCase().includes(q));
+  const ps = allPersonas();
   let html = '';
   if (ps.length) {
     html += '<div class="group-label">角色</div>';
@@ -532,7 +524,7 @@ function renderContacts() {
       <div class="cell-sub">${esc(personaTag(p))}</div></div>
     </div>`).join('');
   }
-  const archived = (S.archived || []).filter((p) => !q || p.persona_id.toLowerCase().includes(q));
+  const archived = S.archived || [];
   if (archived.length) {
     html += '<div class="group-label">已删除的角色</div>';
     html += archived.map((p) => `<div class="cell" data-archived="${escAttr(p.persona_id)}">
@@ -995,7 +987,7 @@ function openCreateGroup() {
     const name=document.createElement('span');name.textContent=p.persona;
     label.appendChild(check);label.appendChild(name);box.appendChild(label);
   });
-  $('dialog-group').classList.remove('hidden');$('group-name').focus();
+  $('dialog-group').classList.remove('hidden');$('group-title').focus({preventScroll:true});
 }
 
 async function createGroup() {
@@ -3123,14 +3115,6 @@ document.addEventListener('keydown',event=>{
     else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first.focus();}
   }
 });
-$('btn-conv-search').onclick = () => {
-  const bar = $('conv-searchbar');
-  const open = bar.classList.toggle('hidden');
-  if (!open) {
-    const input = $('conv-search');
-    if (input) { input.value = ''; S.convQuery = ''; renderConvs(); input.focus(); }
-  }
-};
 $('btn-cal-close').onclick = closeCalendar;
 $('cal-scroll').addEventListener('scroll', () => {
   const el = $('cal-scroll');
@@ -3147,15 +3131,6 @@ document.querySelectorAll('.tab').forEach((tab) => {
     showView(tab.dataset.view);
     if (tab.dataset.view === 'contacts') renderContacts();
   };
-});
-
-$('conv-search').addEventListener('input', (e) => {
-  S.convQuery = e.target.value;
-  renderConvs();
-});
-$('contact-search').addEventListener('input', (e) => {
-  S.contactQuery = e.target.value;
-  renderContacts();
 });
 
 $('input').addEventListener('input', (e) => {

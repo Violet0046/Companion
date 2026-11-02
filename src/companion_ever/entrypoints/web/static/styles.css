@@ -610,7 +610,6 @@ body {
   cursor: pointer; flex: 0 0 auto;
 }
 .nav-actions { position: relative; flex: 0 0 auto; }
-.nav-add { border: 1.5px solid currentColor; background: transparent; font-size: 25px; }
 .create-menu {
   position: absolute; top: calc(100% + 13px); right: 0; z-index: 25;
   width: 166px; padding: 4px 0; border-radius: 9px; background: #4b4b4b;
@@ -631,20 +630,6 @@ body {
 .spacer { margin-left: auto; }
 /* 会话页顶栏：左返回 + 中间名字 + 右搜索/头像，用 flex-start 而不是 space-between */
 .topbar-nav { justify-content: flex-start; }
-
-/* ---------- 搜索条 ---------- */
-.searchbar {
-  flex: 0 0 auto; margin: 8px 14px 6px; height: 34px;
-  background: var(--surface); border-radius: 10px;
-  display: flex; align-items: center; gap: 7px; padding: 0 10px;
-  color: var(--text-muted);
-}
-.searchbar svg { width: 15px; height: 15px; opacity: .8; flex: 0 0 auto; }
-.searchbar input {
-  flex: 1 1 auto; min-width: 0; background: none; border: none; outline: none;
-  color: var(--text); font: inherit; font-size: 14px;
-}
-.searchbar input::placeholder { color: var(--text-muted); }
 
 /* ---------- 列表行（微信式） ---------- */
 .list { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; }
@@ -949,6 +934,9 @@ body {
   border: none; border-radius: var(--radius-sm); padding: 11px 12px;
 }
 .dlg-btn-primary { background: var(--accent); color: #fff; }
+#dialog-group .dlg-btn { min-height: 44px; min-width: 0; font-weight: 600; white-space: nowrap; }
+#group-save { flex: 2; }
+#group-title:focus { outline: none; }
 
 .notification-action { border: 0; background: transparent; color: var(--accent); font: inherit; cursor: pointer; padding: 8px 0 8px 12px; }
 .notification-action:disabled { opacity: .5; cursor: default; }
