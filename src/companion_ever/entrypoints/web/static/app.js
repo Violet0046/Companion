@@ -152,7 +152,7 @@ async function api(path, opts = {}) {
       throw err;
     }
     const data = await res.json();
-    const endingOwnSession = !S.account && ['/api/auth/password','/api/auth/logout','/api/auth/logout-all'].includes(path);
+    const endingOwnSession = !S.account && ['/api/auth/password','/api/auth/logout'].includes(path);
     if (actor && actor !== S.account?.csrf_token && !endingOwnSession) throw new Error('登录身份已变更');
     return data;
   } finally { clearTimeout(timer); }
@@ -844,7 +844,6 @@ function renderMe() {
   const roles=allPersonas().filter(p=>p.user===user).length,groups=S.convs.filter(c=>c.group_id && c.user===user).length;
   $('me-sub').textContent = `${roles} 个角色${groups ? ` · ${groups} 个群聊` : ''} · 共 ${notes} 条记忆 · ${msgs} 条消息`;
   $('me-server').textContent = location.host;
-  $('me-interval').textContent = S.automaticMemory ? '已开启' : '已关闭';
   $('me-version').textContent = 'v0.3.0';
   $('me-hint').textContent = `共 ${sessions} 次记录。切换角色请到「通讯录」。`;
 }
@@ -1336,7 +1335,7 @@ function renderProfile(user, persona, info) {
       <div class="row" id="row-chat"><span>继续聊天</span><span class="row-val">现在就开始 <span class="chev">›</span></span></div>
       <div class="row" id="row-memory"><span>TA 的记忆</span><span class="row-val">${(info && info.note_count) || 0} 条 <span class="chev">›</span></span></div>
       <div class="row" id="row-dates"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>
-      <div class="row"><span>主动联系</span><button type="button" class="notification-action" id="btn-proactive" disabled>载入中…</button></div>
+      <div class="row"><span>主动联系</span><label class="switch-row switch-inline"><input type="checkbox" id="btn-proactive" role="switch" aria-label="主动联系" aria-busy="true" disabled><i class="switch" aria-hidden="true"></i></label></div>
       ${S.debug ? '<div class="row" id="row-relation"><span>后台记忆</span><span class="row-val">任务状态 <span class="chev">›</span></span></div>' : ''}
     </div>
     <div class="dlg-danger">
@@ -1355,17 +1354,17 @@ function renderProfile(user, persona, info) {
     const path=`/api/persona/${enc(user)}/${enc(persona)}/proactive`;
     api(path).then(state=>{
       let enabled=state.enabled;
-      initiative.textContent=enabled?'关闭':'开启';initiative.disabled=false;
+      initiative.checked=enabled;initiative.disabled=false;initiative.setAttribute('aria-busy','false');
       initiative.onclick=async()=>{
-        initiative.disabled=true;
+        initiative.checked=enabled;initiative.disabled=true;initiative.setAttribute('aria-busy','true');
         try {
           const next=await api(path,{method:'PUT',body:JSON.stringify({enabled:!enabled})});
-          enabled=next.enabled;initiative.textContent=enabled?'关闭':'开启';
+          enabled=next.enabled;
           toast(enabled?'已允许 TA 在白天主动联系，每天最多一次':'已关闭主动联系');
         } catch(error) {toast(error.message||'设置失败');}
-        finally {initiative.disabled=false;}
+        finally {initiative.checked=enabled;initiative.disabled=false;initiative.setAttribute('aria-busy','false');}
       };
-    }).catch(()=>{initiative.textContent='暂不可用';});
+    }).catch(()=>{initiative.title='主动联系设置暂不可用';initiative.setAttribute('aria-busy','false');});
   }
 }
 
@@ -1883,7 +1882,6 @@ async function boot() {
     const health = await api('/api/health');
     if (request !== bootRequest) return;
     S.automaticMemory = health.auto_memory !== false;
-    $('account-name').textContent = account.username;
   } catch (e) {
     if (request !== bootRequest) return;
     if (e.status === 401) invalidateAccess();
@@ -1918,7 +1916,7 @@ async function boot() {
     showView(initialView);
     if(launch.get('open')==='chat' && Number.isSafeInteger(launchGroup) && launchGroup>0)await openGroup(launchGroup);
   }
-  window.CompanionNotifications?.init({api, toast, debug: S.debug,
+  window.CompanionNotifications?.init({api, toast,
     target: () => ({user_id: S.user, persona_id: S.persona || S.users.find(u=>u.id===S.user)?.personas?.[0] || ''}),
     active: () => S.view === 'me' && !$('app').classList.contains('hidden')});
   if(!S.group)connect();
@@ -3231,11 +3229,11 @@ async function finishLocalLogout() {
   invalidateAccess();
   location.replace('/');
 }
-async function logout(all = false) {
+async function logout() {
   try {
     const registration = await navigator.serviceWorker?.getRegistration?.();
     const subscription = await registration?.pushManager?.getSubscription?.();
-    await api(all ? '/api/auth/logout-all' : '/api/auth/logout', {method:'POST', body:JSON.stringify({endpoint:subscription?.endpoint || ''})});
+    await api('/api/auth/logout', {method:'POST', body:JSON.stringify({endpoint:subscription?.endpoint || ''})});
     try { await subscription?.unsubscribe(); } catch (_) {}
     await finishLocalLogout();
   } catch (error) { toast('退出未完成：' + error.message); }
@@ -3243,7 +3241,6 @@ async function logout(all = false) {
 $('btn-password').onclick = () => showPasswordForm();
 $('login-retry').onclick = () => boot();
 $('btn-logout').onclick = () => logout();
-$('btn-logout-all').onclick = () => logout(true);
 $('password-cancel').onclick = cancelPasswordForm;
 
 /* 新建角色对话框 */

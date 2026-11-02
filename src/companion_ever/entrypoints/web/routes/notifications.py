@@ -1,8 +1,6 @@
-"""Account-owned device subscriptions and explicit test notification endpoints."""
+"""Account-owned device subscription endpoints."""
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
-
-from companion_ever.infrastructure.web_push import PushDeliveryError
 
 router = APIRouter(prefix='/api/notifications', tags=['notifications'])
 
@@ -27,10 +25,6 @@ class SubscribeIn(BaseModel):
     subscription: SubscriptionIn
 
 
-class TestIn(DeviceIn):
-    persona_id: str = Field(min_length=1, max_length=200)
-
-
 def service(request):
     result = request.app.state.ctx.services.notifications
     if result is None:
@@ -47,8 +41,6 @@ def invoke(action, *args):
         raise HTTPException(404, str(exc)) from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
-    except PushDeliveryError as exc:
-        raise HTTPException(410 if exc.expired else 502, str(exc)) from None
 
 
 @router.get('/config')
@@ -69,8 +61,3 @@ def subscribe(request: Request, payload: SubscribeIn):
 @router.delete('/subscriptions')
 def unsubscribe(request: Request, payload: DeviceIn):
     return invoke(service(request).unsubscribe, payload.user_id, payload.endpoint)
-
-
-@router.post('/test')
-def test(request: Request, payload: TestIn):
-    return invoke(service(request).send_test, payload.user_id, payload.persona_id, payload.endpoint)

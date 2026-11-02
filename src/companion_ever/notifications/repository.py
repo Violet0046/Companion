@@ -41,17 +41,6 @@ class NotificationRepo:
             args.append(revision)
         self.conn.execute(sql, args)
 
-    def claim_test(self, user, endpoint):
-        with transaction(self.conn):
-            row = self.get(user, endpoint)
-            if row is None:
-                raise LookupError('此设备尚未开启通知')
-            now = time.time()
-            if row['last_test_at'] is not None and now - row['last_test_at'] < 30:
-                raise ValueError('请等待 30 秒后再发送测试通知')
-            self.conn.execute('UPDATE push_subscription SET last_test_at=? WHERE user_id=? AND endpoint=?', (now, user, endpoint))
-            return row
-
     def enqueue(self, user, persona, gid, message_id, payload,*,conversation_id=None,update_queued=False):
         now=time.time()
         if conversation_id is None:

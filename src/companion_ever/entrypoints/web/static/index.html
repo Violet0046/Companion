@@ -88,17 +88,13 @@
           <div class="group">
             <div class="row">
               <span>显示思考过程</span>
-              <label class="switch-row switch-inline"><input type="checkbox" id="toggle-thinking" checked><i class="switch"></i></label>
+              <label class="switch-row switch-inline"><input type="checkbox" id="toggle-thinking" role="switch" aria-label="显示思考过程" checked><i class="switch" aria-hidden="true"></i></label>
             </div>
-            <div class="row"><span>自动记录</span><span class="row-val" id="me-interval">…</span></div>
-            <div class="row"><span>消息通知</span><button type="button" class="notification-action" id="notification-toggle" disabled>检查中…</button></div>
-            <div class="notification-hint" id="notification-hint" role="status"></div>
-            <div class="row hidden" id="notification-test-row"><span>测试通知</span><button type="button" class="notification-action" id="notification-test" disabled>发送</button></div>
+            <div class="row"><span>消息通知</span><label class="switch-row switch-inline"><input type="checkbox" id="notification-toggle" role="switch" aria-label="消息通知" disabled><i class="switch" aria-hidden="true"></i></label></div>
+            <div class="notification-hint hidden" id="notification-hint" role="status"></div>
             <div class="row"><span>服务器地址</span><span class="row-val" id="me-server">…</span></div>
-            <div class="row"><span>账号</span><span class="row-val" id="account-name"></span></div>
             <button class="row account-row" id="btn-password" type="button">修改密码</button>
             <button class="row account-row" id="btn-logout" type="button">退出登录</button>
-            <button class="row account-row" id="btn-logout-all" type="button">退出所有设备</button>
             <div class="row"><span>关于</span><span class="row-val" id="me-version">v0.3.0</span></div>
             <a class="row hidden" id="call-log-link" href="/calls.html"><span>模型调用记录</span><span class="row-val">查看 ›</span></a>
           </div>

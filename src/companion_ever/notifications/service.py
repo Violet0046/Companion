@@ -1,4 +1,4 @@
-"""Subscription and explicit test delivery use cases; no model or scheduler."""
+"""Device subscriptions and durable message notification delivery."""
 from urllib.parse import urlencode
 import threading
 import json
@@ -114,24 +114,3 @@ class NotificationService:
         validate_endpoint(endpoint)
         self.repo.delete(user, endpoint)
         return {'subscribed': False}
-
-    def send_test(self, user, persona, endpoint):
-        self.authorizer.require_persona(user, persona)
-        if not self.config()['configured']:
-            raise ValueError('服务器尚未开启通知')
-        validate_endpoint(endpoint)
-        row = self.repo.claim_test(user, endpoint)
-        private, _ = self.repo.identity(generate_identity)
-        payload = {
-            'title': '同行', 'body': '通知已连接，点这里回到会话。',
-            'tag': 'companion-notification-test',
-            'url': '/?' + urlencode({'user': user, 'persona': persona, 'open': 'chat'}),
-        }
-        subscription = {'endpoint': row['endpoint'], 'keys': {'p256dh': row['p256dh'], 'auth': row['auth']}}
-        try:
-            self.sender.send(subscription, payload, private, self.subject)
-        except PushDeliveryError as exc:
-            if exc.expired:
-                self.repo.delete(user, endpoint, row['revision'])
-            raise
-        return {'status': 'accepted'}

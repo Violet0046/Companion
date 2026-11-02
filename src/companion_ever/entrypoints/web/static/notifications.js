@@ -11,19 +11,18 @@ window.CompanionNotifications = (() => {
     return '';
   }
   function render(message = '') {
-    const button = el('notification-toggle');
-    if (!button) return;
+    const toggle = el('notification-toggle');
+    if (!toggle) return;
     const denied = window.Notification?.permission === 'denied';
-    button.textContent = subscribed ? '关闭' : '开启';
-    button.disabled = busy || !!unsupported() || (!subscribed && (!config?.configured || !registration || denied));
-    button.setAttribute('aria-label', subscribed ? '关闭消息通知' : '开启消息通知');
-    button.setAttribute('aria-busy', String(busy));
-    el('notification-hint').textContent = message || unsupported()
+    toggle.checked = subscribed;
+    toggle.disabled = busy || !!unsupported() || (!subscribed && (!config?.configured || !registration || denied));
+    toggle.setAttribute('aria-busy', String(busy));
+    const hint = message || unsupported()
       || (denied ? '通知权限已关闭，可在系统设置中允许同行发送通知' : '')
-      || (config && !config.configured ? '服务器尚未开启通知' : '')
-      || (subscribed ? '此设备的通知连接已开启' : '开启后，可在后台接收通知');
-    el('notification-test-row').classList.toggle('hidden', !subscribed && !host?.debug);
-    el('notification-test').disabled = busy || !subscribed || denied || !!unsupported() || !config?.configured;
+      || (config && !config.configured ? '服务器尚未开启通知' : '');
+    el('notification-hint').textContent = hint;
+    el('notification-hint').classList.toggle('hidden', !hint);
+    toggle.title = hint;
   }
   function keyBytes(value) {
     const raw = atob(value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4));
@@ -87,11 +86,6 @@ window.CompanionNotifications = (() => {
     subscription = null;
     host.toast('通知已关闭');
   }
-  async function test(target) {
-    await host.api('/api/notifications/test', {method: 'POST',
-      body: JSON.stringify({...target, endpoint: subscription.endpoint})});
-    host.toast('测试通知已提交，请查看系统通知');
-  }
   async function perform(action) {
     if (busy) return;
     busy = true; ++sequence; render();
@@ -108,7 +102,6 @@ window.CompanionNotifications = (() => {
     init(adapter) {
       host = adapter;
       el('notification-toggle').onclick = () => perform(subscribed ? disable : enable);
-      el('notification-test').onclick = () => perform(test);
       render();
       return refresh();
     }, refresh,
