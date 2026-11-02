@@ -10,7 +10,7 @@ from pathlib import Path
 import threading
 
 
-LAYERS = ('chat', 'extraction', 'summary')
+LAYERS = ('chat', 'extraction', 'summary', 'coordination')
 STATUSES = ('ok', 'error', 'aborted')
 _context = ContextVar('model_call_context', default=None)
 

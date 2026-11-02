@@ -9,6 +9,7 @@ from companion_ever.runtime.tasks import checkpoint
 class ExtractionState(TypedDict, total=False):
     user_id: str
     persona_id: str
+    conversation_id: int
     job_id: str
     job_status: str
     messages: list

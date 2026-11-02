@@ -97,7 +97,7 @@ def receive_message(request: Request,payload: ChatIn):
     ctx=request.app.state.ctx
     user,persona=resolve_target(ctx,request.app.state.web_cfg,request.state.account['user_id'],payload.persona_id)
     try:
-        g,created=ctx.services.generation.submit(user,persona,payload.content,payload.client_message_id)
+        g,created=ctx.services.generation.submit(user,persona,payload.content,payload.client_message_id,quoted_message_id=payload.quoted_message_id)
     except LimitExceeded:
         raise
     except ValueError as exc:
@@ -221,6 +221,10 @@ def notify_proactive_message(user_id,persona_id,message):
     broadcast(user_id,persona_id,{'type':'proactive_message','user_id':user_id,'persona_id':persona_id,'message':message})
 
 
+def notify_group_message(user_id,cid,message):
+    broadcast(user_id,'',{'type':'group_message','user_id':user_id,'conversation_id':cid,'message':_present_message(message)})
+
+
 def notify_record_done(
     user_id: str, persona_id: str, report: SessionCloseReport,
 ) -> None:
@@ -258,7 +262,7 @@ def post_chat(
 
     user_id, persona_id = resolve_target(ctx, cfg, request.state.account['user_id'], payload.persona_id)
     try:
-        raw = ctx.services.chat.chat(user_id, persona_id, payload.content, payload.client_message_id)
+        raw = ctx.services.chat.chat(user_id, persona_id, payload.content, payload.client_message_id,quoted_message_id=payload.quoted_message_id)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     return {
@@ -306,6 +310,7 @@ async def ws_chat(
     websocket: WebSocket,
     user: str = Query(default=""),
     persona: str = Query(default=""),
+    conversation_id: int | None = Query(default=None,gt=0),
 ) -> None:
     """流式对话通道。
 
@@ -329,8 +334,13 @@ async def ws_chat(
     cfg = websocket.app.state.web_cfg
 
     try:
-        user_id, persona_id = resolve_target(ctx, cfg, websocket.state.account['user_id'], persona)
-        ctx.services.conversation.authorizer.require_persona(user_id, persona_id)
+        if conversation_id is not None:
+            user_id=websocket.state.account['user_id']
+            ctx.services.groups.require(user_id,conversation_id)
+            persona_id='group:'+str(conversation_id)
+        else:
+            user_id, persona_id = resolve_target(ctx, cfg, websocket.state.account['user_id'], persona)
+            ctx.services.conversation.authorizer.require_persona(user_id, persona_id)
     except HTTPException as e:
         await websocket.close(code=4404, reason=str(e.detail))
         return
@@ -367,17 +377,20 @@ async def ws_chat(
             mtype = (msg or {}).get("type")
 
             if mtype == "chat":
-                content = str((msg or {}).get("content") or "").strip()
-                if not content:
+                content = str((msg or {}).get("content") or "")
+                if not content.strip():
                     continue
                 if len(content) > 16000:
                     await conn.send({'type':'error','message':'消息过长，请控制在 16000 字以内'})
                     continue
                 channel, emit = _reply_channel()
                 try:
+                    submit=ctx.services.generation.submit_group if conversation_id is not None else ctx.services.generation.submit
+                    options={'mentions':msg.get('mentions')} if conversation_id is not None else {}
                     generation, created = await run_in_threadpool(
-                        ctx.services.generation.submit, user_id, persona_id, content,
-                        str(msg.get('client_message_id') or '') or None, on_event=emit)
+                        submit, user_id, conversation_id if conversation_id is not None else persona_id, content,
+                        str(msg.get('client_message_id') or '') or None, on_event=emit,
+                        quoted_message_id=msg.get('quoted_message_id'),**options)
                 except LimitExceeded as exc:
                     channel[1].set()
                     await conn.send({'type':'error','message':str(exc),'code':exc.code,
@@ -385,7 +398,8 @@ async def ws_chat(
                     continue
                 except (ValueError, PermissionError) as exc:
                     channel[1].set()
-                    await conn.send({'type':'error','message':str(exc)})
+                    await conn.send({'type':'error','message':str(exc),'code':'invalid_message',
+                                     'client_message_id':msg.get('client_message_id')})
                     continue
                 try:
                     if created:
@@ -407,6 +421,9 @@ async def ws_chat(
                 task.add_done_callback(lambda _, stop=channel[1]: stop.set())
 
             elif mtype == "close_session":
+                if conversation_id is not None:
+                    await conn.send({'type':'error','message':'群聊不支持手动关闭会话'})
+                    continue
                 ctx.services.session_close.close_session_background(user_id,persona_id,retry_failed=True)
                 await conn.send({'type':'record_started'})
 
@@ -455,7 +472,11 @@ async def _stream_reply(conn, ctx, generation, channel) -> None:
     try:
         while True:
             event=await queue.get()
-            if ctx.services.generation.state(generation['user_id'],generation['persona_id'],gid)['status']=='cancelled':
+            if generation['conversation_kind']=='group':
+                ctx.services.groups.require(generation['user_id'],generation['conversation_id'])
+                state=ctx.services.generation.repo.get(gid)
+            else:state=ctx.services.generation.state(generation['user_id'],generation['persona_id'],gid)
+            if state['status']=='cancelled':
                 await conn.send({'type':'cancelled','generation_id':gid})
                 return
             if event['type']=='message_done':

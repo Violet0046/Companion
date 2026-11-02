@@ -24,12 +24,13 @@ class ChatService:
         self.idle_session_minutes = idle_session_minutes
         self.generations = GenerationRepo(conversation_service.conv_repo.conn)
 
-    def receive(self, user_id, persona_id, user_input, client_message_id=None):
+    def receive(self, user_id, persona_id, user_input, client_message_id=None, *, quoted_message_id=None):
         self.conversation_service.authorizer.require_persona(user_id,persona_id)
         self._maybe_close_stale(user_id,persona_id)
         with transaction(self.generations.conn):
             self.conversation_service.authorizer.require_persona(user_id,persona_id)
-            return self.generations.receive(user_id,persona_id,strip_invisible(user_input),client_message_id or uuid.uuid4().hex)
+            return self.generations.receive(user_id,persona_id,strip_invisible(user_input),client_message_id or uuid.uuid4().hex,
+                                            quoted_message_id=quoted_message_id)
 
     def _maybe_close_stale(self, user_id, persona_id):
         if self.session_close_service:
@@ -137,7 +138,7 @@ class ChatService:
                 if not completed:
                     self.generations.finish(gid,'cancelled')
 
-    def _inline_events(self, user_id, persona_id, user_input, client_message_id, *, stream):
+    def _inline_events(self, user_id, persona_id, user_input, client_message_id, *, stream, quoted_message_id=None):
         """Commit receipt and claim together; follow an existing execution to completion.
 
         Priming stops at the start event, before prompt construction or model I/O.
@@ -152,7 +153,8 @@ class ChatService:
             try:
                 with transaction(self.generations.conn):
                     if generation is None:
-                        generation, _ = self.receive(user_id, persona_id, user_input, client_message_id)
+                        generation, _ = self.receive(user_id, persona_id, user_input, client_message_id,
+                                                      quoted_message_id=quoted_message_id)
                     else:
                         current = self.generations.get(generation['id'])
                         if current['status'] == 'running' and (current['lease_expires_at'] or 0) <= time.time():
@@ -178,15 +180,15 @@ class ChatService:
                 raise TimeoutError('回复仍在处理中，请稍后查看')
             time.sleep(.05)
 
-    def chat(self,user_id,persona_id,user_input,client_message_id=None):
+    def chat(self,user_id,persona_id,user_input,client_message_id=None, *, quoted_message_id=None):
         replies=[]
-        for event in self._inline_events(user_id,persona_id,user_input,client_message_id,stream=False):
+        for event in self._inline_events(user_id,persona_id,user_input,client_message_id,stream=False,quoted_message_id=quoted_message_id):
             if event['type']=='message_done':
                 replies.append(event.get('raw',event['message']['content']))
         return '\n\n'.join(replies)
 
-    def stream_chat(self,user_id,persona_id,user_input,client_message_id=None):
-        for event in self._inline_events(user_id,persona_id,user_input,client_message_id,stream=True):
+    def stream_chat(self,user_id,persona_id,user_input,client_message_id=None, *, quoted_message_id=None):
+        for event in self._inline_events(user_id,persona_id,user_input,client_message_id,stream=True,quoted_message_id=quoted_message_id):
             if event['type']=='delta':
                 yield event['content']
             elif event['type']=='message_done' and event.get('replayed'):

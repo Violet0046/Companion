@@ -13,6 +13,7 @@ class ChatIn(BaseModel):
     client_message_id: str | None = Field(default=None, max_length=128)
     user_id: str = ""
     persona_id: str = ""
+    quoted_message_id: int | None = Field(default=None, gt=0, strict=True)
 
 
 class CloseSessionIn(BaseModel):
@@ -50,6 +51,7 @@ class NoteOut(BaseModel):
     event_time: Optional[str] = None
     time_basis: str = ''
     source_quote: Optional[str] = None
+    source_conversations:list[dict]=Field(default_factory=list)
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -80,6 +82,8 @@ class MessageOut(BaseModel):
     created_at: Optional[str] = None
     thinking: Optional[str] = None
     client_message_id: Optional[str] = None
+    quoted_message_id: int | None = None
+    quoted_message: dict | None = None
 
 
 class DateEntry(BaseModel):

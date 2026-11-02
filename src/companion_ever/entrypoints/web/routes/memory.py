@@ -197,10 +197,11 @@ def list_notes(
         kind=note_kind,
         limit=limit,
     )
-    return [_note_out(n,tz) for n in notes]
+    sources=ctx.services.note.sources(user_id,persona_id,[n.id for n in notes])
+    return [_note_out(n,tz,sources.get(n.id,[])) for n in notes]
 
 
-def _note_out(n, tz):
+def _note_out(n, tz,sources=None):
     return NoteOut(
         id=n.id,
         kind=n.kind.value,
@@ -209,6 +210,7 @@ def _note_out(n, tz):
         importance=n.importance,
         revision=n.revision,
         source_quote=n.source_quote,
+        source_conversations=sources or [],
         created_at=_s(n.created_at, tz),
         updated_at=_s(n.updated_at, tz),
     )
@@ -226,7 +228,7 @@ def edit_note(request: Request, user_id: str, persona_id: str, note_id: str,
         raise HTTPException(409,str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400,str(exc)) from exc
-    return _note_out(note,ctx.cfg.tz_offset_hours)
+    return _note_out(note,ctx.cfg.tz_offset_hours,ctx.services.note.sources(user_id,persona_id,[note.id]).get(note.id,[]))
 
 
 @router.delete('/api/persona/{user_id}/{persona_id}/notes/{note_id}')
@@ -314,6 +316,8 @@ def list_history(
             created_at=_s(m.created_at, tz),
             thinking=thinking_map.get(m.id),
             client_message_id=m.client_message_id,
+            quoted_message_id=m.quoted_message_id,
+            quoted_message=ctx.services.conversation.quote(user_id,persona_id,m.quoted_message_id) if m.quoted_message_id is not None else None,
         )
         for m in messages
     ]

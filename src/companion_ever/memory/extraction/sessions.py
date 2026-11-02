@@ -35,7 +35,7 @@ class SessionCloseService:
 
     def is_closing(self, user_id, persona_id):
         with self._lock:
-            return (user_id,persona_id) in self._closing
+            return any(key[:2]==(user_id,persona_id) for key in self._closing)
 
     def recent_jobs(self, user_id, persona_id):
         self.authorizer.require_persona(user_id, persona_id)
@@ -58,7 +58,7 @@ class SessionCloseService:
             if job['status'] != 'failed':
                 raise ValueError('只有失败任务可以重试')
             self.jobs.retry(job_id)
-        self.close_session_background(user_id, persona_id, boundary=False)
+        self.close_session_background(user_id, persona_id, boundary=False,**({'conversation_id':job['conversation_id']} if job['conversation_kind']=='group' else {}))
         return {'job_id': job_id, 'queued': True}
 
     def close_if_stale(self, user_id, persona_id, idle_minutes):
@@ -70,16 +70,18 @@ class SessionCloseService:
             return self.close_session_background(user_id,persona_id)
         return False
 
-    def close_session_background(self, user_id, persona_id, *, boundary=True, retry_failed=False):
+    def close_session_background(self, user_id, persona_id, *, boundary=True, retry_failed=False,conversation_id=None):
         self.authorizer.require_persona(user_id,persona_id)
-        key=(user_id,persona_id)
+        scope_options={'conversation_id':conversation_id} if conversation_id is not None else {}
+        if conversation_id is not None:boundary=False
+        key=(user_id,persona_id,conversation_id) if conversation_id is not None else (user_id,persona_id)
         with self._lock:
             if key in self._closing:
                 return False
             self._closing.add(key)
         try:
-            drain_through=self.jobs.latest_message_id(user_id,persona_id)
-            job = self.jobs.enqueue(user_id,persona_id,until_id=drain_through)
+            drain_through=self.jobs.latest_message_id(user_id,persona_id,**scope_options)
+            job = self.jobs.enqueue(user_id,persona_id,until_id=drain_through,**scope_options)
             if retry_failed and job and job['status'] == 'failed':
                 self.jobs.retry(job['id'])
             marker=self.conversation_service.log_session_close(user_id,persona_id) if boundary else 0
@@ -92,7 +94,7 @@ class SessionCloseService:
             succeeded=False
             try:
                 while not self.runtime.closing.is_set():
-                    report = self._run(user_id,persona_id,current_marker,drain_through=drain_through)
+                    report = self._run(user_id,persona_id,current_marker,drain_through=drain_through,**scope_options)
                     succeeded=report.extraction.job_status=='succeeded'
                     if not succeeded or not report.more_pending:
                         break
@@ -117,12 +119,13 @@ class SessionCloseService:
         marker=self.conversation_service.log_session_close(user_id,persona_id)
         return self._run(user_id,persona_id,marker)
 
-    def _run(self, user_id, persona_id, marker, *, drain_through=None):
-        state=self.extraction_service.run({'user_id':user_id,'persona_id':persona_id})
+    def _run(self, user_id, persona_id, marker, *, drain_through=None,conversation_id=None):
+        scope_options={'conversation_id':conversation_id} if conversation_id is not None else {}
+        state=self.extraction_service.run({'user_id':user_id,'persona_id':persona_id,**scope_options})
         report=report_from_state(state)
         next_job = None
         if report.job_status == 'succeeded':
-            next_job = self.jobs.enqueue(user_id,persona_id,until_id=drain_through)
+            next_job = self.jobs.enqueue(user_id,persona_id,until_id=drain_through,**scope_options)
         result=SessionCloseReport(marker,report,more_pending=next_job is not None)
         if self.on_record_done and report.job_status not in ('queued','running'):
             try:
@@ -136,6 +139,7 @@ class SessionCloseService:
         rows=self.jobs.pending_scopes()
         for row in rows:
             try:
-                self.close_session_background(row['user_id'],row['persona_id'],boundary=False)
+                self.close_session_background(row['user_id'],row['persona_id'],boundary=False,
+                    **({'conversation_id':row['conversation_id']} if row.get('conversation_id') is not None else {}))
             except PermissionError:
                 continue

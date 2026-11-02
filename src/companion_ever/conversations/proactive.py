@@ -17,6 +17,35 @@ class ProactiveService:
         self.repo=repo;self.authorizer=authorizer;self.settings=settings
         self.prompt=prompt;self.llm=llm;self.notifications=notifications
         self.zone=timezone(timedelta(hours=tz_offset_hours))
+        self.groups=None
+
+    def group_setting(self,user,cid,enabled=None):
+        self.groups.require(user,cid)
+        with transaction(self.repo.conn):
+            if enabled is not None:self.groups.group_repo.set_proactive(cid,enabled)
+            return {'enabled':bool(self.groups.require(user,cid)['proactive_enabled'])}
+
+    def check_group(self,user,cid,*,test=False):
+        self.groups.require(user,cid)
+        if not self.groups.members(user,cid):return {'allowed':False,'reason':'群内没有可发言的角色'}
+        snapshot=self.groups.group_repo.proactive_snapshot(cid)
+        return self._eligibility(user,snapshot,bool(snapshot and snapshot['proactive_enabled']),test=test,
+            empty_reason='请先在群里聊过一句',label='这个群')
+
+    def trigger_group(self,user,cid,*,delay=0,test=False,request_id=None):
+        if not 0<=delay<=3600:raise ValueError('延迟必须在0—3600秒之间')
+        self.groups.require(user,cid)
+        gid='proactive-'+uuid.uuid5(uuid.NAMESPACE_URL,json.dumps([user,'group',cid,request_id])).hex if request_id else 'proactive-'+uuid.uuid4().hex
+        with transaction(self.repo.conn):
+            old=self.repo.get(gid)
+            if old:
+                if bool(old['test_mode'])!=bool(test):raise ValueError('同一request_id不能用于不同触发模式')
+                return old
+            check=self.check_group(user,cid,test=test)
+            if not check['allowed']:raise ValueError(check['reason'])
+            snapshot=self.groups.group_repo.proactive_snapshot(cid)
+            self.groups.group_repo.enqueue_proactive(cid,snapshot,gid,delay,test)
+            return self.repo.get(gid)
 
     def setting(self, user, persona, enabled=None):
         self.authorizer.require_persona(user,persona)
@@ -27,27 +56,25 @@ class ProactiveService:
                     self.repo.cancel_automatic(user,persona)
             return {'enabled':self.settings.proactive_enabled(user,persona)}
 
-    def check(self, user, persona, *, test=False):
+    def check(self,user,persona,*,test=False):
         self.authorizer.require_persona(user,persona)
-        snapshot=self.repo.proactive_snapshot(user,persona)
-        if not snapshot or not snapshot['user_id']:
-            return {'allowed':False,'reason':'请先与这个角色聊过一句'}
-        if snapshot['busy']:
-            return {'allowed':False,'reason':'已有回复或主动任务待处理'}
-        try:
-            self.repo.usage.require_capacity(user)
-        except LimitExceeded as exc:
-            return {'allowed':False,'reason':str(exc)}
+        return self._eligibility(user,self.repo.proactive_snapshot(user,persona),self.settings.proactive_enabled(user,persona),test=test,
+            empty_reason='请先与这个角色聊过一句',label='这个角色')
+
+    def _eligibility(self,user,snapshot,enabled,*,test,empty_reason,label):
+        if not snapshot or not snapshot['user_id']:return {'allowed':False,'reason':empty_reason}
+        if snapshot['busy']:return {'allowed':False,'reason':'已有回复或主动任务待处理'}
+        try:self.repo.usage.require_capacity(user)
+        except LimitExceeded as exc:return {'allowed':False,'reason':str(exc)}
         if not test:
             now=datetime.now(self.zone)
-            day_start=now.replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-            reason = ('尚未开启这个角色的主动联系' if not self.settings.proactive_enabled(user,persona) else
-                      '当前处于免打扰时段（22:00—10:00）' if not 10<=now.hour<22 else
-                      '上次用户发言距今不足四小时' if time.time()-parse_sqlite_ts(snapshot['user_at']).timestamp()<4*3600 else
-                      '上一条主动消息尚未读' if snapshot['unread_proactive'] else
-                      '今天已安排过主动联系' if self.repo.automatic_attempted(user,day_start) else '')
-            if reason:
-                return {'allowed':False,'reason':reason}
+            start=now.replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            reason=(f'尚未开启{label}的主动联系' if not enabled else
+                '当前处于免打扰时段（22:00—10:00）' if not 10<=now.hour<22 else
+                '上次用户发言距今不足四小时' if time.time()-parse_sqlite_ts(snapshot['user_at']).timestamp()<4*3600 else
+                '上一条主动消息尚未读' if snapshot['unread_proactive'] else
+                '今天已安排过主动联系' if self.repo.automatic_attempted(user,start) else '')
+            if reason:return {'allowed':False,'reason':reason}
         return {'allowed':True,'reason':None}
 
     def trigger(self, user, persona, *, delay=0, test=False, request_id=None):
@@ -68,10 +95,21 @@ class ProactiveService:
             return self.repo.enqueue_proactive(user,persona,snapshot,gid,delay=delay,test=test)
 
     def tick(self):
+        candidates=[]
         for user,persona in self.repo.enabled_targets():
+            snapshot=self.repo.proactive_snapshot(user,persona)
+            candidates.append((snapshot['user_id'] or 0,user,persona,None))
+        if self.groups is not None:
+            for row in self.groups.group_repo.proactive_targets():
+                snapshot=self.groups.group_repo.proactive_snapshot(row['id'])
+                candidates.append((snapshot['user_id'] or 0,row['user_id'],None,row['id']))
+        for _,user,persona,cid in sorted(candidates,key=lambda c:c[0],reverse=True):
             try:
-                if self.check(user,persona)['allowed']:
-                    self.trigger(user,persona,request_id='automatic-'+datetime.now(self.zone).date().isoformat())
+                check=self.check_group(user,cid) if cid is not None else self.check(user,persona)
+                if check['allowed']:
+                    request_id='automatic-'+datetime.now(self.zone).date().isoformat()
+                    if cid is not None:self.trigger_group(user,cid,request_id=request_id)
+                    else:self.trigger(user,persona,request_id=request_id)
             except (PermissionError,ValueError):
                 continue
 

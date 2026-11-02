@@ -103,7 +103,7 @@ def create_app(
         return response
 
     # --- 路由 ---
-    from companion_ever.entrypoints.web.routes import auth, chat, memory, persona, calls, notifications
+    from companion_ever.entrypoints.web.routes import auth, chat, memory, persona, calls, notifications, groups
 
     app.include_router(chat.router)
     app.include_router(auth.router)
@@ -111,11 +111,13 @@ def create_app(
     app.include_router(memory.router)
     app.include_router(calls.router)
     app.include_router(notifications.router)
+    app.include_router(groups.router)
 
     # 记录（抽取记忆）跑完后，服务端**主动推送** record_done 给前端。
     # 前端收到就刷新关系状态 / 记忆 / 计数——不用「退出重进」才能看到变化。
     ctx.services.session_close.on_record_done = chat.notify_record_done
     ctx.services.generation.on_proactive_message = chat.notify_proactive_message
+    ctx.services.generation.on_group_message=chat.notify_group_message
     if ctx.services.summary is not None:
         ctx.services.summary.on_updated=chat.notify_summary_updated
 

@@ -1,13 +1,13 @@
 /* Read-only diagnostics. Rows, totals and exports always share the same filters. */
 const $=id=>document.getElementById(id);
-const names={chat:'聊天',extraction:'记忆整理',summary:'摘要更新'};
+const names={chat:'聊天',extraction:'记忆整理',summary:'摘要更新',coordination:'群聊协调'};
 const callName=r=>r.layer==='chat'&&r.purpose==='proactive'?'主动聊天':names[r.layer];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=n=>n===null||n===undefined?'未知':n.toLocaleString('zh-CN');
 const seconds=n=>(n/1000).toFixed(n>=10000?1:2)+' s';
 const initial=new URLSearchParams(location.search);
 const state={date:initial.get('date')||'',user_id:initial.get('user')||localStorage.getItem('ce_user')||'',
-  persona_id:initial.get('persona')||localStorage.getItem('ce_persona')||'',layer:'all',status:'all',job_id:null};
+  persona_id:initial.get('persona')||'',layer:'all',status:'all',job_id:null};
 let records=[],selected=null,requestNumber=0,controller=null;
 function query(){
   const params=new URLSearchParams();

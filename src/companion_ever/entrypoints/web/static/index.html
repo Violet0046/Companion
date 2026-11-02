@@ -124,6 +124,7 @@
             </svg>
           </button>
           <button id="btn-avatar" class="ava ava-sm" aria-label="角色资料">·</button>
+          <button id="btn-group-settings" class="icon-btn hidden" aria-label="群聊设置">⋯</button>
         </header>
 
         <div id="history-bar" class="history-bar hidden">
@@ -140,6 +141,9 @@
             </svg>
             <span id="jump-latest-label">回到最新</span>
           </button>
+          <div id="composer-quote" class="composer-quote hidden">
+            <span id="composer-quote-text"></span><button id="composer-quote-cancel" type="button" aria-label="取消引用">×</button>
+          </div>
           <div class="composer-row">
             <textarea id="input" rows="1" placeholder="说点什么…" autocomplete="off"
                       enterkeyhint="send" aria-label="消息输入"></textarea>
@@ -247,6 +251,40 @@
     <div class="cal-foot" id="cal-foot"></div>
   </div>
 
+  <div id="message-actions" class="message-actions hidden" role="menu" aria-label="消息操作">
+    <button id="message-copy-action" type="button" role="menuitem">复制</button>
+    <button id="message-quote-action" type="button" role="menuitem">引用</button>
+  </div>
+  <div id="dialog-group-settings" class="dlg hidden" role="dialog" aria-modal="true" aria-labelledby="group-settings-title">
+    <div class="dlg-card">
+      <div class="dlg-head"><div class="dlg-title" id="group-settings-title">群聊设置</div></div>
+      <div class="dlg-body">
+        <div id="group-settings-members" class="hint"></div>
+        <label class="member-option"><input id="group-proactive-enabled" type="checkbox"><span>允许群成员主动开口</span></label>
+        <p class="hint">在合适的时候偶尔发来消息，与私聊共用主动联系频率。</p>
+      </div>
+      <div class="dlg-foot"><button id="group-settings-close" class="btn-primary" type="button">完成</button></div>
+    </div>
+  </div>
+  <div id="mention-sheet" class="mention-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="mention-title">
+    <div class="mention-panel">
+      <div class="mention-heading"><button id="mention-close" type="button" aria-label="关闭成员选择">⌄</button><strong id="mention-title">选择提醒的角色</strong><span></span></div>
+      <input id="mention-search" type="search" placeholder="搜索成员" aria-label="搜索群成员" autocomplete="off">
+      <div id="mention-members" class="mention-members"></div>
+    </div>
+  </div>
+  <div id="dialog-group" class="dlg hidden" role="dialog" aria-modal="true" aria-labelledby="group-title">
+    <div class="dlg-card">
+      <div class="dlg-head"><div class="dlg-title" id="group-title">新建群聊</div></div>
+      <div class="dlg-body">
+        <label class="dlg-label" for="group-name">群聊名称</label>
+        <input id="group-name" class="account-input" maxlength="60" placeholder="给这段相处起个名字" autocomplete="off">
+        <div class="dlg-label">选择一起聊天的角色（2—8位）</div>
+        <div id="group-member-options"></div>
+      </div>
+      <div class="dlg-foot"><button id="group-cancel" class="btn-secondary" type="button">取消</button><button id="group-save" class="btn-primary" type="button">创建群聊</button></div>
+    </div>
+  </div>
   <div id="toast" class="toast hidden"></div>
   <div id="debug-panel" class="hidden"></div>
 

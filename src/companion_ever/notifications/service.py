@@ -16,6 +16,7 @@ class NotificationService:
         self.sender = sender
         self.subject = subject
         self.delivery_allowed = delivery_allowed
+        self.group_delivery_allowed=None
         self._lock=threading.Lock();self._worker=None;self._stop=threading.Event()
 
     def start(self):
@@ -30,6 +31,15 @@ class NotificationService:
             'title':persona, 'body':body[:140], 'tag':'companion-'+gid,
             'url':'/?'+urlencode({'user':user,'persona':persona,'open':'chat'}),
         })
+
+    def enqueue_group(self,user,cid,name,gid,message_id,persona,body):
+        self.repo.enqueue(user,persona,gid,message_id,{
+            'title':name,'body':body[:140],'tag':'companion-group-'+gid,
+            'url':'/?'+urlencode({'user':user,'conversation_id':cid,'open':'chat'}),
+        },conversation_id=cid,update_queued=True)
+
+    def wake_group(self,cid):
+        self.repo.wake_group(cid)
 
     def tick(self):
         if self._stop.is_set() or not valid_subject(self.subject) or not self.repo.has_delivery():
@@ -49,9 +59,16 @@ class NotificationService:
                 if job is None:
                     break
                 subscription=self.repo.get(job['user_id'],job['endpoint'])
-                allowed=self.authorizer.owns_persona(job['user_id'],job['persona_id'])
-                if self.delivery_allowed is not None:
-                    allowed=allowed and self.delivery_allowed(job['user_id'],job['persona_id'],job['message_id'])
+                if subscription is None:
+                    self.repo.finish_delivery(job,'skipped','设备订阅已关闭');continue
+                if job.get('conversation_kind')=='group':
+                    allowed=self.group_delivery_allowed(job['user_id'],job['conversation_id'],job['message_id']) if self.group_delivery_allowed is not None else False
+                    if isinstance(allowed,dict):
+                        self.repo.defer_delivery(job,allowed['defer_until']);continue
+                else:
+                    allowed=self.authorizer.owns_persona(job['user_id'],job['persona_id'])
+                    if self.delivery_allowed is not None:
+                        allowed=allowed and self.delivery_allowed(job['user_id'],job['persona_id'],job['message_id'])
                 if not allowed or subscription is None:
                     self.repo.finish_delivery(job,'skipped','已读、已有新输入、角色停用或订阅关闭')
                     continue

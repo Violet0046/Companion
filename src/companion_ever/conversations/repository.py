@@ -21,6 +21,10 @@ def row_to_conversation_message(row: sqlite3.Row) -> ConversationMessage:
         content=row["content"],
         created_at=row["created_at"],
         client_message_id=row['client_message_id'] if 'client_message_id' in row.keys() else None,
+        quoted_message_id=row['quoted_message_id'] if 'quoted_message_id' in row.keys() else None,
+        conversation_id=row['conversation_id'] if 'conversation_id' in row.keys() else None,
+        sender_kind=row['sender_kind'] if 'sender_kind' in row.keys() else None,
+        sender_id=row['sender_id'] if 'sender_id' in row.keys() else None,
     )
 
 
@@ -55,9 +59,47 @@ class ConversationRepo:
             (user,persona,message_id)).fetchone())
 
     def list_conversations(self):
-        return [dict(row) for row in self.conn.execute('SELECT * FROM conversation')]
+        private=[dict(row) for row in self.conn.execute("SELECT * FROM conversation WHERE kind='private'")]
+        grouped=[dict(row) for row in self.conn.execute("SELECT c.id,c.user_id,m.persona_id,c.kind,c.name,"
+            "max(c.memory_start_message_id,m.joined_after_message_id) AS memory_start_message_id "
+            "FROM conversation c JOIN conversation_member m ON m.conversation_id=c.id WHERE c.kind='group' AND m.left_after_message_id IS NULL")]
+        return private+grouped
 
-    def pending_input(self, user_id, persona_id, after_id):
+    def memory_scope(self,user,persona,cid):
+        row=self.conn.execute('SELECT c.*,m.joined_after_message_id,m.revision AS member_revision,m.left_after_message_id FROM conversation c '
+            'LEFT JOIN conversation_member m ON m.conversation_id=c.id AND m.persona_id=? WHERE c.id=? AND c.user_id=?',(persona,cid,user)).fetchone()
+        if row is None or (row['kind']=='private' and row['persona_id']!=persona) or (row['kind']=='group' and (row['member_revision'] is None or row['left_after_message_id'] is not None)):
+            raise PermissionError('当前角色不可访问这个记忆来源会话')
+        return dict(row)
+
+    def memory_messages(self,user,persona,cid,*,since_id=None,until_id=None,limit=200):
+        scope=self.memory_scope(user,persona,cid)
+        lower=max(since_id or 0,scope['joined_after_message_id'] or 0)
+        rows=self.conn.execute("SELECT * FROM conversation_log WHERE conversation_id=? AND id>? AND (? IS NULL OR id<=?) "
+            "AND role IN ('user','assistant') ORDER BY id DESC LIMIT ?",(cid,lower,until_id,until_id,limit)).fetchall()
+        return [row_to_conversation_message(r) for r in reversed(rows)]
+
+    def quote(self, conversation_id, message_id):
+        if type(message_id) is not int or message_id <= 0:
+            raise ValueError('引用消息 ID 无效')
+        row = self.conn.execute("SELECT id,role,content,sender_kind,sender_id,created_at FROM conversation_log "
+            "WHERE id=? AND conversation_id=? AND role IN ('user','assistant')", (message_id,conversation_id)).fetchone()
+        if row is None:
+            raise ValueError('只能引用当前会话中可见的已发送消息')
+        return dict(row)
+
+    def quote_for_persona(self,user,persona,message_id):
+        row=self.conn.execute("SELECT id FROM conversation WHERE user_id=? AND persona_id=? AND kind='private'",(user,persona)).fetchone()
+        if row is None:raise ValueError('会话不存在')
+        return self.quote(row[0],message_id)
+
+    def pending_input(self, user_id, persona_id, after_id, *, conversation_id=None):
+        if conversation_id is not None:
+            self.memory_scope(user_id,persona_id,conversation_id)
+            row=self.conn.execute("SELECT sum(role='user') AS user_count,max(created_at) AS last_at,min(CASE WHEN role='user' THEN created_at END) AS oldest_user_at "
+                "FROM conversation_log WHERE conversation_id=? AND id>? AND role IN ('user','assistant')",(conversation_id,after_id)).fetchone()
+            generating=bool(self.conn.execute("SELECT 1 FROM generation WHERE conversation_id=? AND status IN ('queued','running') LIMIT 1",(conversation_id,)).fetchone())
+            return {**dict(row),'generating':generating}
         row = self.conn.execute("SELECT sum(role='user') AS user_count,max(created_at) AS last_at,"
             "min(CASE WHEN role='user' THEN created_at END) AS oldest_user_at FROM conversation_log "
             "WHERE user_id=? AND persona_id=? AND id>? AND role IN ('user','assistant')",
@@ -159,7 +201,7 @@ class ConversationRepo:
             按 created_at 升序的 marker 列表（可能少于 n 个）
         """
         rows = self.conn.execute(
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id "
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id, quoted_message_id, conversation_id "
             "FROM conversation_log "
             "WHERE user_id = ? AND persona_id = ? AND role = 'session_close' "
             "ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -200,7 +242,7 @@ class ConversationRepo:
             按 id 升序的列表（**取最近 limit 条**，不是最早的）
         """
         sql = (
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id "
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id, quoted_message_id, conversation_id "
             "FROM conversation_log "
             "WHERE user_id = ? AND persona_id = ? "
             "  AND role IN ('user', 'assistant')"
@@ -313,7 +355,7 @@ class ConversationRepo:
             "SELECT c.user_id AS user_id, c.persona_id AS persona_id, "
             "       MAX(c.id) AS mid, MAX(c.created_at) AS mat "
             "FROM conversation_log c "
-            "WHERE c.role IN ('user', 'assistant') "
+            "WHERE c.role IN ('user', 'assistant') AND c.persona_id IS NOT NULL "
             "  AND c.id > COALESCE(("
             "      SELECT MAX(m.id) FROM conversation_log m "
             "       WHERE m.user_id = c.user_id AND m.persona_id = c.persona_id "
@@ -358,7 +400,7 @@ class ConversationRepo:
             limit: 最多返回多少条
         """
         sql = (
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id "
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id, quoted_message_id, conversation_id "
             "FROM conversation_log "
             "WHERE user_id = ? AND persona_id = ? AND role IN ('user', 'assistant')"
         )
@@ -435,7 +477,7 @@ class ConversationRepo:
             return []
         where = " OR ".join(["content LIKE ?"] * len(patterns))
         sql = (
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id "
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id, quoted_message_id, conversation_id "
             "FROM conversation_log "
             f"WHERE user_id = ? AND persona_id = ? AND role IN ('user', 'assistant') "
             f"  AND ({where}) "
@@ -472,7 +514,7 @@ class ConversationRepo:
             按时间正序的列表（ConversationMessage 实体）
         """
         rows = self.conn.execute(
-            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id "
+            "SELECT id, user_id, persona_id, turn_index, role, content, created_at, client_message_id, quoted_message_id, conversation_id "
             "FROM conversation_log "
             "WHERE user_id = ? AND persona_id = ? "
             "  AND role IN ('user', 'assistant') "

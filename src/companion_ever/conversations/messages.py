@@ -21,6 +21,14 @@ class ConversationService:
         self.authorizer = authorizer
         self.conv_repo = conv_repo
 
+    def quote(self,user,persona,message_id):
+        self.authorizer.require_persona(user,persona)
+        return self.conv_repo.quote_for_persona(user,persona,message_id)
+
+    def memory_messages(self,user,persona,cid,**bounds):
+        self.authorizer.require_persona(user,persona)
+        return self.conv_repo.memory_messages(user,persona,cid,**bounds)
+
     # === 写入（3 个）===
 
     def mark_read(self, user, persona, message_id):
@@ -164,10 +172,10 @@ class ConversationService:
         """供宿主扫描的会话范围；调用方逐个校验有效角色。"""
         return self.conv_repo.list_conversations()
 
-    def pending_input(self, user_id, persona_id, after_id):
+    def pending_input(self, user_id, persona_id, after_id, *, conversation_id=None):
         """供记忆调度读取原话积累，不暴露会话表给调度器。"""
         self.authorizer.require_persona(user_id, persona_id)
-        return self.conv_repo.pending_input(user_id, persona_id, after_id)
+        return self.conv_repo.pending_input(user_id, persona_id, after_id,conversation_id=conversation_id)
 
     # === 游标分页 / 日期 / 搜索（微信式历史浏览）===
 

@@ -186,7 +186,8 @@ def case_payload(case: dict) -> dict:
                                       if m['id'] in case['new_message_ids'] and m['role']=='user'],
         'relation_rules': {relation.value: {'from_kind':source,'to_kind':target}
                            for relation,(source,target) in RELATION_KINDS.items()},
-        'messages': [{k: m[k] for k in ('id', 'role', 'content', 'created_at', 'local_time') if k in m}
+        **({'conversation':case['conversation']} if case.get('conversation') else {}),
+        'messages': [{k: m[k] for k in ('id', 'role', 'content', 'created_at', 'local_time','sender_kind','sender_id') if k in m}
                      for m in case['messages']],
     }
 
@@ -229,7 +230,7 @@ def draft_messages(case: dict, *, response_schema=None, tools=None,
                        tools=tools),
     }
     return [
-        {'role': 'system', 'content': load('memory_draft_system.txt') + '\n输出 JSON Schema：\n'
+        {'role': 'system', 'content': load('memory_draft_system.txt') + ('\n\n'+load('memory_group_mode.txt') if case.get('conversation',{}).get('kind')=='group' else '') + '\n输出 JSON Schema：\n'
          + json.dumps(response_schema or Draft.model_json_schema(), ensure_ascii=False)},
         {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
     ]

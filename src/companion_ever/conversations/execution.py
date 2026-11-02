@@ -26,14 +26,16 @@ class GenerationService:
     仍是跨线程/进程的执行依据，内存注册表只避免本实例重复创建执行线程。
     """
 
-    def __init__(self, chat_service, setting_service, *, proactive=None):
+    def __init__(self, chat_service, setting_service, *, proactive=None, groups=None):
         self.chat = chat_service
         self.repo = chat_service.generations
         self.conn = self.repo.conn
         self.authorizer = chat_service.conversation_service.authorizer
         self.settings = setting_service
         self.proactive = proactive
+        self.groups = groups
         self.on_proactive_message = None
+        self.on_group_message=None
         self._lock = threading.Lock()
         self._executions: dict[str, _Execution] = {}
         self._closing = False
@@ -49,18 +51,50 @@ class GenerationService:
                 execution.cancelled = True
             self.repo.interrupt_running(tuple(self._executions))
 
-    def submit(self, user, persona, content, client_message_id=None, *, on_event=None):
-        generation, created = self.chat.receive(user, persona, content, client_message_id)
+    def submit(self, user, persona, content, client_message_id=None, *, on_event=None, quoted_message_id=None):
+        generation, created = self.chat.receive(user, persona, content, client_message_id, quoted_message_id=quoted_message_id)
         # A repeated queued receipt also needs execution, even if its original
         # caller disappeared between committing the receipt and starting work.
         if created or generation['status'] == 'queued' or on_event is not None:
             self._start(generation, on_event)
         return generation, created
 
+    def submit_group(self,user,cid,content,client_message_id=None,*,on_event=None,quoted_message_id=None,mentions=None):
+        generation,created=self.groups.receive(user,cid,content,client_message_id,quoted_message_id=quoted_message_id,mentions=mentions)
+        if created or generation['status']=='queued' or on_event is not None:self._start(generation,on_event)
+        return generation,created
+
+    def group_snapshot(self,user,cid,gid=None):
+        import json
+        self.groups.require(user,cid)
+        if gid is None:
+            gid=self.groups.group_repo.latest_generation_id(cid)
+            if gid is None:return None
+        g=self.repo.get(gid)
+        if g is None or g['conversation_id']!=cid:raise LookupError('生成任务不存在')
+        pending=set(json.loads(g['target_persona_ids']))-set(json.loads(g['completed_persona_ids']))
+        return {**g,'messages':[self.groups.present(m) for m in self.repo.outputs(gid)],
+            'can_retry':g['origin']=='reply' and g['status']=='failed' and bool(pending or not g['coordination_done'])}
+
+    def retry_group(self,user,cid,gid):
+        import json
+        with transaction(self.conn):
+            old=self.group_snapshot(user,cid,gid)
+            latest=self.group_snapshot(user,cid)
+            if latest['trigger_message_id']!=old['trigger_message_id']:raise ValueError('只能重试最后一轮失败回复')
+            if latest['id']!=gid:return latest
+            if not old['can_retry']:raise ValueError('没有可重试的未完成任务，请继续发送消息')
+            for p in json.loads(old['target_persona_ids']):self.groups.require_member(user,cid,p)
+            self.repo.usage.require_capacity(user)
+            retry_id=self.groups.group_repo.retry(old)
+            g=self.repo.get(retry_id)
+        self._start(g)
+        return self.group_snapshot(user,cid,retry_id)
+
     def _owned(self, user, persona, generation_id):
         self.authorizer.require_persona(user, persona)
         generation = self.repo.get(generation_id)
-        if generation is None or (generation['user_id'], generation['persona_id']) != (user, persona):
+        if generation is None or generation['conversation_kind']!='private' or (generation['user_id'], generation['persona_id']) != (user, persona):
             raise LookupError('生成任务不存在')
         return generation
 
@@ -100,7 +134,8 @@ class GenerationService:
         self.repo.recover()
         for generation in self.repo.queued():
             try:
-                self.authorizer.require_persona(generation['user_id'], generation['persona_id'])
+                if generation['conversation_kind']=='group':self.groups.require(generation['user_id'],generation['conversation_id'])
+                else:self.authorizer.require_persona(generation['user_id'], generation['persona_id'])
             except PermissionError:
                 self.repo.finish(generation['id'], 'failed', '角色访问权限已撤销')
                 continue
@@ -157,7 +192,8 @@ class GenerationService:
     def _events(self, generation):
         """输出可投递的事件；模型原文和思考标签不进入正文增量。"""
         gid = generation['id']
-        events = (self.proactive.reply_events(generation) if generation['origin']=='proactive' and self.proactive is not None
+        events = (self.groups.reply_events(generation) if generation['conversation_kind']=='group'
+                  else self.proactive.reply_events(generation) if generation['origin']=='proactive' and self.proactive is not None
                   else self.chat.reply_events(generation))
         filt = ThinkFilter()
         try:
@@ -171,7 +207,7 @@ class GenerationService:
                     if tail:
                         yield {'type': 'delta', 'content': tail, 'generation_id': gid}
                     message = dict(event['message'])
-                    show = self.settings.get_show_thinking(generation['user_id'], generation['persona_id'])
+                    show = generation['conversation_kind']=='private' and self.settings.get_show_thinking(generation['user_id'], generation['persona_id'])
                     thinking = message.get('thinking')
                     if not show:
                         message.pop('thinking', None)
@@ -201,7 +237,9 @@ class GenerationService:
                 if execution.cancelled:
                     break
                 self._publish(execution, event)
-                if generation['origin']=='proactive' and event['type']=='message_done' and self.on_proactive_message:
+                if generation['conversation_kind']=='group' and event['type']=='message_done' and self.on_group_message:
+                    self._deliver(lambda item:self.on_group_message(generation['user_id'],generation['conversation_id'],item['message']),event)
+                elif generation['origin']=='proactive' and event['type']=='message_done' and self.on_proactive_message:
                     self._deliver(lambda item: self.on_proactive_message(generation['user_id'],generation['persona_id'],item['message']),event)
         except Exception:
             logging.getLogger(__name__).exception('回复生成失败')

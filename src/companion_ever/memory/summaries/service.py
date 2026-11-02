@@ -92,6 +92,7 @@ class SummaryService:
 
     def __init__(self,authorizer,note_repo,block_repo,llm_client,timeout=120,thinking=False):
         self.authorizer=authorizer;self.conn=note_repo.conn;self.blocks=block_repo
+        self.note_repo=note_repo
         self.repo=SummaryRepo(self.conn);self.llm=llm_client;self.timeout=timeout
         self._active=set();self._lock=threading.Lock()
         self.on_updated=None
@@ -183,7 +184,7 @@ class SummaryService:
         referenced={c['note_id'] for item in claims(previous) for c in item['citations']}
         impacted=self.repo.affected({e['note_id'] for e in events},user,persona)
         available={nid:fact for nid in sorted(referenced|impacted) if (fact:=self.repo.fact(nid,user,persona)) is not None}
-        payload={'previous_summaries':previous,
+        payload={'persona_id':persona,'previous_summaries':previous,
                  'changes':[{k:e[k] for k in ('id','first_change_id','note_id','operation','before','after','relation_changes','source_job_id')} for e in events],
                  # Original chat evidence stays in storage/the operation journal.
                  # This projection has one unambiguous citation text: fact.content.
@@ -329,7 +330,7 @@ class SummaryService:
         if errors:
             raise ValueError('; '.join(errors))
 
-    def prompt_text(self,user,persona):
+    def prompt_text(self,user,persona,*,conversation_id=None,relationship_only=False):
         self.authorizer.require_persona(user,persona)
         checkpoint=self.repo.checkpoint(user,persona)
         # Sync progress is diagnostic; pending work must not remove the last
@@ -337,9 +338,14 @@ class SummaryService:
         if checkpoint is None:
             return ''
         document=json.loads(checkpoint['document_json'])
+        visible=self.note_repo.visible_ids(user,persona,conversation_id) if conversation_id is not None else None
+        def allowed(item):
+            if visible is None:return True
+            return bool(item['citations']) and all(c['note_id'] in visible and self.repo.fact(c['note_id'],user,persona) is not None for c in item['citations'])
         lines=[]
         for block,label in (('user_profile','用户画像'),('relationship_state','关系概况')):
-            entries=[f"- [{i['reality']}] {i['text']}" for values in document[block].values() for i in values]
+            if relationship_only and block!='relationship_state':continue
+            entries=[f"- [{i['reality']}] {i['text']}" for values in document[block].values() for i in values if allowed(i)]
             if entries:
                 lines.append(label+'（上次成功整理）：\n'+'\n'.join(entries))
         if not lines:

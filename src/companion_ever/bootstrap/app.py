@@ -41,6 +41,7 @@ from companion_ever.notifications.service import NotificationService
 from companion_ever.infrastructure.web_push import WebPushSender
 from companion_ever.conversations.proactive import ProactiveService
 from companion_ever.accounts.usage import AccountUsage
+from companion_ever.conversations.groups import GroupService
 
 
 @dataclass
@@ -73,6 +74,7 @@ class Services:
     notifications: NotificationService | None = None
     proactive: ProactiveService | None = None
     usage: AccountUsage | None = None
+    groups: GroupService | None = None
 
 
 @dataclass
@@ -106,6 +108,13 @@ class AppContext:
             self.services.usage = AccountUsage(self.conn, self.cfg.account_limits,
                 tz_offset_hours=self.cfg.tz_offset_hours, call_logs=self.call_logs)
         self.services.chat.generations.usage = self.services.usage
+        if self.services.groups is None:
+            self.services.groups=GroupService(self.services.chat.generations,self.services.conversation.authorizer,self.services.prompt,self.llm)
+        self.services.generation.groups=self.services.groups
+        self.services.groups.notifications=self.services.notifications
+        self.services.groups.on_member_left=self.services.session_close.jobs.revoke_group
+        if self.services.proactive is not None:self.services.proactive.groups=self.services.groups
+        if self.services.notifications is not None:self.services.notifications.group_delivery_allowed=self.services.groups.notification_allowed
         if self.lifecycle is None:
             self.lifecycle = build_lifecycle(self.cfg, self.conn, self.services)
 

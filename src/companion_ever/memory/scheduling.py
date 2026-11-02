@@ -52,11 +52,13 @@ class MemoryScheduler:
                 continue
 
     def consider_memory(self, conversation):
+        conversation=dict(conversation)
         user, persona = conversation['user_id'], conversation['persona_id']
         self.authorizer.require_persona(user, persona)
-        if self.jobs.pending_for_conversation(conversation['id']):
+        if self.jobs.pending_for_conversation(conversation['id'],persona):
             return
-        window = self.conversations.pending_input(user, persona, self.jobs.progress(conversation))
+        scope_options={'conversation_id':conversation['id']} if conversation.get('kind')=='group' else {}
+        window = self.conversations.pending_input(user, persona, self.jobs.progress(conversation),**scope_options)
         if window['generating'] or not window['user_count']:
             return
         last = parse_sqlite_ts(window['last_at'])
@@ -65,7 +67,7 @@ class MemoryScheduler:
         aged = oldest is not None and time.time() - oldest.timestamp() >= self.cfg.memory_max_wait_seconds
         if (window['user_count'] >= self.cfg.memory_message_threshold
                 or (idle and window['user_count'] >= self.cfg.memory_idle_min_messages) or aged):
-            self.sessions.close_session_background(user, persona, boundary=False)
+            self.sessions.close_session_background(user, persona, boundary=False,**scope_options)
 
     def memory_settled(self, user, persona):
         """整理成功后重新检查摘要；不依赖页面通知回调。"""

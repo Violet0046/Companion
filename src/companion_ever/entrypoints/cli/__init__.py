@@ -236,10 +236,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     proactive = sub.add_parser('proactive', help='主动联系检查、延迟触发和任务状态')
     actions = proactive.add_subparsers(dest='proactive_cmd', required=True)
+    list_groups=actions.add_parser('groups',help='列出用户的群聊ID，不调用模型')
+    list_groups.add_argument('--user',required=True)
     for action in ('check','trigger'):
         command=actions.add_parser(action)
         command.add_argument('--user',required=True)
-        command.add_argument('--persona',required=True)
+        target=command.add_mutually_exclusive_group(required=True)
+        target.add_argument('--persona')
+        target.add_argument('--conversation-id',type=int,help='群聊会话ID；和--persona二选一')
         command.add_argument('--test',action='store_true',help='测试模式跳过免打扰和次数限制，实际调用模型并保存消息')
         if action=='trigger':
             command.add_argument('--delay',type=int,default=0)

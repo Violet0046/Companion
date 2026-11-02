@@ -207,7 +207,6 @@ class SummaryRepo:
             'SELECT 1 FROM successors s JOIN note n ON n.id=s.id WHERE n.id!=? AND n.is_archived=0 LIMIT 1',(nid,nid)).fetchone()
         if successor:
             return None
-        evidence=[dict(r) for r in self.conn.execute('SELECT e.message_id,e.quote FROM note_evidence e JOIN conversation_log m ON m.id=e.message_id '
-            'WHERE e.note_id=? AND m.user_id=? AND m.persona_id=? ORDER BY e.message_id DESC LIMIT 2',(nid,user,persona))]
+        evidence=NoteRepo(self.conn).evidence(nid,user,persona,limit=2)
         return {'id':note.id,'kind':'fact','content':note.content,'reality':note.reality,'event_time':note.event_time,
                 'time_basis':note.time_basis,'importance':note.importance,'revision':note.revision,'evidence':evidence}

@@ -14,7 +14,7 @@ class GenerationRepo:
 
     def get(self, generation_id):
         row = self.conn.execute(
-            'SELECT g.*,c.user_id,c.persona_id FROM generation g '
+            'SELECT g.*,c.user_id,coalesce(g.actor_persona_id,c.persona_id) AS persona_id,c.kind AS conversation_kind FROM generation g '
             'JOIN conversation c ON c.id=g.conversation_id WHERE g.id=?', (generation_id,)).fetchone()
         return dict(row) if row else None
 
@@ -25,17 +25,19 @@ class GenerationRepo:
             (user_id, persona_id)).fetchone()
         return self.get(row['id']) if row else None
 
-    def receive(self, user_id, persona_id, content, client_message_id=None):
+    def receive(self, user_id, persona_id, content, client_message_id=None, *, quoted_message_id=None):
         if not content.strip():
             raise ValueError('消息不能为空')
         with transaction(self.conn):
             cid = self.messages.ensure_conversation(user_id, persona_id)
+            if quoted_message_id is not None:
+                self.messages.quote(cid,quoted_message_id)
             if client_message_id:
                 row = self.conn.execute(
-                    'SELECT id,content FROM conversation_log WHERE conversation_id=? AND client_message_id=?',
+                    'SELECT id,content,quoted_message_id FROM conversation_log WHERE conversation_id=? AND client_message_id=?',
                     (cid, client_message_id)).fetchone()
                 if row:
-                    if row['content'] != content.strip():
+                    if row['content'] != content.strip() or row['quoted_message_id'] != quoted_message_id:
                         raise ValueError('同一 client_message_id 不能用于不同内容')
                     gid = self.conn.execute("SELECT id FROM generation WHERE trigger_message_id=? AND origin='reply' ORDER BY rowid DESC LIMIT 1", (row['id'],)).fetchone()[0]
                     return self.get(gid), False
@@ -46,7 +48,7 @@ class GenerationRepo:
             turn = self.messages.get_max_turn_index(user_id=user_id, persona_id=persona_id) + 1
             mid = self.messages.log_turn(user_id=user_id, persona_id=persona_id, turn_index=turn,
                                          role='user', content=content)
-            self.conn.execute('UPDATE conversation_log SET client_message_id=? WHERE id=?', (client_message_id, mid))
+            self.conn.execute('UPDATE conversation_log SET client_message_id=?,quoted_message_id=? WHERE id=?', (client_message_id,quoted_message_id,mid))
             gid = uuid.uuid4().hex
             self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status) VALUES (?,?,?,'queued')",
                               (gid, cid, mid))
@@ -156,6 +158,9 @@ class GenerationRepo:
     def proactive_valid(self, g):
         if g['expires_at'] is not None and g['expires_at'] <= time.time():
             return False
+        if g['conversation_kind']=='group':
+            from companion_ever.conversations.group_repository import GroupRepo
+            return GroupRepo(self.conn).proactive_valid(g)
         latest = self.conn.execute("SELECT max(id) FROM conversation_log WHERE conversation_id=? AND role IN ('user','assistant') "
                                    'AND (generation_id IS NULL OR generation_id!=?)', (g['conversation_id'],g['id'])).fetchone()[0]
         enabled = self.conn.execute('SELECT proactive_enabled FROM user_settings WHERE user_id=? AND persona_id=?', (g['user_id'],g['persona_id'])).fetchone()
@@ -203,5 +208,8 @@ class GenerationRepo:
         """停止该角色的待执行/在途生成，完整气泡和用户输入继续保留。"""
         self.conn.execute("UPDATE generation SET status='cancelled',last_error='角色已停用',"
                           "completed_at=CURRENT_TIMESTAMP,lease_expires_at=NULL WHERE status IN ('queued','running') "
-                          "AND conversation_id IN (SELECT id FROM conversation WHERE user_id=? AND persona_id=?)",
-                          (user_id, persona_id))
+                          "AND conversation_id IN (SELECT id FROM conversation WHERE user_id=?) AND "
+                          "(conversation_id IN (SELECT id FROM conversation WHERE persona_id=?) OR "
+                          "EXISTS(SELECT 1 FROM conversation_member m WHERE m.conversation_id=generation.conversation_id "
+                          "AND m.persona_id=? AND m.left_after_message_id IS NULL))",
+                          (user_id, persona_id,persona_id))

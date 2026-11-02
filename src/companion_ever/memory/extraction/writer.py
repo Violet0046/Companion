@@ -25,24 +25,27 @@ class MemoryWriter:
         with transaction(self.conn):
             self.notes.authorizer.require_persona(user,persona)
             self.jobs.require_owner(job['id'],token)
+            group_id=job['conversation_id'] if job['conversation_kind']=='group' else None
+            visible=self.repo.visible_ids(user,persona,group_id) if group_id is not None else None
             journal_start=self.conn.execute('SELECT coalesce(max(id),0) FROM fact_change').fetchone()[0]
             # Validate against current DB rows, rather than trusting the snapshot returned by the model.
             for nid, snapshot in snapshots.items():
                 current = self.repo.get(nid)
-                if current is None or any(getattr(current,k)!=getattr(snapshot,k) for k in
+                if current is None or (visible is not None and nid not in visible) or any(getattr(current,k)!=getattr(snapshot,k) for k in
                     ('revision','is_archived','content','kind','reality','event_time','time_basis','user_id','persona_id')):
                     raise RetryableTaskError('候选记忆已改变，请重新整理')
             for proposal in draft.proposals:
                 for evidence in proposal.evidence:
                     row = self.conn.execute('SELECT * FROM conversation_log WHERE id=?',(evidence.message_id,)).fetchone()
                     source = next(m for m in case['messages'] if m['id']==evidence.message_id)
-                    if row is None or row['role']!=source['role'] or (row['user_id'],row['persona_id'])!=(user,persona) or evidence.quote not in row['content']:
+                    in_scope=self.jobs.source_visible(job,row)
+                    if not in_scope or row['role']!=source['role'] or evidence.quote not in row['content'] or (group_id is not None and row['sender_id']!=source.get('sender_id')):
                         raise ValueError('数据库中的来源已改变或超出当前聊天')
                     if evidence.message_id in case['new_message_ids'] and not job['after_message_id'] < row['id'] <= job['through_message_id']:
                         raise ValueError('新证据不在任务固定范围内')
                 target = snapshots.get(proposal.target_id)
                 if proposal.action != 'create':
-                    if target is None or target.is_archived or (target.user_id,target.persona_id)!=(user,persona):
+                    if target is None or target.is_archived or (target.user_id,target.persona_id)!=(user,persona) or (visible is not None and target.id not in visible):
                         raise ValueError('更新目标无效')
                     if self.conn.execute("SELECT 1 FROM note_link l JOIN note n ON n.id=l.from_id WHERE l.to_id=? "
                                          "AND l.link_type='supersedes' AND n.is_archived=0",(target.id,)).fetchone():
@@ -70,11 +73,12 @@ class MemoryWriter:
                     # Episode identity is not its text: two equal descriptions can be distinct occurrences.
                     duplicate = None
                     if proposal.kind == 'fact' and proposal.action == 'create':
+                        clause,extra=self.repo._allowed_sql(visible,'n.')
                         duplicate = self.conn.execute("SELECT n.id FROM note n WHERE user_id=? AND persona_id=? AND kind='fact' "
                             "AND trim(content)=? AND reality=? AND event_time IS ? AND is_archived=0 AND NOT EXISTS "
                             "(SELECT 1 FROM note_link l JOIN note newer ON newer.id=l.from_id WHERE l.to_id=n.id "
-                            "AND l.link_type='supersedes' AND newer.is_archived=0) ORDER BY created_at,id LIMIT 1",
-                            (user,persona,proposal.content.strip(),proposal.reality,proposal.event_time)).fetchone()
+                            "AND l.link_type='supersedes' AND newer.is_archived=0)"+clause+" ORDER BY created_at,id LIMIT 1",
+                            (user,persona,proposal.content.strip(),proposal.reality,proposal.event_time,*extra)).fetchone()
                     if duplicate:
                         nid = duplicate[0]
                     else:
@@ -87,6 +91,7 @@ class MemoryWriter:
                     raise ValueError('同一批不能对同一记忆执行多次写入')
                 written.append(nid)
                 ids[proposal.id] = nid
+                if visible is not None:visible.add(nid)
                 for evidence in proposal.evidence:
                     self.conn.execute('INSERT OR IGNORE INTO note_evidence(note_id,message_id,quote) VALUES (?,?,?)',
                                       (nid,evidence.message_id,evidence.quote))

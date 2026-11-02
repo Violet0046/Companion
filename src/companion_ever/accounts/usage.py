@@ -42,7 +42,7 @@ class AccountUsage:
     def message_count(self, user, start, end):
         return self.conn.execute("SELECT count(*) FROM conversation_log WHERE user_id=? AND role='user' AND created_at>=? AND created_at<?", (user, start, end)).fetchone()[0]
 
-    def active_replies(self, user, *, excluding_persona=None, running_only=False):
+    def active_replies(self, user, *, excluding_persona=None, excluding_conversation=None, running_only=False):
         sql = ("SELECT count(*) FROM generation g JOIN conversation c ON c.id=g.conversation_id "
                "WHERE c.user_id=? AND ((g.status='running' AND g.lease_expires_at>?)")
         args = [user, time.time()]
@@ -51,11 +51,14 @@ class AccountUsage:
             args.append(time.time())
         sql += ')'
         if excluding_persona is not None:
-            sql += ' AND c.persona_id!=?'
+            sql += ' AND (c.persona_id IS NULL OR c.persona_id!=?)'
             args.append(excluding_persona)
+        if excluding_conversation is not None:
+            sql += ' AND c.id!=?'
+            args.append(excluding_conversation)
         return self.conn.execute(sql, args).fetchone()[0]
 
-    def require_capacity(self, user, *, replacing_persona=None, new_message=False):
+    def require_capacity(self, user, *, replacing_persona=None, replacing_conversation=None, new_message=False):
         """Caller holds the same SQLite write transaction that creates the receipt."""
         limits = self.limits(user)
         if new_message and limits['daily_messages']:
@@ -63,7 +66,7 @@ class AccountUsage:
             if self.message_count(user, start, end) >= limits['daily_messages']:
                 raise LimitExceeded('daily_messages', '今天的消息额度已用完，将于明天恢复')
         cap = limits['concurrent_replies']
-        if cap and self.active_replies(user, excluding_persona=replacing_persona) >= cap:
+        if cap and self.active_replies(user, excluding_persona=replacing_persona,excluding_conversation=replacing_conversation) >= cap:
             raise LimitExceeded('concurrent_replies', '其他会话正在回复，请等一条回复完成后再发送')
 
     def can_start(self, user):

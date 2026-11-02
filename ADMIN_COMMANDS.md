@@ -175,8 +175,8 @@ ce account usage --username friendname --date 2026-11-01
 | `date`、`resets_at` | 统计日期与该自然日的结束时间 |
 | `messages` | 已接收新消息数、有效额度、剩余额度；不限时 `remaining=null` |
 | `replies` | 当前正在回复、当前等待任务数，以及有效并发额度 |
-| `calls` | 三层合计的已记录调用数、状态、输入/输出/缓存输入 token、累计模型耗时 |
-| `layers` | 聊天 `chat`、整理 `extraction`、摘要 `summary` 各自的调用统计 |
+| `calls` | 已记录调用数、状态、输入/输出/缓存输入 token、累计模型耗时，包含群协调 |
+| `layers` | 聊天 `chat`、整理 `extraction`、摘要 `summary`、群协调 `coordination` 各自的调用统计 |
 | `recording_enabled`、`write_error`、`read_error` | 日志是否开启、当前进程是否观察到写入失败、此次是否读取失败 |
 
 指定过去日期时，消息和模型调用按该日期统计，`replies` 仍表示当前任务状态，额度仍为当前设置。
@@ -201,7 +201,7 @@ ce --db /absolute/path/companion.db account list
 
 账号管理命令发现数据库文件不存在时会报错，不会为你新建数据库。
 
-当前为 schema v11，升级会增加用户额度字段和查询索引，并自动创建 `.bak-before-account-limits-...` 副本。首次运行新版账号命令也可能触发迁移，因此升级前先主动备份，再停服更新；正常日常管理无需停服。
+当前为 schema v13。v11 增加账号额度，v12 引入群会话与引用，v13 增加群自动联系、按角色记忆进度和通知定位；对应迁移会自动创建一致性备份，包括 `.bak-before-group-automation-...`。首次运行新版账号命令也可能触发迁移，因此升级前先主动备份，再停服更新；正常日常管理无需停服。
 
 服务器更新示例，在确认代码已提交、工作区无冲突后执行：
 
@@ -235,6 +235,86 @@ ce proactive status --task TASK_ID
 ```
 
 角色需要已经有过用户发言。测试模式跳过日常主动联系的开关、免打扰和每日触发次数限制，但仍遵守权限、回复并发和对话上下文检查。实际开始时间还受后台扫描与模型耗时影响。重复提交同一次测试时，可指定相同 `--request-id`，避免重复创建任务。
+
+群聊测试使用 `--conversation-id`，不同时传 `--persona`。先在网页创建群并发送过消息，再查询群 ID：
+
+```bash
+# 只列出群 ID、名称、成员和开关，不调用模型
+ce proactive groups --user USER_ID
+
+# 按真实自动规则检查；关闭开关、免打扰、未读或等待回复时会说明原因
+ce proactive check --user USER_ID --conversation-id GROUP_ID
+
+# 显式测试：由协调者决定是否邀请一位角色，实际调用模型并写入群聊
+ce proactive trigger --user USER_ID --conversation-id GROUP_ID --test --delay 15 --request-id group-smoke-001
+
+# 查询保存的消息 ID 和通知投递结果
+ce proactive status --task TASK_ID
+```
+
+运行中的新版服务执行这些任务。协调者可返回空邀请，角色也可选择不发言；任务完成但没有消息是允许的结果，不会为凑消息自动重调。`--test` 不消耗日常自动联系机会；重复同一个 `--request-id` 返回原任务，测试新一轮时换一个 ID。
+
+验证通知时，先在手机主屏幕应用开启消息通知，再离开该群或锁屏。前台查看会暂缓通知，消息已读、用户继续发言、角色退出或任务取消会跳过；通知点击应打开对应群。通知状态 `accepted` 只表示推送服务接受，手机实际显示仍需真机验证。群自动开关在群右上角「⋯」，默认关闭，与私聊共用每日自动联系上限。
+
+
+### 9.1 手动整理聊天并更新摘要
+
+现有 CLI 没有独立的整理子命令。下面的终端函数直接调用同一套服务：固定本次消息范围，整理后同步检查 fact 摘要；已有任务运行时不抢占，失败时停止，不持续追赶新聊天。会实际调用模型、保存笔记及摘要。
+
+```bash
+ce_record() {
+  runuser -u tongxing -- /opt/tongxing/.venv/bin/python - "$@" <<'PY'
+import json
+import sys
+from companion_ever.entrypoints.cli import _build_app
+
+if len(sys.argv) not in (3, 4):
+    raise SystemExit("用法: ce_record USER_ID PERSONA_ID [GROUP_ID]")
+
+user, persona = sys.argv[1:3]
+scope = {"conversation_id": int(sys.argv[3])} if len(sys.argv) == 4 else {}
+ctx = _build_app(None)
+try:
+    ctx.services.conversation.authorizer.require_persona(user, persona)
+    jobs = ctx.services.extraction.jobs
+    horizon = jobs.latest_message_id(user, persona, **scope)
+    settled = True
+    while (job := jobs.enqueue(user, persona, until_id=horizon, **scope)) is not None:
+        if job["status"] == "failed":
+            jobs.retry(job["id"])
+        result = ctx.services.extraction.run({"user_id": user, "persona_id": persona, **scope})
+        print(json.dumps({"phase": "memory", "job_id": job["id"],
+            **{k: result.get(k) for k in ("job_status", "facts_created", "notes_updated", "errors")}},
+            ensure_ascii=False), flush=True)
+        if result.get("job_status") != "succeeded":
+            settled = False
+            break
+    if settled and not jobs.busy(user, persona):
+        summary = ctx.services.summary
+        horizon = summary.repo.latest_change(user, persona)
+        while (job := summary.repo.enqueue(user, persona, manual=True, until_id=horizon)) is not None:
+            result = summary.run(job["id"])
+            print(json.dumps({"phase": "summary", "job_id": job["id"],
+                "status": result.get("status"), "error": result.get("last_error")},
+                ensure_ascii=False), flush=True)
+            if result.get("status") != "succeeded":
+                break
+        print("本次整理与摘要检查结束；没有新内容时不会调用模型。", flush=True)
+    else:
+        print("当前任务未完成或另有记忆任务在执行，请查看上面的状态。", flush=True)
+finally:
+    ctx.close()
+PY
+}
+
+# 私聊：整理这个角色尚未处理的聊天，并更新两个摘要
+ce_record USER_ID "PERSONA_ID"
+
+# 群聊：仅为群内指定角色整理，其他角色需分别执行
+ce_record USER_ID "PERSONA_ID" GROUP_ID
+```
+
+函数同 ce 一样仅在当前终端有效；需先进入 /opt/tongxing，使用同一份 .env。它不会伪造新用户消息，也不关闭或重置会话；pending/running 表示已有任务尚未完成，此时不会重复调用模型。
 
 ## 10. 常见情况
 

@@ -13,6 +13,7 @@ class MemorySearch(BaseModel):
     max_hops: int = Field(default=1, ge=0, le=2)
     seed_ids: list[str] = Field(default_factory=list, max_length=10)
     recent_limit: int = Field(default=0, ge=0, le=10)
+    conversation_id: int | None = Field(default=None,gt=0)
 
 
 class MemorySearchResult:

@@ -7,7 +7,7 @@ import re
 
 def migrate(conn):
     version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > 11:
+    if version > 13:
         raise ValueError('数据库版本比当前程序新，拒绝降级运行')
     if version < 1:
         _migrate_jobs(conn)
@@ -31,6 +31,93 @@ def migrate(conn):
         _add_accounts(conn)
     if conn.execute('PRAGMA user_version').fetchone()[0] < 11:
         _add_account_limits(conn)
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 12:
+        _add_group_conversations(conn)
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 13:
+        _add_group_automation(conn)
+
+
+def _add_group_automation(conn):
+    from companion_ever.infrastructure.database.connection import transaction
+    path=conn.execute('PRAGMA database_list').fetchone()[2]
+    if path and conn.execute('SELECT 1 FROM user LIMIT 1').fetchone():
+        backup_path=Path(path+'.bak-before-group-automation-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
+        backup_path.touch(mode=0o600,exist_ok=False)
+        backup=sqlite3.connect(backup_path)
+        try:conn.backup(backup)
+        finally:backup.close()
+    with transaction(conn):
+        for table,column,definition in (
+            ('conversation','proactive_enabled','INTEGER NOT NULL DEFAULT 0'),
+            ('conversation','visible_until','REAL NOT NULL DEFAULT 0'),
+            ('memory_job','persona_id','TEXT'),
+            ('memory_job','member_revision','INTEGER'),
+            ('push_delivery','conversation_id','INTEGER REFERENCES conversation(id)'),
+        ):
+            if column not in {r['name'] for r in conn.execute('PRAGMA table_info('+table+')')}:
+                conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+        conn.execute('UPDATE memory_job SET persona_id=(SELECT persona_id FROM conversation WHERE id=memory_job.conversation_id) WHERE persona_id IS NULL')
+        conn.execute('DROP INDEX IF EXISTS idx_memory_one_pending')
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_scope_pending ON memory_job(conversation_id,persona_id) WHERE status!='succeeded'")
+        conn.execute('UPDATE push_delivery SET conversation_id=(SELECT conversation_id FROM generation WHERE id=push_delivery.generation_id) WHERE conversation_id IS NULL')
+        if conn.execute('PRAGMA foreign_key_check').fetchone():raise ValueError('群自动任务迁移外键检查失败')
+        conn.execute('PRAGMA user_version=13')
+
+
+def _add_group_conversations(conn):
+    """Preserve all IDs and references while making private persona binding optional."""
+    path = conn.execute('PRAGMA database_list').fetchone()[2]
+    if path and conn.execute('SELECT 1 FROM user LIMIT 1').fetchone():
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')
+        backup_path = Path(path + '.bak-before-groups-' + stamp)
+        backup_path.touch(mode=0o600, exist_ok=False)
+        backup = sqlite3.connect(backup_path)
+        try:
+            conn.backup(backup)
+        finally:
+            backup.close()
+    if conn.in_transaction:
+        raise ValueError('会话迁移必须在启动时独立执行')
+    from importlib import resources
+    schema = resources.files('companion_ever.infrastructure.database').joinpath('group_schema.sql').read_text(encoding='utf-8')
+    conn.execute('PRAGMA foreign_keys=OFF')
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        columns = {r['name'] for r in conn.execute('PRAGMA table_info(conversation)')}
+        if 'kind' not in columns:
+            for table in ('conversation', 'conversation_log'):
+                definition = re.search(r'CREATE TABLE IF NOT EXISTS ' + table + r' \(.*?\n\);', schema, re.S).group()
+                conn.execute(definition.replace('EXISTS ' + table + ' (', 'EXISTS ' + table + '_new (', 1))
+                fields = [r['name'] for r in conn.execute('PRAGMA table_info(' + table + ')')]
+                names = ','.join(fields)
+                old_sequence = conn.execute('SELECT seq FROM sqlite_sequence WHERE name=?', (table,)).fetchone()
+                conn.execute(f'INSERT INTO {table}_new ({names}) SELECT {names} FROM {table}')
+                conn.execute('DROP TABLE ' + table)
+                conn.execute(f'ALTER TABLE {table}_new RENAME TO {table}')
+                if old_sequence:
+                    conn.execute('UPDATE sqlite_sequence SET seq=max(seq,?) WHERE name=?', (old_sequence[0], table))
+        fields = {r['name'] for r in conn.execute('PRAGMA table_info(generation)')}
+        if 'actor_persona_id' not in fields:
+            conn.execute('ALTER TABLE generation ADD COLUMN actor_persona_id TEXT')
+            conn.execute("ALTER TABLE generation ADD COLUMN target_persona_ids TEXT NOT NULL DEFAULT '[]'")
+            conn.execute("ALTER TABLE generation ADD COLUMN completed_persona_ids TEXT NOT NULL DEFAULT '[]'")
+            conn.execute('ALTER TABLE generation ADD COLUMN coordination_done INTEGER NOT NULL DEFAULT 0')
+            conn.execute('ALTER TABLE generation ADD COLUMN model_requests INTEGER NOT NULL DEFAULT 0')
+        statement = ''
+        for line in schema.splitlines(True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                conn.execute(statement)
+                statement = ''
+        if conn.execute('PRAGMA foreign_key_check').fetchone():
+            raise ValueError('会话迁移外键检查失败，已回滚')
+        conn.execute('PRAGMA user_version=12')
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute('PRAGMA foreign_keys=ON')
 
 
 def _add_account_limits(conn):

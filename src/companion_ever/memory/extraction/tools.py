@@ -54,16 +54,21 @@ def tool_specs():
 
 
 class MemoryTools:
-    def __init__(self, note_service, retrieval, user_id, persona_id):
+    def __init__(self, note_service, retrieval, user_id, persona_id,*,conversation_id=None):
         self.authorizer = note_service.authorizer
         self.notes = note_service.note_repo
         self.links = NoteLinkRepo(self.notes.conn)
         self.retrieval = retrieval
         self.user_id = user_id
         self.persona_id = persona_id
+        self.conversation_id=conversation_id
+
+    def _visible(self):
+        return self.notes.visible_ids(self.user_id,self.persona_id,self.conversation_id) if self.conversation_id is not None else None
 
     def _owned(self, note):
-        return note is not None and (note.user_id, note.persona_id) == (self.user_id, self.persona_id)
+        visible=self._visible()
+        return note is not None and (note.user_id, note.persona_id) == (self.user_id, self.persona_id) and (visible is None or note.id in visible)
 
     def _evidence(self, note_id):
         rows = self.notes.evidence(note_id, self.user_id, self.persona_id, limit=4, user_only=True)
@@ -75,7 +80,7 @@ class MemoryTools:
         if not args.query.strip():
             raise ValueError('检索 query 不能为空白')
         result = self.retrieval.search(self.user_id, self.persona_id, MemorySearch(
-            query=args.query, kinds=args.kinds, limit=args.limit, purpose='consolidation', max_hops=1))
+            query=args.query, kinds=args.kinds, limit=args.limit, purpose='consolidation', max_hops=1,conversation_id=self.conversation_id))
         notes = {hit['note'].id: hit['note'] for hit in result.hits}
         return {'notes': [{**note_payload(hit['note']), 'superseded': hit['superseded'],
                            'evidence': hit['evidence']} for hit in result.hits],

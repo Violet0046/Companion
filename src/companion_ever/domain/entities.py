@@ -104,6 +104,10 @@ class ConversationMessage:
     content: str
     created_at: Optional[datetime] = None
     client_message_id: Optional[str] = None
+    quoted_message_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+    sender_kind: Optional[str] = None
+    sender_id: Optional[str] = None
 
     def to_llm_dict(self) -> dict:
         return {"role": self.role, "content": self.content}

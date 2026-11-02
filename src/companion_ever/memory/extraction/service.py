@@ -96,7 +96,8 @@ class ExtractionService:
         result = {**state, "messages": [], "facts_created": 0, "blocks_updated": 0,
                   "notes_updated":0, "note_ids":{}, "errors": [], "extraction_failed": False,
                   'model_calls':0,'tool_rounds':0,'tool_calls':0}
-        job = self.jobs.enqueue(user_id, persona_id)
+        scope_options={'conversation_id':state['conversation_id']} if state.get('conversation_id') is not None else {}
+        job = self.jobs.enqueue(user_id, persona_id,**scope_options)
         if not job:
             return result
         result.update(job_id=job['id'], job_status=job['status'])
@@ -137,11 +138,10 @@ class ExtractionService:
         checkpoint('load_input')
         job=state['job']
         user_id, persona_id = job['user_id'], job['persona_id']
-        messages = self.conversation_service.get_messages_between(
-            user_id=user_id, persona_id=persona_id,
-            since_id=job['after_message_id'], until_id=job['through_message_id'], limit=200)
-        reference = self.conversation_service.get_messages_between(
-            user_id=user_id,persona_id=persona_id,until_id=job['after_message_id'],limit=6) if job['after_message_id'] else []
+        messages = self.conversation_service.memory_messages(user_id,persona_id,job['conversation_id'],
+            since_id=job['after_message_id'],until_id=job['through_message_id'],limit=200)
+        reference = self.conversation_service.memory_messages(user_id,persona_id,job['conversation_id'],
+            until_id=job['after_message_id'],limit=6) if job['after_message_id'] else []
         bounded=[];chars=0
         for message in reversed(reference):
             if bounded and chars+len(message.content)>2000:
@@ -154,15 +154,21 @@ class ExtractionService:
                              'local_time':parse_sqlite_ts(m.created_at).astimezone(local_zone).isoformat()}
                             for m in reference + messages],
                 'existing_notes':[]}
+        group_id=job['conversation_id'] if job['conversation_kind']=='group' else None
+        if group_id is not None:
+            case['conversation']={'id':group_id,'kind':'group','self_persona_id':persona_id}
+            for data,message in zip(case['messages'],reference+messages):
+                data.update(sender_kind=message.sender_kind,sender_id=message.sender_id)
         return {'messages':messages,'case':case,'snapshots':{},
                 'llm_result':{'proposals':[],'links':[],'skipped':[],'uncertainties':[]},
-                'tools':MemoryTools(self.note_service,self.retrieval,user_id,persona_id),
+                'tools':MemoryTools(self.note_service,self.retrieval,user_id,persona_id,conversation_id=group_id),
                 'next':'prefetch' if any(m.role=='user' for m in messages) else 'commit'}
 
     def _prefetch(self,state):
         query=' '.join(m.content for m in state['messages'] if m.role=='user')[:2000]
+        group_id=state['case'].get('conversation',{}).get('id')
         candidates=self.retrieval.search(state['user_id'],state['persona_id'],MemorySearch(
-            query=query,purpose='consolidation',recent_limit=6,limit=12,max_hops=1)).notes
+            query=query,purpose='consolidation',recent_limit=6,limit=12,max_hops=1,conversation_id=group_id)).notes
         snapshots={};chars=0
         for note in candidates:
             if snapshots and chars+len(note.content)>4000:
@@ -172,7 +178,8 @@ class ExtractionService:
         checkpoint('input_ready',messages=len(state['messages']),candidate_notes=len(snapshots),
                    source_chars=sum(len(m.content) for m in state['messages']))
         # An empty keyword result is not proof that the memory store is empty.
-        notes_exist=self.note_service.note_repo.exists_active(state['user_id'],state['persona_id'])
+        visible=self.note_service.note_repo.visible_ids(state['user_id'],state['persona_id'],group_id) if group_id is not None else None
+        notes_exist=self.note_service.note_repo.exists_active(state['user_id'],state['persona_id'],allowed_ids=visible)
         search_required=notes_exist and not snapshots
         messages=draft_messages(case, response_schema=self.response_schema, tools=tool_specs(),
                                 requires_search_before_write=search_required,

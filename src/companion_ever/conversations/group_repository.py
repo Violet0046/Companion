@@ -1,0 +1,142 @@
+"""Group storage; callers own transactions, authorization and model policy."""
+import json
+import uuid
+import time
+
+
+class GroupRepo:
+    def __init__(self,conn):
+        self.conn=conn
+
+    def owned(self,user,cid):
+        row=self.conn.execute("SELECT c.* FROM conversation c JOIN user u ON u.id=c.user_id "
+            "WHERE c.id=? AND c.user_id=? AND c.kind='group' AND u.disabled=0",(cid,user)).fetchone()
+        return dict(row) if row else None
+
+    def set_proactive(self,cid,enabled):
+        self.conn.execute('UPDATE conversation SET proactive_enabled=? WHERE id=?',(int(enabled),cid))
+        if not enabled:
+            self.conn.execute("UPDATE generation SET status='cancelled',last_error='群主动联系已关闭',completed_at=CURRENT_TIMESTAMP WHERE conversation_id=? AND origin='proactive' AND test_mode=0 AND status IN ('queued','running')",(cid,))
+
+    def proactive_targets(self):
+        return [dict(r) for r in self.conn.execute("SELECT id,user_id FROM conversation WHERE kind='group' AND proactive_enabled=1")]
+
+    def proactive_snapshot(self,cid):
+        row=self.conn.execute("SELECT c.id,c.proactive_enabled,c.last_read_message_id,"
+            "(SELECT max(id) FROM conversation_log WHERE conversation_id=c.id AND role IN ('user','assistant')) AS last_id,"
+            "(SELECT max(id) FROM conversation_log WHERE conversation_id=c.id AND role='user') AS user_id,"
+            "(SELECT created_at FROM conversation_log WHERE conversation_id=c.id AND role='user' ORDER BY id DESC LIMIT 1) AS user_at "
+            "FROM conversation c WHERE c.id=? AND c.kind='group'",(cid,)).fetchone()
+        if row is None:return None
+        result=dict(row)
+        result['busy']=bool(self.conn.execute("SELECT 1 FROM generation WHERE conversation_id=? AND status IN ('queued','running')",(cid,)).fetchone())
+        result['unread_proactive']=bool(self.conn.execute("SELECT 1 FROM conversation_log m JOIN generation g ON g.id=m.generation_id WHERE m.conversation_id=? AND g.origin='proactive' AND m.id>?",(cid,row['last_read_message_id'])).fetchone())
+        return result
+
+    def enqueue_proactive(self,cid,snapshot,gid,delay,test):
+        now=time.time()
+        self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,origin,scheduled_at,expires_at,context_message_id,test_mode) "
+            "VALUES (?,?,?,'queued','proactive',?,?,?,?)",(gid,cid,snapshot['user_id'],now+delay,now+delay+900,snapshot['last_id'],int(test)))
+
+    def proactive_valid(self,g):
+        row=self.conn.execute('SELECT proactive_enabled FROM conversation WHERE id=?',(g['conversation_id'],)).fetchone()
+        last=self.conn.execute("SELECT max(id) FROM conversation_log WHERE conversation_id=? AND role IN ('user','assistant') AND (generation_id IS NULL OR generation_id!=?)",(g['conversation_id'],g['id'])).fetchone()[0]
+        return bool(row and (row[0] or g['test_mode'])) and last==g['context_message_id']
+
+    def set_visible(self,cid,visible):
+        self.conn.execute('UPDATE conversation SET visible_until=? WHERE id=?',(time.time()+45 if visible else 0,cid))
+
+    def notification(self,cid,mid):
+        row=self.conn.execute("SELECT m.sender_id,c.visible_until FROM conversation c JOIN conversation_log m ON m.conversation_id=c.id "
+            "WHERE c.id=? AND m.id=? AND m.role='assistant' AND c.last_read_message_id<m.id AND NOT EXISTS(SELECT 1 FROM conversation_log newer "
+            "WHERE newer.conversation_id=c.id AND newer.role='user' AND newer.id>m.id)",(cid,mid)).fetchone()
+        return dict(row) if row else None
+
+    def members(self,cid,persona=None):
+        sql='SELECT * FROM conversation_member WHERE conversation_id=? AND left_after_message_id IS NULL'
+        args=[cid]
+        if persona is not None:sql+=' AND persona_id=?';args.append(persona)
+        return [dict(r) for r in self.conn.execute(sql+' ORDER BY rowid',args)]
+
+    def create(self,user,name,personas):
+        cid=self.conn.execute("INSERT INTO conversation(user_id,kind,name) VALUES (?,'group',?)",(user,name)).lastrowid
+        self.conn.executemany('INSERT INTO conversation_member(conversation_id,persona_id) VALUES (?,?)',[(cid,p) for p in personas])
+        return cid
+
+    def list_ids(self,user):
+        return [r[0] for r in self.conn.execute("SELECT id FROM conversation WHERE user_id=? AND kind='group' ORDER BY id DESC",(user,))]
+
+    def leave(self,cid,persona):
+        last=self.conn.execute('SELECT coalesce(max(id),0) FROM conversation_log WHERE conversation_id=?',(cid,)).fetchone()[0]
+        self.conn.execute('UPDATE conversation_member SET left_after_message_id=?,revision=revision+1 WHERE conversation_id=? AND persona_id=?',(last,cid,persona))
+        self.conn.execute("UPDATE generation SET status='cancelled',last_error='群成员已变化',completed_at=CURRENT_TIMESTAMP "
+            "WHERE conversation_id=? AND status IN ('queued','running')",(cid,))
+
+    def history(self,cid,*,before_id=None,after_id=None,limit=50):
+        sql="SELECT * FROM conversation_log WHERE conversation_id=? AND role IN ('user','assistant')"
+        args=[cid];direction='DESC'
+        if before_id is not None:sql+=' AND id<?';args.append(before_id)
+        elif after_id is not None:sql+=' AND id>?';args.append(after_id);direction='ASC'
+        rows=list(self.conn.execute(sql+f' ORDER BY id {direction} LIMIT ?',(*args,limit)))
+        return list(reversed(rows)) if direction=='DESC' else rows
+
+    def unread(self,cid,after):
+        row=self.conn.execute("SELECT count(*),coalesce(max(id),0) FROM conversation_log WHERE conversation_id=? AND role='assistant' AND id>?",(cid,after)).fetchone()
+        return {'count':row[0],'latest_id':row[1]}
+
+    def mark_read(self,cid,mid):
+        self.conn.execute('UPDATE conversation SET last_read_message_id=max(last_read_message_id,?) WHERE id=? '
+            "AND EXISTS(SELECT 1 FROM conversation_log WHERE id=? AND conversation_id=? AND role='assistant')",(mid,cid,mid,cid))
+
+    def receipt(self,cid,client_id):
+        return self.conn.execute('SELECT * FROM conversation_log WHERE conversation_id=? AND client_message_id=?',(cid,client_id)).fetchone() if client_id else None
+
+    def generation_for(self,mid):
+        return self.conn.execute("SELECT id FROM generation WHERE trigger_message_id=? AND origin='reply' ORDER BY rowid DESC LIMIT 1",(mid,)).fetchone()[0]
+
+    def latest_generation_id(self,cid):
+        row=self.conn.execute("SELECT id FROM generation WHERE conversation_id=? AND origin='reply' ORDER BY rowid DESC LIMIT 1",(cid,)).fetchone()
+        return row[0] if row else None
+
+    def retry(self,old):
+        gid=uuid.uuid4().hex
+        self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,actor_persona_id,target_persona_ids,completed_persona_ids,coordination_done) "
+            "VALUES (?,?,?,'queued',?,?,?,?)",(gid,old['conversation_id'],old['trigger_message_id'],old['actor_persona_id'],old['target_persona_ids'],old['completed_persona_ids'],old['coordination_done']))
+        self.conn.execute('INSERT INTO group_invitation SELECT ?,persona_id,suggestion,anchor_message_ids FROM group_invitation WHERE generation_id=?',(gid,old['id']))
+        return gid
+
+    def receive(self,user,cid,content,client_id,quoted_message_id,mentions,targets):
+        self.conn.execute("UPDATE generation SET status='cancelled',completed_at=CURRENT_TIMESTAMP WHERE conversation_id=? AND status IN ('queued','running')",(cid,))
+        turn=self.conn.execute('SELECT coalesce(max(turn_index),0)+1 FROM conversation_log WHERE conversation_id=?',(cid,)).fetchone()[0]
+        mid=self.conn.execute("INSERT INTO conversation_log(user_id,turn_index,role,content,conversation_id,sender_kind,sender_id,client_message_id,quoted_message_id,mentions_json) "
+            "VALUES (?,?,'user',?,?,'user',?,?,?,?)",(user,turn,content,cid,user,client_id or uuid.uuid4().hex,quoted_message_id,json.dumps(mentions))).lastrowid
+        gid=uuid.uuid4().hex
+        self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,actor_persona_id,target_persona_ids,coordination_done) VALUES (?,?,?,'queued',?,?,?)",
+            (gid,cid,mid,targets[0] if targets else None,json.dumps(targets),int(len(targets)==2)))
+        return gid
+
+    def reserve_call(self,gid):
+        return self.conn.execute("UPDATE generation SET model_requests=model_requests+1 WHERE id=? AND model_requests<4 AND status='running'",(gid,)).rowcount==1
+
+    def save_plan(self,gid,targets,invitations):
+        for inv in invitations:
+            self.conn.execute('INSERT INTO group_invitation(generation_id,persona_id,suggestion,anchor_message_ids) VALUES (?,?,?,?)',
+                (gid,inv.persona_id,inv.suggestion,json.dumps(inv.anchor_message_ids)))
+        self.conn.execute('UPDATE generation SET target_persona_ids=?,coordination_done=1 WHERE id=?',
+            (json.dumps(targets+[inv.persona_id for inv in invitations]),gid))
+
+    def suggestion(self,gid,persona):
+        row=self.conn.execute('SELECT suggestion FROM group_invitation WHERE generation_id=? AND persona_id=?',(gid,persona)).fetchone()
+        return row[0] if row else None
+
+    def save_reply(self,g,persona,messages):
+        saved=[]
+        index=self.conn.execute('SELECT count(*) FROM conversation_log WHERE generation_id=?',(g['id'],)).fetchone()[0]
+        turn=self.conn.execute('SELECT turn_index FROM conversation_log WHERE id=?',(g['trigger_message_id'],)).fetchone()[0]
+        for offset,text in enumerate(messages):
+            mid=self.conn.execute("INSERT INTO conversation_log(user_id,turn_index,role,content,conversation_id,sender_kind,sender_id,reply_to_message_id,generation_id,output_index) "
+                "VALUES (?,?,'assistant',?,?,'persona',?,?,?,?)",(g['user_id'],turn,text.strip(),g['conversation_id'],persona,g['trigger_message_id'],g['id'],index+offset)).lastrowid
+            saved.append(self.conn.execute('SELECT * FROM conversation_log WHERE id=?',(mid,)).fetchone())
+        done=json.loads(g['completed_persona_ids']);done.append(persona)
+        self.conn.execute('UPDATE generation SET completed_persona_ids=? WHERE id=?',(json.dumps(done),g['id']))
+        return saved

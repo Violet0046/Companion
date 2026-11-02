@@ -29,6 +29,10 @@ class NoteService:
 
     # === 显式写入 ===
 
+    def sources(self,user,persona,note_ids):
+        self.authorizer.require_persona(user,persona)
+        return self.note_repo.sources(user,persona,note_ids)
+
     def create_note(
         self,
         user_id: str,

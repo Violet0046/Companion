@@ -27,13 +27,13 @@ class RetrievalService:
         self.cfg = cfg
         self.links = NoteLinkRepo(note_repo.conn)
 
-    def retrieve(self, user_id, persona_id, query, top_k=None):
+    def retrieve(self, user_id, persona_id, query, top_k=None,*,conversation_id=None):
         """Compatibility entry for prompts; all selection happens in search()."""
         limit = self.cfg.top_k if top_k is None else top_k
         if limit <= 0:
             self.authorizer.require_persona(user_id, persona_id)
             return []
-        return self.search(user_id, persona_id, MemorySearch(query=query,limit=min(limit,50))).notes
+        return self.search(user_id, persona_id, MemorySearch(query=query,limit=min(limit,50),conversation_id=conversation_id)).notes
 
     def search(self, user_id, persona_id, request):
         """Retrieve seeds, expand at most two hops, then select scoped evidence."""
@@ -46,8 +46,9 @@ class RetrievalService:
         edges = {}
         truncated = False
         now = datetime.now(timezone.utc)
+        visible=self.note_repo.visible_ids(user_id,persona_id,request.conversation_id) if request.conversation_id is not None else None
         def allowed(note):
-            return note is not None and note.user_id==user_id and note.persona_id==persona_id
+            return note is not None and note.user_id==user_id and note.persona_id==persona_id and (visible is None or note.id in visible)
         def offer(note, reason, score, path):
             if not allowed(note):
                 return
@@ -68,7 +69,7 @@ class RetrievalService:
             if not query.strip():
                 continue
             keywords=all_keywords(query)
-            found=self.note_repo.search(query,user_id=user_id,persona_id=persona_id,limit=60,include_archived=True)
+            found=self.note_repo.search(query,user_id=user_id,persona_id=persona_id,limit=60,include_archived=True,allowed_ids=visible)
             ranked=[]
             for note in found:
                 content=note.content if isinstance(note.content,str) else ''
@@ -79,7 +80,7 @@ class RetrievalService:
             for score,note in ranked[:20]:
                 offer(note,label,score,[])
         if request.purpose=='consolidation' and request.recent_limit:
-            recent=[n for n in self.note_repo.find(user_id=user_id,persona_id=persona_id,limit=request.recent_limit+1) if allowed(n)]
+            recent=[n for n in self.note_repo.find(user_id=user_id,persona_id=persona_id,limit=request.recent_limit+1,allowed_ids=visible) if allowed(n)]
             for note in recent[:request.recent_limit]:
                 offer(note,'recent_context',0.05,[])
         # Scope the traversal itself, not just the final output. Visited nodes bound cycles.

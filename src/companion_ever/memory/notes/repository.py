@@ -53,15 +53,46 @@ class NoteRepo:
 
     # === 查询 ===
 
-    def exists_active(self, user_id, persona_id):
+    def visible_ids(self,user_id,persona_id,conversation_id):
+        scope=self.conn.execute("SELECT m.joined_after_message_id FROM conversation c JOIN conversation_member m ON m.conversation_id=c.id "
+            "WHERE c.id=? AND c.user_id=? AND c.kind='group' AND m.persona_id=? AND m.left_after_message_id IS NULL",(conversation_id,user_id,persona_id)).fetchone()
+        if scope is None:raise PermissionError('当前角色不可访问这个群聊')
+        return {r[0] for r in self.conn.execute('SELECT n.id FROM note n WHERE n.user_id=? AND n.persona_id=? '
+            'AND EXISTS(SELECT 1 FROM note_evidence e WHERE e.note_id=n.id) AND NOT EXISTS('
+            'SELECT 1 FROM note_evidence e JOIN conversation_log l ON l.id=e.message_id WHERE e.note_id=n.id '
+            'AND (l.user_id!=? OR l.conversation_id!=? OR l.id<=?))',
+            (user_id,persona_id,user_id,conversation_id,scope[0]))}
+
+    def sources(self,user,persona,note_ids):
+        import json
+        result={nid:[] for nid in note_ids}
+        for row in self.conn.execute('SELECT DISTINCT n.id AS note_id,c.id,c.kind,c.name FROM note n JOIN note_evidence e ON e.note_id=n.id '
+            'JOIN conversation_log m ON m.id=e.message_id JOIN conversation c ON c.id=m.conversation_id '
+            'WHERE n.user_id=? AND n.persona_id=? AND m.user_id=n.user_id AND c.user_id=n.user_id AND n.id IN (SELECT value FROM json_each(?)) '
+            'ORDER BY c.id',(user,persona,json.dumps(list(note_ids)))):
+            data=dict(row);nid=data.pop('note_id');result[nid].append(data)
+        return result
+
+    @staticmethod
+    def _allowed_sql(allowed_ids,alias=''):
+        if allowed_ids is None:return '',[]
+        import json
+        return ' AND '+alias+'id IN (SELECT value FROM json_each(?))',[json.dumps(sorted(allowed_ids))]
+
+    def exists_active(self, user_id, persona_id,*,allowed_ids=None):
+        clause,params=self._allowed_sql(allowed_ids)
         return bool(self.conn.execute('SELECT 1 FROM note WHERE user_id=? AND persona_id=? '
-                                     'AND is_archived=0 LIMIT 1', (user_id, persona_id)).fetchone())
+                                     'AND is_archived=0'+clause+' LIMIT 1', (user_id, persona_id,*params)).fetchone())
 
     def evidence(self, note_id, user_id, persona_id, *, limit=3, user_only=False):
         role = " AND m.role='user'" if user_only else ''
         return [dict(row) for row in self.conn.execute(
             'SELECT e.message_id,e.quote FROM note_evidence e JOIN conversation_log m ON m.id=e.message_id '
-            'WHERE e.note_id=? AND m.user_id=? AND m.persona_id=?' + role + ' ORDER BY e.message_id DESC LIMIT ?',
+            'JOIN note n ON n.id=e.note_id JOIN conversation c ON c.id=m.conversation_id '
+            'WHERE e.note_id=? AND n.user_id=? AND n.persona_id=? AND m.user_id=n.user_id AND '
+            "((c.kind='private' AND c.persona_id=n.persona_id) OR (c.kind='group' AND EXISTS(SELECT 1 FROM conversation_member cm "
+            'WHERE cm.conversation_id=c.id AND cm.persona_id=n.persona_id AND m.id>cm.joined_after_message_id '
+            'AND (cm.left_after_message_id IS NULL OR m.id<=cm.left_after_message_id))))' + role + ' ORDER BY e.message_id DESC LIMIT ?',
             (note_id, user_id, persona_id, limit))]
 
     def get(self, note_id: str) -> Optional[Note]:
@@ -86,10 +117,13 @@ class NoteRepo:
         kinds: Optional[list[MemoryKind]] = None,
         is_archived: bool = False,
         limit: int = 100,
+        allowed_ids=None,
     ) -> list[Note]:
         """按条件查询笔记（限定 user_id + persona_id）。"""
         sql = "SELECT * FROM note WHERE user_id = ? AND persona_id = ?"
         params: list = [user_id, persona_id]
+        clause,extra=self._allowed_sql(allowed_ids)
+        sql+=clause;params.extend(extra)
 
         if not is_archived:
             sql += " AND is_archived = 0"
@@ -119,6 +153,7 @@ class NoteRepo:
         persona_id: str,
         limit: int = 20,
         include_archived: bool = False,
+        allowed_ids=None,
     ) -> list[Note]:
         """关键词检索（FTS5 trigram + LIKE 兜底）。
 
@@ -148,6 +183,8 @@ class NoteRepo:
         short_kw, long_kw = extract_keywords(query)
         fts_notes: list[Note] = []
         like_notes: list[Note] = []
+        fts_scope,fts_args=self._allowed_sql(allowed_ids,'n.')
+        like_scope,like_args=self._allowed_sql(allowed_ids)
 
         # 1. FTS5 检索（3 字关键词 OR）
         if long_kw:
@@ -160,8 +197,8 @@ class NoteRepo:
                     "WHERE note_fts MATCH ? "
                     "  AND n.user_id = ? AND n.persona_id = ? "
                     f"  AND (n.is_archived = 0 OR {int(include_archived)}) "
-                    "ORDER BY f.rank LIMIT ?",
-                    (fts_query, user_id, persona_id, max(limit * 2, limit)),
+                    +fts_scope+" ORDER BY f.rank LIMIT ?",
+                    (fts_query, user_id, persona_id,*fts_args, max(limit * 2, limit)),
                 ).fetchall()
                 fts_notes = [row_to_note(r) for r in rows]
             except sqlite3.OperationalError:
@@ -180,11 +217,13 @@ class NoteRepo:
                 f"WHERE user_id = ? AND persona_id = ? "
                 f"  AND (is_archived = 0 OR {int(include_archived)}) "
                 f"  AND ({where}) "
+                +like_scope+
                 f"ORDER BY updated_at DESC LIMIT ?",
                 (
                     user_id,
                     persona_id,
                     *["%" + pat.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%" for pat in patterns],
+                    *like_args,
                     max(limit * 3, limit),
                 ),
             ).fetchall()
