@@ -57,8 +57,12 @@ class AccountUsage:
         if excluding_persona is not None:
             sql += ' AND (c.persona_id IS NULL OR c.persona_id!=?)'
             args.append(excluding_persona)
+            sql += " AND NOT (g.origin='proactive' AND g.actor_persona_id IS NOT NULL AND g.actor_persona_id=?)"
+            args.append(excluding_persona)
         if excluding_conversation is not None:
             sql += ' AND c.id!=?'
+            args.append(excluding_conversation)
+            sql += " AND NOT (g.origin='proactive' AND g.actor_persona_id IS NOT NULL AND g.actor_persona_id IN (SELECT persona_id FROM conversation_member WHERE conversation_id=? AND left_after_message_id IS NULL))"
             args.append(excluding_conversation)
         return self.conn.execute(sql, args).fetchone()[0]
 

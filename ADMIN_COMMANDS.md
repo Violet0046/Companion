@@ -201,7 +201,7 @@ ce --db /absolute/path/companion.db account list
 
 账号管理命令发现数据库文件不存在时会报错，不会为你新建数据库。
 
-当前为 schema v13。v11 增加账号额度，v12 引入群会话与引用，v13 增加群自动联系、按角色记忆进度和通知定位；对应迁移会自动创建一致性备份，包括 `.bak-before-group-automation-...`。首次运行新版账号命令也可能触发迁移，因此升级前先主动备份，再停服更新；正常日常管理无需停服。
+当前为 schema v15。v11 增加账号额度，v12 引入群会话与引用，v13 增加群自动联系、按角色记忆进度和通知定位，v14 增加交棒及手动续聊来源，v15 统一角色主动机会选路。迁移会自动创建一致性备份，包括 `.bak-before-proactive-routing-...`。旧版未指定角色的待执行群主动任务会停止，需指定角色重新触发。首次运行新版账号命令也可能触发迁移，因此升级前先主动备份，再停服更新；正常日常管理无需停服。
 
 服务器更新示例，在确认代码已提交、工作区无冲突后执行：
 
@@ -234,19 +234,19 @@ ce proactive trigger --user USER_ID --persona PERSONA_ID --test --delay 15
 ce proactive status --task TASK_ID
 ```
 
-角色需要已经有过用户发言。测试模式跳过日常主动联系的开关、免打扰和每日触发次数限制，但仍遵守权限、回复并发和对话上下文检查。实际开始时间还受后台扫描与模型耗时影响。重复提交同一次测试时，可指定相同 `--request-id`，避免重复创建任务。
+角色需要在私聊或允许的群内与用户有过互动。上面的命令只指定获得机会的角色，由她在一次调用中选择私聊或最近活跃的一个允许群，不经过协调助手。测试模式跳过角色开关、免打扰和每日触发次数限制，但仍遵守权限、回复并发和上下文检查；普通候选群仍需开启群开关。实际开始时间还受后台扫描与模型耗时影响。相同 `--request-id` 避免重复任务，状态查询完成后会显示实际 destination。
 
-群聊测试使用 `--conversation-id`，不同时传 `--persona`。先在网页创建群并发送过消息，再查询群 ID：
+如需限定群聊测试，同时指定 `--persona` 和 `--conversation-id`，角色必须仍在群内。先在网页创建群并发送过消息，再查询群 ID：
 
 ```bash
 # 只列出群 ID、名称、成员和开关，不调用模型
 ce proactive groups --user USER_ID
 
 # 按真实自动规则检查；关闭开关、免打扰、未读或等待回复时会说明原因
-ce proactive check --user USER_ID --conversation-id GROUP_ID
+ce proactive check --user USER_ID --persona PERSONA_ID --conversation-id GROUP_ID
 
-# 显式测试：由协调者决定是否邀请一位角色，实际调用模型并写入群聊
-ce proactive trigger --user USER_ID --conversation-id GROUP_ID --test --delay 15 --request-id group-smoke-001
+# 显式测试：指定角色只在这个群主动发言，一次调用生成，不经协调助手
+ce proactive trigger --user USER_ID --persona PERSONA_ID --conversation-id GROUP_ID --test --delay 15 --request-id group-smoke-001
 
 # 查询保存的消息 ID 和通知投递结果
 ce proactive status --task TASK_ID

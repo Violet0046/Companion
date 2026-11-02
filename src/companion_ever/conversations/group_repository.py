@@ -18,31 +18,6 @@ class GroupRepo:
         if not enabled:
             self.conn.execute("UPDATE generation SET status='cancelled',last_error='群主动联系已关闭',completed_at=CURRENT_TIMESTAMP WHERE conversation_id=? AND origin='proactive' AND test_mode=0 AND status IN ('queued','running')",(cid,))
 
-    def proactive_targets(self):
-        return [dict(r) for r in self.conn.execute("SELECT id,user_id FROM conversation WHERE kind='group' AND proactive_enabled=1")]
-
-    def proactive_snapshot(self,cid):
-        row=self.conn.execute("SELECT c.id,c.proactive_enabled,c.last_read_message_id,"
-            "(SELECT max(id) FROM conversation_log WHERE conversation_id=c.id AND role IN ('user','assistant')) AS last_id,"
-            "(SELECT max(id) FROM conversation_log WHERE conversation_id=c.id AND role='user') AS user_id,"
-            "(SELECT created_at FROM conversation_log WHERE conversation_id=c.id AND role='user' ORDER BY id DESC LIMIT 1) AS user_at "
-            "FROM conversation c WHERE c.id=? AND c.kind='group'",(cid,)).fetchone()
-        if row is None:return None
-        result=dict(row)
-        result['busy']=bool(self.conn.execute("SELECT 1 FROM generation WHERE conversation_id=? AND status IN ('queued','running')",(cid,)).fetchone())
-        result['unread_proactive']=bool(self.conn.execute("SELECT 1 FROM conversation_log m JOIN generation g ON g.id=m.generation_id WHERE m.conversation_id=? AND g.origin='proactive' AND m.id>?",(cid,row['last_read_message_id'])).fetchone())
-        return result
-
-    def enqueue_proactive(self,cid,snapshot,gid,delay,test):
-        now=time.time()
-        self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,origin,scheduled_at,expires_at,context_message_id,test_mode) "
-            "VALUES (?,?,?,'queued','proactive',?,?,?,?)",(gid,cid,snapshot['user_id'],now+delay,now+delay+900,snapshot['last_id'],int(test)))
-
-    def proactive_valid(self,g):
-        row=self.conn.execute('SELECT proactive_enabled FROM conversation WHERE id=?',(g['conversation_id'],)).fetchone()
-        last=self.conn.execute("SELECT max(id) FROM conversation_log WHERE conversation_id=? AND role IN ('user','assistant') AND (generation_id IS NULL OR generation_id!=?)",(g['conversation_id'],g['id'])).fetchone()[0]
-        return bool(row and (row[0] or g['test_mode'])) and last==g['context_message_id']
-
     def set_visible(self,cid,visible):
         self.conn.execute('UPDATE conversation SET visible_until=? WHERE id=?',(time.time()+45 if visible else 0,cid))
 
@@ -117,6 +92,10 @@ class GroupRepo:
         return row['id'] if row else None
 
     def receive(self,user,cid,content,client_id,quoted_message_id,mentions,targets):
+        self.conn.execute("UPDATE generation SET status='cancelled',completed_at=CURRENT_TIMESTAMP,last_error='用户已发来新群消息' "
+            "WHERE origin='proactive' AND status IN ('queued','running') AND actor_persona_id IN "
+            "(SELECT persona_id FROM conversation_member WHERE conversation_id=? AND left_after_message_id IS NULL) "
+            "AND conversation_id IN (SELECT id FROM conversation WHERE user_id=?)",(cid,user))
         self.conn.execute("UPDATE generation SET status='cancelled',completed_at=CURRENT_TIMESTAMP WHERE conversation_id=? AND status IN ('queued','running')",(cid,))
         turn=self.conn.execute('SELECT coalesce(max(turn_index),0)+1 FROM conversation_log WHERE conversation_id=?',(cid,)).fetchone()[0]
         mid=self.conn.execute("INSERT INTO conversation_log(user_id,turn_index,role,content,conversation_id,sender_kind,sender_id,client_message_id,quoted_message_id,mentions_json) "

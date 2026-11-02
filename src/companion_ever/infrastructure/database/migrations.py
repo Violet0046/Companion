@@ -7,7 +7,7 @@ import re
 
 def migrate(conn):
     version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > 14:
+    if version > 15:
         raise ValueError('数据库版本比当前程序新，拒绝降级运行')
     if version < 1:
         _migrate_jobs(conn)
@@ -37,6 +37,29 @@ def migrate(conn):
         _add_group_automation(conn)
     if conn.execute('PRAGMA user_version').fetchone()[0] < 14:
         _add_group_handoffs(conn)
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 15:
+        _add_proactive_opportunities(conn)
+
+
+def _add_proactive_opportunities(conn):
+    """Keep the actor and routing snapshot on the existing durable generation."""
+    from companion_ever.infrastructure.database.connection import transaction
+    path=conn.execute('PRAGMA database_list').fetchone()[2]
+    if path and conn.execute('SELECT 1 FROM user LIMIT 1').fetchone():
+        backup_path=Path(path+'.bak-before-proactive-routing-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
+        backup_path.touch(mode=0o600,exist_ok=False)
+        backup=sqlite3.connect(backup_path)
+        try:conn.backup(backup)
+        finally:backup.close()
+    with transaction(conn):
+        if 'opportunity_json' not in {r['name'] for r in conn.execute('PRAGMA table_info(generation)')}:
+            conn.execute('ALTER TABLE generation ADD COLUMN opportunity_json TEXT')
+        conn.execute("UPDATE generation SET actor_persona_id=(SELECT persona_id FROM conversation WHERE id=generation.conversation_id) "
+            "WHERE origin='proactive' AND actor_persona_id IS NULL")
+        conn.execute("UPDATE generation SET status='cancelled',last_error='主动联系调度已更新，请指定角色重新触发',completed_at=CURRENT_TIMESTAMP "
+            "WHERE origin='proactive' AND actor_persona_id IS NULL AND status IN ('queued','running')")
+        if conn.execute('PRAGMA foreign_key_check').fetchone():raise ValueError('主动联系选路迁移外键检查失败')
+        conn.execute('PRAGMA user_version=15')
 
 
 def _add_group_handoffs(conn):

@@ -139,7 +139,8 @@ class GenerationService:
         self.repo.recover()
         for generation in self.repo.queued():
             try:
-                if generation['conversation_kind']=='group':self.groups.require(generation['user_id'],generation['conversation_id'])
+                if generation['origin']=='proactive':self.authorizer.require_persona(generation['user_id'],generation['persona_id'])
+                elif generation['conversation_kind']=='group':self.groups.require(generation['user_id'],generation['conversation_id'])
                 else:self.authorizer.require_persona(generation['user_id'], generation['persona_id'])
             except PermissionError:
                 self.repo.finish(generation['id'], 'failed', '角色访问权限已撤销')
@@ -197,8 +198,8 @@ class GenerationService:
     def _events(self, generation):
         """输出可投递的事件；模型原文和思考标签不进入正文增量。"""
         gid = generation['id']
-        events = (self.groups.reply_events(generation) if generation['conversation_kind']=='group'
-                  else self.proactive.reply_events(generation) if generation['origin']=='proactive' and self.proactive is not None
+        events = (self.proactive.reply_events(generation) if generation['origin']=='proactive' and self.proactive is not None
+                  else self.groups.reply_events(generation) if generation['conversation_kind']=='group'
                   else self.chat.reply_events(generation))
         filt = ThinkFilter()
         try:
@@ -212,7 +213,7 @@ class GenerationService:
                     if tail:
                         yield {'type': 'delta', 'content': tail, 'generation_id': gid}
                     message = dict(event['message'])
-                    show = generation['conversation_kind']=='private' and self.settings.get_show_thinking(generation['user_id'], generation['persona_id'])
+                    show = message.get('persona_id') is not None and self.settings.get_show_thinking(generation['user_id'], generation['persona_id'])
                     thinking = message.get('thinking')
                     if not show:
                         message.pop('thinking', None)
@@ -242,8 +243,8 @@ class GenerationService:
                 if execution.cancelled:
                     break
                 self._publish(execution, event)
-                if generation['conversation_kind']=='group' and event['type']=='message_done' and self.on_group_message:
-                    self._deliver(lambda item:self.on_group_message(generation['user_id'],generation['conversation_id'],item['message']),event)
+                if event['type']=='message_done' and event['message'].get('persona_id') is None and self.on_group_message:
+                    self._deliver(lambda item:self.on_group_message(generation['user_id'],item['message']['conversation_id'],item['message']),event)
                 elif generation['origin']=='proactive' and event['type']=='message_done' and self.on_proactive_message:
                     self._deliver(lambda item: self.on_proactive_message(generation['user_id'],generation['persona_id'],item['message']),event)
         except Exception:

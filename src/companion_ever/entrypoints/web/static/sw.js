@@ -4,7 +4,7 @@
    局域网 http://192.168.x.x:8000 下这里会注册失败，属于预期。
    ============================================================ */
 
-const CACHE = 'ce-shell-v15';
+const CACHE = 'ce-shell-v17';
 const SHELL = [
   '/',
   '/index.html',

@@ -13,14 +13,17 @@ def cmd_proactive(args):
             g=ctx.services.chat.generations.get(args.task)
             if not g or g['origin']!='proactive':
                 raise ValueError('主动任务不存在')
-            result={key:g[key] for key in ('id','user_id','persona_id','conversation_id','conversation_kind','status','scheduled_at','expires_at','last_error')}
+            result={key:g[key] for key in ('id','user_id','persona_id','status','scheduled_at','expires_at','model_requests','last_error')}
+            opportunity=json.loads(g['opportunity_json']) if g['opportunity_json'] else {}
+            result['source_conversation_id']=opportunity.get('source',{}).get('id')
+            result['destination']={'kind':g['conversation_kind'],'conversation_id':g['conversation_id']} if g['status']=='completed' else None
             result['message_ids']=[m['id'] for m in ctx.services.chat.generations.outputs(g['id'])]
             result['notifications']=ctx.services.notifications.repo.deliveries(g['id'])
         elif args.proactive_cmd=='check':
-            result=ctx.services.proactive.check_group(args.user,args.conversation_id,test=args.test) if getattr(args,'conversation_id',None) is not None else ctx.services.proactive.check(args.user,args.persona,test=args.test)
+            result=ctx.services.proactive.check(args.user,args.persona,test=args.test,conversation_id=args.conversation_id)
         else:
             options=dict(delay=args.delay,test=args.test,request_id=args.request_id)
-            g=ctx.services.proactive.trigger_group(args.user,args.conversation_id,**options) if getattr(args,'conversation_id',None) is not None else ctx.services.proactive.trigger(args.user,args.persona,**options)
+            g=ctx.services.proactive.trigger(args.user,args.persona,conversation_id=args.conversation_id,**options)
             result={key:g[key] for key in ('id','status','scheduled_at','expires_at')}
             result['note']='任务已保存，由运行中的服务执行；测试会调用模型并写入真实聊天记录'
         print(json.dumps(result,ensure_ascii=False,indent=2))

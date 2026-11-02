@@ -76,7 +76,7 @@ def unread(request:Request,cid:int,after_id:int=Query(0,ge=0)):
 @router.get('/api/groups/{cid}/proactive')
 def proactive(request:Request,cid:int):
     ctx,user=target(request,cid)
-    return {**ctx.services.proactive.group_setting(user,cid),'eligibility':ctx.services.proactive.check_group(user,cid)}
+    return ctx.services.proactive.group_setting(user,cid)
 
 
 @router.put('/api/groups/{cid}/proactive')

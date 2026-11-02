@@ -1,6 +1,7 @@
 """Durable inputs, idempotent receipt and fenced reply persistence."""
 import time
 import uuid
+import json
 from companion_ever.infrastructure.database.connection import transaction
 from companion_ever.conversations.repository import ConversationRepo
 from companion_ever.accounts.usage import AccountUsage
@@ -42,6 +43,9 @@ class GenerationRepo:
                     gid = self.conn.execute("SELECT id FROM generation WHERE trigger_message_id=? AND origin='reply' ORDER BY rowid DESC LIMIT 1", (row['id'],)).fetchone()[0]
                     return self.get(gid), False
             self.usage.require_capacity(user_id, replacing_persona=persona_id, new_message=True)
+            self.conn.execute("UPDATE generation SET status='cancelled',completed_at=CURRENT_TIMESTAMP,last_error='用户已发来新消息' "
+                "WHERE origin='proactive' AND actor_persona_id=? AND status IN ('queued','running') "
+                "AND conversation_id IN (SELECT id FROM conversation WHERE user_id=?)",(persona_id,user_id))
             self.conn.execute("UPDATE generation SET status='cancelled',completed_at=CURRENT_TIMESTAMP, "
                               "last_error=CASE WHEN origin='proactive' THEN '用户已发来新消息' ELSE last_error END "
                               "WHERE conversation_id=? AND status IN ('queued','running')", (cid,))
@@ -141,16 +145,17 @@ class GenerationRepo:
     def queued(self):
         return [self.get(row['id']) for row in self.conn.execute("SELECT id FROM generation WHERE status='queued' AND scheduled_at<=?", (time.time(),))]
 
-    def proactive_snapshot(self, user, persona):
-        row = self.conn.execute('SELECT c.id,c.last_read_message_id, '
+    def proactive_snapshot(self, user, persona=None, *, conversation_id=None, excluding_generation=''):
+        row = self.conn.execute('SELECT c.id,c.kind,c.name,c.proactive_enabled,c.last_read_message_id, '
             "(SELECT max(id) FROM conversation_log WHERE conversation_id=c.id AND role IN ('user','assistant')) AS last_id, "
             "(SELECT max(id) FROM conversation_log WHERE conversation_id=c.id AND role='user') AS user_id, "
             "(SELECT created_at FROM conversation_log WHERE conversation_id=c.id AND role='user' ORDER BY id DESC LIMIT 1) AS user_at "
-            'FROM conversation c WHERE c.user_id=? AND c.persona_id=?', (user,persona)).fetchone()
+            'FROM conversation c WHERE c.user_id=? AND '+('c.id=?' if conversation_id is not None else "c.kind='private' AND c.persona_id=?"),
+            (user,conversation_id if conversation_id is not None else persona)).fetchone()
         if row is None:
             return None
         result = dict(row)
-        result['busy'] = bool(self.conn.execute("SELECT 1 FROM generation WHERE conversation_id=? AND status IN ('queued','running') LIMIT 1", (row['id'],)).fetchone())
+        result['busy'] = bool(self.conn.execute("SELECT 1 FROM generation WHERE conversation_id=? AND id!=? AND status IN ('queued','running') LIMIT 1", (row['id'],excluding_generation)).fetchone())
         result['unread_proactive'] = bool(self.conn.execute("SELECT 1 FROM conversation_log m JOIN generation g ON g.id=m.generation_id "
             "WHERE m.conversation_id=? AND g.origin='proactive' AND m.id>? LIMIT 1", (row['id'],row['last_read_message_id'])).fetchone())
         return result
@@ -158,35 +163,55 @@ class GenerationRepo:
     def proactive_valid(self, g):
         if g['expires_at'] is not None and g['expires_at'] <= time.time():
             return False
-        if g['conversation_kind']=='group':
-            from companion_ever.conversations.group_repository import GroupRepo
-            return GroupRepo(self.conn).proactive_valid(g)
+        opportunity=json.loads(g['opportunity_json']) if g.get('opportunity_json') else None
+        source_id=opportunity['source']['id'] if opportunity else g['conversation_id']
         latest = self.conn.execute("SELECT max(id) FROM conversation_log WHERE conversation_id=? AND role IN ('user','assistant') "
-                                   'AND (generation_id IS NULL OR generation_id!=?)', (g['conversation_id'],g['id'])).fetchone()[0]
+                                   'AND (generation_id IS NULL OR generation_id!=?)', (source_id,g['id'])).fetchone()[0]
         enabled = self.conn.execute('SELECT proactive_enabled FROM user_settings WHERE user_id=? AND persona_id=?', (g['user_id'],g['persona_id'])).fetchone()
-        return latest == g['context_message_id'] and (bool(g['test_mode']) or bool(enabled and enabled[0]))
+        if latest!=g['context_message_id'] or not (g['test_mode'] or enabled and enabled[0]):return False
+        source=self.conn.execute('SELECT kind,proactive_enabled FROM conversation WHERE id=?',(source_id,)).fetchone()
+        if source and source['kind']=='group':
+            member=self.conn.execute('SELECT 1 FROM conversation_member WHERE conversation_id=? AND persona_id=? AND left_after_message_id IS NULL',(source_id,g['persona_id'])).fetchone()
+            return bool(member and (g['test_mode'] or source['proactive_enabled']))
+        return source is not None
 
     def automatic_attempted(self, user, since):
         return bool(self.conn.execute("SELECT 1 FROM generation g JOIN conversation c ON c.id=g.conversation_id "
             "WHERE c.user_id=? AND origin='proactive' AND test_mode=0 AND g.created_at>=? LIMIT 1", (user,since)).fetchone())
 
-    def enqueue_proactive(self, user, persona, snapshot, gid, *, delay=0, test=False):
+    def enqueue_proactive(self, user, persona, snapshot, gid, *, delay=0, test=False, forced_group_id=None):
         now = time.time()
         # trigger_message_id is a historical user anchor, never a synthetic input;
         # proactive execution never calls trigger_content or replies to this message.
-        self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,origin,scheduled_at,expires_at,context_message_id,test_mode) "
-            "VALUES (?,?,?,'queued','proactive',?,?,?,?)", (gid,snapshot['id'],snapshot['user_id'],now+delay,now+delay+900,snapshot['last_id'],int(test)))
+        self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,origin,scheduled_at,expires_at,context_message_id,test_mode,actor_persona_id,opportunity_json) "
+            "VALUES (?,?,?,'queued','proactive',?,?,?,?,?,?)", (gid,snapshot['id'],snapshot['user_id'],now+delay,now+delay+900,snapshot['last_id'],int(test),persona,
+                json.dumps({'source':snapshot,'forced_group_id':forced_group_id,'destinations':[]})))
         return self.get(gid)
 
     def enabled_targets(self):
         return [(r[0],r[1]) for r in self.conn.execute('SELECT s.user_id,s.persona_id FROM user_settings s '
-            'JOIN conversation c ON c.user_id=s.user_id AND c.persona_id=s.persona_id WHERE s.proactive_enabled=1 '
-            "ORDER BY (SELECT max(id) FROM conversation_log WHERE conversation_id=c.id AND role='user') DESC")]
+            'WHERE s.proactive_enabled=1')]
 
     def cancel_automatic(self, user, persona):
         self.conn.execute("UPDATE generation SET status='cancelled',last_error='主动联系已关闭' "
-            "WHERE conversation_id IN (SELECT id FROM conversation WHERE user_id=? AND persona_id=?) "
+            "WHERE conversation_id IN (SELECT id FROM conversation WHERE user_id=?) AND actor_persona_id=? "
             "AND origin='proactive' AND test_mode=0 AND status IN ('queued','running')", (user,persona))
+
+    def save_proactive_messages(self,gid,destination,parts,thinking=None):
+        """Caller fences actor/target and owns the same transaction as notification enqueue."""
+        g=self.get(gid);cid=destination['id']
+        self.conn.execute('UPDATE generation SET conversation_id=? WHERE id=?',(cid,gid))
+        turn=self.conn.execute('SELECT coalesce(max(turn_index),0)+1 FROM conversation_log WHERE conversation_id=?',(cid,)).fetchone()[0]
+        saved=[]
+        for index,part in enumerate(parts):
+            mid=self.conn.execute("INSERT INTO conversation_log(user_id,persona_id,turn_index,role,content,conversation_id,sender_kind,sender_id,generation_id,output_index) "
+                "VALUES (?,?,?,'assistant',?,?,'persona',?,?,?)",(g['user_id'],g['persona_id'] if destination['kind']=='private' else None,turn,part,cid,g['persona_id'],gid,index)).lastrowid
+            if thinking and index==0 and destination['kind']=='private':
+                self.conn.execute('INSERT INTO thinking_log(message_id,user_id,persona_id,turn_index,content) VALUES (?,?,?,?,?)',(mid,g['user_id'],g['persona_id'],turn,thinking))
+            row=dict(self.conn.execute('SELECT * FROM conversation_log WHERE id=?',(mid,)).fetchone())
+            row['thinking']=thinking if index==0 and destination['kind']=='private' else None
+            saved.append(row)
+        return saved
 
     def trigger_content(self, generation):
         return self.conn.execute('SELECT content FROM conversation_log WHERE id=?',

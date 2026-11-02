@@ -2,7 +2,6 @@
 import json
 import logging
 import time
-from datetime import datetime,timezone,timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, StrictInt
 from typing import Literal
@@ -54,11 +53,6 @@ class GroupService:
         self.on_member_left=None
 
     def active(self,gid):
-        g=self.repo.get(gid)
-        if g and g['origin']=='proactive' and not g['test_mode']:
-            now=datetime.now(timezone(timedelta(hours=self.prompt.tz_offset_hours)))
-            if not 10<=now.hour<22:
-                self.repo.finish(gid,'cancelled','当前处于免打扰时段');return False
         return self.repo.active(gid)
 
     def visible(self,user,cid,visible):
@@ -225,12 +219,12 @@ class GroupService:
         targets=json.loads(g['target_persona_ids']);done=json.loads(g['completed_persona_ids'])
         members=self.members(g['user_id'],g['conversation_id'])
         eligible=[m['persona_id'] for m in members if m['persona_id'] not in targets]
-        remaining=(1 if g['origin']=='proactive' else 2)-len(targets)
-        if not remaining or not eligible:plan=Plan(invitations=[])
+        remaining=2-len(targets)
+        if remaining<=0 or not eligible:plan=Plan(invitations=[])
         else:
             prompt=self.prompt.build_group_coordination(g['user_id'],members=members,eligible_ids=eligible,
                 history=self._history_for(g),trigger_message_id=g['trigger_message_id'],spoken_ids=done,remaining=remaining,
-                conversation_id=g['conversation_id'],proactive=g['origin']=='proactive',manual=g['trigger_kind']=='manual_continue')
+                conversation_id=g['conversation_id'],manual=g['trigger_kind']=='manual_continue')
             plan=Plan.model_validate_json(clean_response(self._request(g,'coordination',None,prompt['messages'],'group_coordination')))
             if len(plan.invitations)>remaining:raise ValueError('协调邀请超过名额')
             seen=set()
@@ -252,12 +246,12 @@ class GroupService:
         targets=json.loads(g['target_persona_ids']);done=json.loads(g['completed_persona_ids'])
         members=[m['persona_id'] for m in self.members(g['user_id'],g['conversation_id'])]
         pending=[p for p in targets if p not in done and p!=persona]
-        limit=1 if g['origin']=='proactive' else MAX_GROUP_SPEAKERS
+        limit=MAX_GROUP_SPEAKERS
         source_id=invitation['source_message_id'] if invitation else None
         source=next((m for m in history if m['id']==(source_id or g['trigger_message_id'])),None)
         invocation={
             'kind':'ai_mention' if source_id else 'coordination' if invitation else 'user_mention',
-            'round_trigger':'idle' if g['origin']=='proactive' else g['trigger_kind'],
+            'round_trigger':g['trigger_kind'],
             'root_message_id':g['trigger_message_id'],
             'source_message_id':source_id or g['trigger_message_id'],
             'source_message':source,
@@ -268,7 +262,7 @@ class GroupService:
         hint=invitation['suggestion'] if invitation else ''
         prompt=self.prompt.build_group(g['user_id'],persona,history=history,
             trigger_message_id=g['trigger_message_id'],suggestion=hint,
-            conversation_id=g['conversation_id'],proactive=g['origin']=='proactive',invocation=invocation)
+            conversation_id=g['conversation_id'],invocation=invocation)
         reply=GroupReply.model_validate_json(clean_response(self._request(g,'chat',persona,prompt['messages'],'group_reply')))
         if (reply.decision=='skip' and (reply.channel is not None or reply.messages)) or (reply.decision=='speak' and (reply.channel!='group' or not reply.messages or any(not m.strip() or len(m)>16000 for m in reply.messages))):
             raise ValueError('群回复格式无效')

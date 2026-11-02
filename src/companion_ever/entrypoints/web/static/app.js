@@ -85,6 +85,7 @@ const S = {
 
 const PAGE = 50;
 let bootRequest = 0;
+let viewRequest = 0;
 let wasAtBottom = true;
 let keyboardStickUntil = 0;
 let chatScrollEpoch = 0;
@@ -173,6 +174,7 @@ const pkey = (user, persona) => `${user}/${persona}`;
 
 /** 切换视图。子页面（会话/资料/记忆）不显示底部 tab */
 function showView(name) {
+  viewRequest++;closeCreateMenu();
   if(name!=='chat' && S.locating)cancelLocation();
   S.view = name;
   document.querySelectorAll('.view').forEach((v) => {
@@ -203,15 +205,21 @@ function syncGroupPresence() {
 /* ---------- 角色清单 ---------- */
 
 async function loadUsers() {
+  const request=S.usersRequest=(S.usersRequest || 0)+1;
   try {
-    S.users = await api('/api/users');
+    const users=await api('/api/users');
+    if(request!==S.usersRequest)return;
+    S.users = users;
   } catch (e) {
+    if(request!==S.usersRequest)return;
     S.users = [];
   }
   S.archived = [];
   if (S.user) {
     try {
-      S.archived = await api(`/api/archived-personas/${enc(S.user)}`);
+      const archived=await api(`/api/archived-personas/${enc(S.user)}`);
+      if(request!==S.usersRequest)return;
+      S.archived = archived;
     } catch (e) { /* 已删除清单拿不到就先不显示 */ }
   }
 }
@@ -412,6 +420,7 @@ async function fetchConv(p) {
 }
 
 async function loadConvs() {
+  const request=S.convsRequest=(S.convsRequest || 0)+1;
   const accountUser=S.account?.user_id || S.user,actor=S.account?.csrf_token;
   const ps = allPersonas();
   const previousGroups=S.convs.filter(c=>c.group_id);
@@ -426,7 +435,7 @@ async function loadConvs() {
       unreadThrough:unread.status==='fulfilled' ? unread.value.latest_id : previous?.unreadThrough,
       error:history.status==='rejected' ? '加载失败' : null};
   }));
-  if(accountUser!==(S.account?.user_id || S.user) || actor!==S.account?.csrf_token)return;
+  if(request!==S.convsRequest || accountUser!==(S.account?.user_id || S.user) || actor!==S.account?.csrf_token)return;
   S.convs = privates.concat(grouped);
   renderConvs();
   renderMe();
@@ -544,7 +553,7 @@ function renderContacts() {
   const nb = $('cell-new-persona');
   if (nb) nb.onclick = () => openCreatePersona();
   const gb = $('cell-group-chat');
-  if (gb) gb.onclick = () => toast('群聊：还没做', 2500);
+  if (gb) gb.onclick = openCreateGroup;
   box.querySelectorAll('.persona-restore').forEach((el) => {
     el.onclick = (ev) => {
       ev.stopPropagation();
@@ -557,7 +566,23 @@ function renderContacts() {
 
 const PF = { fields: [], templates: [], activeTemplate: '' };
 
+function closeCreateMenu(focus=false) {
+  $('create-menu').classList.add('hidden');
+  $('btn-new-conv').setAttribute?.('aria-expanded','false');
+  if(focus)$('btn-new-conv').focus({preventScroll:true});
+}
+function toggleCreateMenu() {
+  const opening=$('create-menu').classList.contains('hidden');
+  closeCreateMenu();
+  if(opening){
+    $('create-menu').classList.remove('hidden');
+    $('btn-new-conv').setAttribute('aria-expanded','true');
+    $('create-persona-action').focus({preventScroll:true});
+  }
+}
+
 function openCreatePersona() {
+  closeCreateMenu();
   const dlg = $('dialog-persona');
   if (!dlg) return;
   dlg.classList.remove('hidden');
@@ -751,22 +776,51 @@ async function savePersona() {
 /** 删除角色 = 停用：撤销访问，记忆和聊天记录都留着，可以恢复。 */
 async function deletePersona(user, persona) {
   if (!confirm(`删除角色「${persona}」？\n\n记忆和聊天记录都会保留，之后可以在「已删除的角色」里恢复。`)) return;
+  const actor=S.account?.csrf_token,navigation=viewRequest;
+  const returnView=S.profileFrom==='contacts' ? 'contacts' : 'messages';
+  const current=()=>S.user===user && S.persona===persona && !S.group;
+  const deletingCurrent=current();
+  if(deletingCurrent)disconnectTarget();
   try {
     await api(`/api/persona/${enc(user)}/${enc(persona)}`, { method: 'DELETE' });
+    if(actor!==S.account?.csrf_token)return;
+    const pointsToDeleted=target=>target?.user===user && target.persona===persona;
+    const invalidView=S.view==='chat' && current() || S.view==='profile' && pointsToDeleted(S.profilePersona)
+      || S.view==='memory' && pointsToDeleted(S.memoryPersona) || S.view==='relation' && pointsToDeleted(S.relationPersona);
     toast('角色已删除');
-    await loadUsers();
-    // 删掉的可能就是当前聊天角色——换到还剩下的一个，别留着失效的上下文
-    if (S.user === user && S.persona === persona) {
-      const left = allPersonas();
-      if (left.length) await switchTarget(left[0].user, left[0].persona);
+    S.usersRequest=(S.usersRequest || 0)+1;S.convsRequest=(S.convsRequest || 0)+1;
+    S.users=S.users.map(u=>u.id===user ? {...u,personas:(u.personas || []).filter(p=>p!==persona)} : u);
+    S.convs=S.convs.filter(c=>c.user!==user || c.persona!==persona);
+    delete S.summaries[pkey(user,persona)];
+    if(current()){
+      disconnectTarget();S.targetRequest=(S.targetRequest || 0)+1;
+      composerDrafts.delete(base());writeOutbox({},user,persona);
+      S.persona=null;S.info=null;S.personaTitle='';
+      S.latestClientMessageId=null;S.generationId=null;S.replyState=null;
+      $('input').value='';clearComposerContext();resetChatView();
+      $('persona-name').textContent='';localStorage.removeItem('ce_persona');
     }
-    await loadConvs();
-    renderContacts();
-    // 回原处（通讯录点开的就回通讯录）
-    showView(S.profileFrom || 'messages');
+    if(pointsToDeleted(S.profilePersona)){
+      S.profilePersona=null;$('profile-body').innerHTML='';S.profileFrom=returnView;
+    }
+    if(pointsToDeleted(S.memoryPersona)){S.memoryPersona=null;S.memoryNotes=[];$('memory-list').innerHTML='';}
+    if(pointsToDeleted(S.relationPersona)){S.relationPersona=null;$('relation-body').innerHTML='';}
+    renderConvs();renderContacts();renderMe();
+    if(navigation===viewRequest || invalidView)showView(returnView);
+    await loadUsers();await loadConvs();renderContacts();
   } catch (e) {
-    toast('删除失败：' + e.message);
+    if(actor===S.account?.csrf_token){
+      toast('删除失败：' + e.message);
+      if(deletingCurrent && current())connect();
+    }
   }
+}
+
+function disconnectTarget() {
+  stopReplyRecovery();clearTimeout(S.reconnectTimer);
+  const ws=S.ws;S.ws=null;S.connected=false;
+  if(ws){try{ws.close();}catch(_){}}
+  resetSending();
 }
 
 async function restorePersona(user, persona) {
@@ -792,13 +846,24 @@ function renderMe() {
     msgs += c.summary.message_count || 0;
     sessions += c.summary.session_count || 0;
   });
-  $('me-avatar').textContent = (S.account?.username || '·').slice(0, 1);
+  renderAccountAvatar();
   $('me-name').textContent = S.account?.username || '我';
-  $('me-sub').textContent = `${S.convs.length} 个角色 · 共 ${notes} 条记忆 · ${msgs} 条消息`;
+  const user=S.account?.user_id || S.user;
+  const roles=allPersonas().filter(p=>p.user===user).length,groups=S.convs.filter(c=>c.group_id && c.user===user).length;
+  $('me-sub').textContent = `${roles} 个角色${groups ? ` · ${groups} 个群聊` : ''} · 共 ${notes} 条记忆 · ${msgs} 条消息`;
   $('me-server').textContent = location.host;
   $('me-interval').textContent = S.automaticMemory ? '已开启' : '已关闭';
   $('me-version').textContent = 'v0.3.0';
   $('me-hint').textContent = `共 ${sessions} 次记录。切换角色请到「通讯录」。`;
+}
+
+function renderAccountAvatar() {
+  const initial=Array.from(S.account?.username || '·')[0];
+  $('me-avatar').textContent=initial;
+  if(S.account){
+    $('gate-avatar').textContent=initial;
+    $('gate-avatar').classList.add('ava-s3');
+  }
 }
 
 let usageRequest = 0;
@@ -919,6 +984,7 @@ async function saveGroupProactive() {
 }
 
 function openCreateGroup() {
+  closeCreateMenu();
   const people=allPersonas().filter(p=>p.user===S.account?.user_id);
   if(people.length<2){toast('先创建至少两个角色，再一起聊天');return;}
   $('group-name').value='';
@@ -1240,6 +1306,7 @@ async function loadAround(firstId) {
 /* ---------- 角色资料 ---------- */
 
 async function openProfile(user, persona) {
+  const request=S.profileRequest=(S.profileRequest || 0)+1;
   S.profilePersona = { user, persona };
   // 记住来路：返回时回原处。通讯录点开的就回通讯录，聊天页点开的就回聊天页——
   // 打开资料页不改变当前聊天角色（那是 openChat 的事），所以固定回聊天页会串台。
@@ -1252,6 +1319,7 @@ async function openProfile(user, persona) {
     info = await api(`/api/persona/${enc(user)}/${enc(persona)}`);
     S.summaries[pkey(user, persona)] = info;
   } catch (e) { /* ignore */ }
+  if(request!==S.profileRequest || S.profilePersona?.user!==user || S.profilePersona.persona!==persona)return;
   renderProfile(user, persona, info);
 }
 
@@ -1760,6 +1828,8 @@ document.addEventListener('visibilitychange', () => {
 localStorage.removeItem('ce_pin');
 
 function invalidateAccess() {
+  closeCreateMenu();
+  S.usersRequest=(S.usersRequest || 0)+1;S.convsRequest=(S.convsRequest || 0)+1;
   releaseGroupPresence();
   cancelLocation();S.quoteReturn=null;S.viewMode='live';S.hasNewer=false;
   ++bootRequest;
@@ -1781,6 +1851,7 @@ function invalidateAccess() {
   $('password-form').classList.add('hidden');
   $('gate-title').textContent = '登录同行';
   $('gate-avatar').innerHTML = '<img src="/icon.png" alt="同行">';
+  $('gate-avatar').classList.remove('ava-s3');
   $('login-password').value = $('password-current').value = $('password-new').value = $('password-confirm').value = '';
   $('gate-hint').textContent = '和熟悉的 TA 继续聊';
   $('gate-error').textContent = '请登录后继续';
@@ -1788,6 +1859,9 @@ function invalidateAccess() {
 }
 
 function showPasswordForm(required = false) {
+  viewRequest++;
+  S.passwordFrom=S.view;
+  renderAccountAvatar();
   showGate();
   $('login-form').classList.add('hidden');
   $('password-form').classList.remove('hidden');
@@ -1797,8 +1871,18 @@ function showPasswordForm(required = false) {
   $('password-current').value = $('password-new').value = $('password-confirm').value = '';
 }
 
+function cancelPasswordForm() {
+  if(S.account?.must_change_password)return logout();
+  if(!S.account){invalidateAccess();return;}
+  $('password-current').value=$('password-new').value=$('password-confirm').value='';
+  $('gate-error').textContent='';$('password-form').classList.add('hidden');$('login-form').classList.remove('hidden');
+  $('gate').classList.add('hidden');$('app').classList.remove('hidden');
+  showView(S.passwordFrom || 'me');syncViewport();
+}
+
 async function boot() {
   const request = ++bootRequest;
+  const navigation=viewRequest;
   try {
     const account = await api('/api/auth/me');
     if (request !== bootRequest) return;
@@ -1814,9 +1898,11 @@ async function boot() {
     else showGate(true);
     return;
   }
-  $('gate').classList.add('hidden');
-  $('app').classList.remove('hidden');
-  await resolveTarget();
+  if($('password-form').classList.contains('hidden')){
+    $('gate').classList.add('hidden');$('app').classList.remove('hidden');
+  }
+  await resolveTarget(navigation!==viewRequest);
+  if(request!==bootRequest)return;
   if (S.debug) {
     $('call-log-link').classList.remove('hidden');
     $('call-log-link').href = `/calls.html?user=${enc(S.user)}${S.group ? "" : "&persona="+enc(S.persona)}`;
@@ -1825,15 +1911,21 @@ async function boot() {
     };
   }
   // 先读设置（show_thinking）再拉历史 —— 并行的话不知道该不该带 think
-  await loadSettings();
+  if(!S.group && S.persona)await loadSettings();
+  if(request!==bootRequest)return;
   await loadUsers();
-  await Promise.all([loadPersona(), loadHistory(true)]);
+  if(request!==bootRequest)return;
+  await Promise.all([!S.group && S.persona ? loadPersona() : Promise.resolve(),
+    S.persona || S.group ? loadHistory(true) : Promise.resolve()]);
+  if(request!==bootRequest)return;
   const launch = new URLSearchParams(location.search);
   const launchGroup=Number(launch.get('conversation_id'));
   const initialView = launch.get('open') === 'chat' && (!launch.has('persona') || launch.get('persona') === S.persona)
     && S.users.some(u => u.id === S.user && (u.personas || []).includes(S.persona)) ? 'chat' : 'messages';
-  showView(initialView);
-  if(launch.get('open')==='chat' && Number.isSafeInteger(launchGroup) && launchGroup>0)await openGroup(launchGroup);
+  if(navigation===viewRequest){
+    showView(initialView);
+    if(launch.get('open')==='chat' && Number.isSafeInteger(launchGroup) && launchGroup>0)await openGroup(launchGroup);
+  }
   window.CompanionNotifications?.init({api, toast, debug: S.debug,
     target: () => ({user_id: S.user, persona_id: S.persona || S.users.find(u=>u.id===S.user)?.personas?.[0] || ''}),
     active: () => S.view === 'me' && !$('app').classList.contains('hidden')});
@@ -1842,27 +1934,30 @@ async function boot() {
 }
 
 function showGate(networkError) {
+  closeCreateMenu();
   $('gate').classList.remove('hidden');
   $('app').classList.add('hidden');
   $('login-retry').classList.toggle('hidden', !networkError);
   if (networkError) $('gate-error').textContent = '暂时连不上，请检查网络后重试';
 }
 
-async function resolveTarget() {
+async function resolveTarget(preserveTarget=false) {
+  if(preserveTarget && S.group?.user_id===S.account?.user_id)return;
+  const request=bootRequest,actor=S.account?.csrf_token,navigation=S.targetRequest;
   const params = new URLSearchParams(location.search);
   let users = [];
   try { users = await api('/api/users'); } catch (e) { /* ignore */ }
+  if(request!==bootRequest || actor!==S.account?.csrf_token || navigation!==S.targetRequest)return;
   if (!users.length) { $('persona-sub').textContent = '库里还没有用户，先跑 setup'; return; }
   const u = S.account.user_id;
   const person = users.find((x) => x.id === u) || users[0];
-  const wanted = params.get('persona') || localStorage.getItem('ce_persona');
+  const wanted = preserveTarget ? S.persona || localStorage.getItem('ce_persona') : params.get('persona') || localStorage.getItem('ce_persona');
   const p = (person.personas || []).includes(wanted) ? wanted : (person.personas[0] || '');
   S.user = u; S.persona = p;
   localStorage.setItem('ce_user', u);
   localStorage.setItem('ce_persona', p);
   const initial = (p || '·').slice(0, 1);
   $('btn-avatar').textContent = initial;
-  $('gate-avatar').textContent = initial;
   $('persona-name').textContent = p || '未设置角色';
 }
 
@@ -2981,7 +3076,9 @@ $('btn-avatar').onclick = () => openProfile(S.user, S.persona);
 $('btn-profile-back').onclick = () => showView(S.profileFrom || 'chat');
 $('btn-memory-back').onclick = () => showView('profile');
 $('btn-relation-back').onclick = () => showView('profile');
-$('btn-new-conv').onclick = openCreateGroup;
+$('btn-new-conv').onclick = toggleCreateMenu;
+$('create-persona-action').onclick=openCreatePersona;
+$('create-group-action').onclick=openCreateGroup;
 $('group-save').onclick=createGroup;
 $('btn-group-settings').onclick=openGroupSettings;
 $('group-proactive-enabled').onchange=saveGroupProactive;
@@ -2998,8 +3095,24 @@ $('chat').addEventListener('scroll',()=>{activePressCancel?.();closeMessageActio
 $('mention-sheet').addEventListener('click',event=>{if(event.target===$('mention-sheet'))closeMentionPicker();});
 $('dialog-group').addEventListener('click',event=>{if(event.target===$('dialog-group'))$('dialog-group').classList.add('hidden');});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest?.('#message-actions'))closeMessageActions();});
+document.addEventListener('pointerdown',event=>{if(!event.target.closest?.('.nav-actions'))closeCreateMenu();});
+$('btn-new-conv').addEventListener('keydown',event=>{
+  if(event.key==='ArrowDown'){event.preventDefault();if($('create-menu').classList.contains('hidden'))toggleCreateMenu();else $('create-persona-action').focus();}
+});
+$('create-menu').addEventListener('keydown',event=>{
+  const items=Array.from($('create-menu').querySelectorAll('button'));
+  const index=items.indexOf(document.activeElement);
+  if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
+    event.preventDefault();
+    const next=event.key==='Home'?0:event.key==='End'?items.length-1:(index+(event.key==='ArrowDown'?1:items.length-1))%items.length;
+    items[next]?.focus();
+  }
+});
 document.addEventListener('keydown',event=>{
-  if(event.key==='Escape'){closeMessageActions();closeMentionPicker(false);$('dialog-group').classList.add('hidden');$('dialog-group-settings').classList.add('hidden');}
+  if(event.key==='Escape'){
+    closeCreateMenu(!$('create-menu').classList.contains('hidden'));
+    closeMessageActions();closeMentionPicker(false);$('dialog-group').classList.add('hidden');$('dialog-group-settings').classList.add('hidden');
+  }
   if(event.key==='Tab'){
     const panel=!$('mention-sheet').classList.contains('hidden') ? $('mention-sheet') : !$('dialog-group').classList.contains('hidden') ? $('dialog-group') : !$('dialog-group-settings').classList.contains('hidden') ? $('dialog-group-settings') : null;
     if(!panel)return;
@@ -3156,7 +3269,7 @@ $('btn-password').onclick = () => showPasswordForm();
 $('login-retry').onclick = () => boot();
 $('btn-logout').onclick = () => logout();
 $('btn-logout-all').onclick = () => logout(true);
-$('password-cancel').onclick = () => S.account?.must_change_password ? logout() : boot();
+$('password-cancel').onclick = cancelPasswordForm;
 
 /* 新建角色对话框 */
 $('btn-persona-cancel').onclick = () => $('dialog-persona').classList.add('hidden');

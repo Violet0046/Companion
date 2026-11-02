@@ -241,9 +241,8 @@ def build_parser() -> argparse.ArgumentParser:
     for action in ('check','trigger'):
         command=actions.add_parser(action)
         command.add_argument('--user',required=True)
-        target=command.add_mutually_exclusive_group(required=True)
-        target.add_argument('--persona')
-        target.add_argument('--conversation-id',type=int,help='群聊会话ID；和--persona二选一')
+        command.add_argument('--persona',required=True,help='获得主动说话机会的角色')
+        command.add_argument('--conversation-id',type=int,help='可选：将此次机会限定为该角色所在的群聊')
         command.add_argument('--test',action='store_true',help='测试模式跳过免打扰和次数限制，实际调用模型并保存消息')
         if action=='trigger':
             command.add_argument('--delay',type=int,default=0)
