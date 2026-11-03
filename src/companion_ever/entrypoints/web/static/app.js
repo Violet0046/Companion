@@ -170,6 +170,61 @@ const enc = (s) => encodeURIComponent(s);
 const escAttr = (s) => esc(s).replace(/"/g, '&quot;');
 const pkey = (user, persona) => `${user}/${persona}`;
 
+const conversationCache = window.CompanionConversationCache || {
+  peek:()=>null, get:async()=>null, put:()=>{}, remove:()=>{}, clear:()=>{},
+};
+const personaScope = (user,persona) => `/api/persona/${enc(user)}/${enc(persona)}`;
+const cacheOwner = () => S.account?.user_id;
+const historyLoads = new Map();
+let convsLoad = null;
+let accessCacheCleanup = Promise.resolve();
+
+function rememberPersona(user, persona, info) {
+  S.summaries[pkey(user,persona)] = info;
+  if(user!==cacheOwner())return;
+  const {persona_basics,message_count,note_count,session_count} = info;
+  conversationCache.put(cacheOwner(),personaScope(user,persona),{
+    info:{persona_basics,message_count,note_count,session_count},
+  });
+}
+
+function cacheChatWindow() {
+  if (!cacheOwner() || S.user!==cacheOwner() || !S.historyReady || S.viewMode!=='live' || S.locating) return;
+  conversationCache.put(cacheOwner(),base(),{messages:S.messages,hasMore:S.hasMore});
+}
+
+function updateChatSync() {
+  const el=$('chat-sync');
+  el.classList.toggle('hidden',!S.historyError || S.viewMode!=='live');
+  $('chat-sync-label').textContent=S.historyReady ? '暂未同步最新消息' : '暂时无法读取消息';
+}
+
+async function restoreChatWindow() {
+  const scope=base(),owner=cacheOwner(),actor=S.account?.csrf_token,navigation=S.targetRequest;
+  const version=S.chatVersion;
+  const apply=cached=>{
+    if (!cached || !Array.isArray(cached.messages) || owner!==cacheOwner() || actor!==S.account?.csrf_token
+      || scope!==base() || navigation!==S.targetRequest || version!==S.chatVersion || S.viewMode!=='live' || S.locating) return;
+    // Pending input belongs to the durable outbox, never to a saved snapshot.
+    if(S.streamEl || S.typing || S.messages.some(m=>m.pending || m.localOnly))return;
+    S.messages=cached.messages;S.hasMore=!!cached.hasMore;S.historyReady=true;
+    renderChat();anchorBottom();updateJumpButton();updateChatSync();
+    return true;
+  };
+  if(apply(conversationCache.peek(owner,scope)))return;
+  apply(await conversationCache.get(owner,scope));
+}
+
+function rejectCachedTarget(scope) {
+  conversationCache.remove(cacheOwner(),scope);
+  if(scope!==base())return;
+  disconnectTarget();S.targetRequest=(S.targetRequest || 0)+1;
+  $('dialog-group-settings').classList.add('hidden');
+  S.user=null;S.persona=null;S.group=null;S.info=null;S.personaTitle='';
+  clearComposerContext();$('input').value='';resetChatView();
+  showView('messages');loadConvs();toast('该会话已不可用');
+}
+
 /** 切换视图。子页面（会话/资料/记忆）不显示底部 tab */
 function showView(name) {
   viewRequest++;closeCreateMenu();
@@ -318,7 +373,11 @@ async function refreshConv(user, persona) {
   if(persona==null){await loadConvs();return;}
   const idx = S.convs.findIndex((x) => x.user === user && x.persona === persona);
   if (idx < 0) return;
-  S.convs[idx] = await fetchConv(S.convs[idx]);
+  const actor=S.account?.csrf_token,item=S.convs[idx];
+  const fresh=await fetchConv(item);
+  const current=S.convs.indexOf(item);
+  if(actor!==S.account?.csrf_token || current<0)return;
+  S.convs[current] = fresh;
   renderConvs();
 }
 
@@ -382,13 +441,14 @@ function resetSending() {
 
 /** 取一个角色的会话摘要：最后一条消息 + 汇总 + 未读数 */
 async function fetchConv(p) {
+  const actor=S.account?.csrf_token;
   const item = {
     user: p.user, persona: p.persona, last: null, unread: 0, summary: null, error: null,
   };
   // 两个请求**各自独立**失败 —— 以前用 Promise.all，一个挂了另一个也白费，
   // 结果错误被吞掉，界面上显示成"还没有聊过"（其实是有记录的）。
   const [msgs, sum] = await Promise.allSettled([
-    api(`/api/persona/${enc(p.user)}/${enc(p.persona)}/history?limit=20&include_thinking=0`),
+    api(`/api/persona/${enc(p.user)}/${enc(p.persona)}/history?limit=1&include_thinking=0`),
     api(`/api/persona/${enc(p.user)}/${enc(p.persona)}`),
   ]);
   if (msgs.status === 'fulfilled') {
@@ -410,7 +470,7 @@ async function fetchConv(p) {
   }
   if (sum.status === 'fulfilled') {
     item.summary = sum.value;
-    S.summaries[pkey(p.user, p.persona)] = sum.value;
+    if(actor===S.account?.csrf_token && allPersonas().some(x=>x.user===p.user && x.persona===p.persona))rememberPersona(p.user,p.persona,sum.value);
   } else {
     console.error('角色汇总加载失败', p, sum.reason);
   }
@@ -418,6 +478,13 @@ async function fetchConv(p) {
 }
 
 async function loadConvs() {
+  const actor=S.account?.csrf_token,roster=JSON.stringify(allPersonas());
+  if(convsLoad && convsLoad.actor===actor && convsLoad.roster===roster && convsLoad.request===S.convsRequest)return convsLoad.promise;
+  const promise=fetchConvs();convsLoad={actor,roster,promise,request:S.convsRequest};
+  try{return await promise;}finally{if(convsLoad?.promise===promise)convsLoad=null;}
+}
+
+async function fetchConvs() {
   const request=S.convsRequest=(S.convsRequest || 0)+1;
   const accountUser=S.account?.user_id || S.user,actor=S.account?.csrf_token;
   const ps = allPersonas();
@@ -434,6 +501,12 @@ async function loadConvs() {
       error:history.status==='rejected' ? '加载失败' : null};
   }));
   if(request!==S.convsRequest || accountUser!==(S.account?.user_id || S.user) || actor!==S.account?.csrf_token)return;
+  // The group list already includes its members. Keep that metadata instead
+  // of requiring another round trip just to open the group or its settings.
+  for(const group of Array.isArray(groups) ? groups : []){
+    if(group.user_id===accountUser && Array.isArray(group.members) && group.id!==S.group?.id)
+      conversationCache.put(cacheOwner(),`/api/groups/${group.id}`,{group});
+  }
   S.convs = privates.concat(grouped);
   renderConvs();
   renderMe();
@@ -784,6 +857,7 @@ async function deletePersona(user, persona) {
     S.users=S.users.map(u=>u.id===user ? {...u,personas:(u.personas || []).filter(p=>p!==persona)} : u);
     S.convs=S.convs.filter(c=>c.user!==user || c.persona!==persona);
     delete S.summaries[pkey(user,persona)];
+    conversationCache.remove(cacheOwner(),personaScope(user,persona));
     if(current()){
       disconnectTarget();S.targetRequest=(S.targetRequest || 0)+1;
       composerDrafts.delete(base());writeOutbox({},user,persona);
@@ -913,9 +987,10 @@ async function refreshUsage() {
 /* ---------- 切换角色 / 打开会话 ---------- */
 
 async function switchTarget(user, persona, opts={}) {
-  releaseGroupPresence();
-  const targetRequest=S.targetRequest=(S.targetRequest || 0)+1;
   const changed = !!S.group || (user !== S.user) || (persona !== S.persona);
+  if(!changed)return;
+  cacheChatWindow();releaseGroupPresence();
+  S.targetRequest=(S.targetRequest || 0)+1;
   if(changed)stashComposerDraft();
   S.group=null;
   if(changed)clearComposerContext();
@@ -927,72 +1002,104 @@ async function switchTarget(user, persona, opts={}) {
   localStorage.setItem('ce_user', user);
   localStorage.setItem('ce_persona', persona);
   S.personaTitle = persona;
-  $('persona-name').textContent = persona;
+  S.info=S.summaries[pkey(user,persona)] || conversationCache.peek(cacheOwner(),personaScope(user,persona))?.info || null;
+  S.personaTitle=S.info?.persona_basics?.name || persona;
+  $('persona-name').textContent = S.personaTitle;
   $('btn-avatar').textContent = persona.slice(0, 1);
   if (changed) {
     stopReplyRecovery();
     S.latestClientMessageId = null; S.generationId = null; S.replyState = null;
-    resetChatView();
+    resetChatView(!opts.skipHistory);
+    const cached=opts.skipHistory ? Promise.resolve() : restoreChatWindow();
     connect();               // WS 的 URL 里带 user/persona，换角色必须重连
-    await loadPersona();
-    if(targetRequest!==S.targetRequest)return;
-    if(!opts.skipHistory)await loadHistory(true);
+    await Promise.all([loadPersona(),cached,!opts.skipHistory ? loadHistory(true) : Promise.resolve()]);
   }
 }
 
 async function openChat(user, persona) {
-  await switchTarget(user, persona);
-  if (S.user !== user || S.persona !== persona) return;
+  const loading=switchTarget(user, persona);
   showView('chat');
+  await loading;
 }
 
-function resetChatView() {
+function resetChatView(loading=false) {
+  S.chatVersion=(S.chatVersion || 0)+1;
+  S.historyReady=false;S.historyLoading=loading;S.historyError=false;
   cancelLocation();S.quoteReturn=null;S.hasNewer=false;S.loadingNewer=false;
   S.messages=[];S.hasMore=true;S.loadingOlder=false;
   S.viewMode='live';S.viewLabel='';S.newCount=0;S.sinceLastSep=0;S.streamThinking='';
   if(S.streamEl){S.streamEl.remove();S.streamEl=null;}
   $('load-more-hint').classList.add('hidden');
-  resetSending();updateHistoryBar();renderChat();updateJumpButton();
+  resetSending();updateHistoryBar();renderChat();updateJumpButton();updateChatSync();
 }
 
 async function openGroup(id) {
+  if(S.group?.id===id){showView('chat');return;}
+  cacheChatWindow();
+  const request=S.targetRequest=(S.targetRequest || 0)+1,actor=S.account?.csrf_token;
+  const scope=`/api/groups/${id}`,owner=cacheOwner();
+  const cached=conversationCache.peek(owner,scope)?.group;
+  const item=S.convs.find(c=>c.group_id===id);
+  releaseGroupPresence();stashComposerDraft();
+  stopReplyRecovery();clearComposerContext();
+  S.group=cached || {id,user_id:owner || S.user,name:item?.name || '群聊',members:[]};
+  S.user=S.group.user_id;S.persona=null;S.personaTitle=S.group.name;
+  restoreComposerDraft();
+  S.generationId=null;S.latestClientMessageId=null;S.replyState=null;
+  $('persona-name').textContent=S.personaTitle;
+  $('btn-avatar').classList.add('hidden');$('btn-search').classList.add('hidden');
+  $('btn-group-settings').classList.remove('hidden');
+  resetChatView(true);
+  const restoring=restoreChatWindow();
+  showView('chat');connect();
+  const current=()=>actor===S.account?.csrf_token && request===S.targetRequest && base()===scope;
+  let groupFresh=false;
+  const details=(async()=>{
+    const stored=await conversationCache.get(owner,scope);
+    if(current() && !groupFresh && !cached && stored?.group){S.group=stored.group;S.personaTitle=S.group.name;$('persona-name').textContent=S.personaTitle;}
+  })();
   try {
-    const request=S.targetRequest=(S.targetRequest || 0)+1;
-    const actor=S.account?.csrf_token;
-    const group=await api(`/api/groups/${id}`);
-    if(actor!==S.account?.csrf_token || request!==S.targetRequest)return;
-    releaseGroupPresence();
-    stashComposerDraft();
-    stopReplyRecovery();clearComposerContext();
-    S.group=group;S.user=group.user_id;S.persona=null;S.personaTitle=group.name;
-    restoreComposerDraft();
-    S.generationId=null;S.latestClientMessageId=null;S.replyState=null;
-    $('persona-name').textContent=group.name;
-    $('btn-avatar').classList.add('hidden');$('btn-search').classList.add('hidden');
-    $('btn-group-settings').classList.remove('hidden');
-    resetChatView();
-    showView('chat');connect();await loadHistory(true);
-  } catch(error){toast(error.message);}
+    await Promise.all([restoring,details,loadHistory(true),api(scope).then(group=>{
+      if(!current())return;
+      groupFresh=true;
+      S.group=group;S.personaTitle=group.name;$('persona-name').textContent=group.name;
+      conversationCache.put(owner,scope,{group});
+    }).catch(error=>{if(current() && [403,404].includes(error.status))rejectCachedTarget(scope);})]);
+  } catch(error){if(current())toast(error.message);}
 }
 
 async function openGroupSettings() {
   if(!S.group)return;
-  const id=S.group.id;
+  const id=S.group.id,scope=base(),actor=S.account?.csrf_token;
+  const panel=$('dialog-group-settings'),toggle=$('group-proactive-enabled');
+  const request=S.groupSettingsRequest=(S.groupSettingsRequest || 0)+1;
+  panel.dataset.group=id;
+  $('group-settings-title').textContent=S.group.name;
+  $('group-settings-members').textContent=S.group.members?.map(m=>m.persona_id).join('、') || '正在同步成员…';
+  toggle.checked=!!S.group.proactive_enabled;toggle.disabled=true;
+  panel.classList.remove('hidden');$('group-settings-close').focus();
+  const current=()=>actor===S.account?.csrf_token && request===S.groupSettingsRequest && S.group?.id===id && !panel.classList.contains('hidden');
   try {
     const [group,setting]=await Promise.all([api(`/api/groups/${id}`),api(`/api/groups/${id}/proactive`)]);
-    if(S.group?.id!==id)return;
+    if(!current())return;
+    S.group=group;S.group.proactive_enabled=setting.enabled;
+    conversationCache.put(cacheOwner(),scope,{group:S.group});
     $('group-settings-title').textContent=group.name;
     $('group-settings-members').textContent=group.members.map(m=>m.persona_id).join('、');
-    $('group-proactive-enabled').checked=setting.enabled;
-    $('dialog-group-settings').dataset.group=id;
-    $('dialog-group-settings').classList.remove('hidden');$('group-settings-close').focus();
-  } catch(error){toast(error.message);}
+    toggle.checked=setting.enabled;toggle.disabled=false;
+  } catch(error){if(current())toast('群设置暂未同步，请稍后重试');}
 }
 
 async function saveGroupProactive() {
   const toggle=$('group-proactive-enabled'),id=Number($('dialog-group-settings').dataset.group),enabled=toggle.checked;
   toggle.disabled=true;
-  try {await api(`/api/groups/${id}/proactive`,{method:'PUT',body:JSON.stringify({enabled})});}
+  const actor=S.account?.csrf_token;
+  try {
+    await api(`/api/groups/${id}/proactive`,{method:'PUT',body:JSON.stringify({enabled})});
+    if(actor===S.account?.csrf_token && S.group?.id===id){
+      S.group.proactive_enabled=enabled;conversationCache.put(cacheOwner(),`/api/groups/${id}`,{group:S.group});
+    }
+  }
   catch(error){toggle.checked=!enabled;toast(error.message);}
   finally{toggle.disabled=false;}
 }
@@ -1017,6 +1124,8 @@ async function createGroup() {
   try {
     const persona_ids=Array.from($('group-member-options').querySelectorAll('input:checked')).map(el=>el.value);
     const group=await api('/api/groups',{method:'POST',body:JSON.stringify({name:$('group-name').value.trim(),persona_ids})});
+    S.convsRequest=(S.convsRequest || 0)+1;
+    conversationCache.put(cacheOwner(),`/api/groups/${group.id}`,{group});
     $('dialog-group').classList.add('hidden');await openGroup(group.id);loadConvs();
   } catch(error){toast(error.message);}
   finally{button.disabled=false;}
@@ -1321,20 +1430,36 @@ async function loadAround(firstId) {
 
 async function openProfile(user, persona) {
   const request=S.profileRequest=(S.profileRequest || 0)+1;
+  const actor=S.account?.csrf_token,owner=cacheOwner(),scope=personaScope(user,persona);
   S.profilePersona = { user, persona };
   // 记住来路：返回时回原处。通讯录点开的就回通讯录，聊天页点开的就回聊天页——
   // 打开资料页不改变当前聊天角色（那是 openChat 的事），所以固定回聊天页会串台。
-  S.profileFrom = S.view;
+  if(S.view!=='profile')S.profileFrom = S.view;
   showView('profile');
-  const body = $('profile-body');
-  body.innerHTML = '<div class="empty">载入中…</div>';
-  let info = null;
+  renderProfile(user,persona,S.summaries[pkey(user,persona)] || conversationCache.peek(owner,scope)?.info);
+  const current=()=>actor===S.account?.csrf_token && request===S.profileRequest && S.profilePersona?.user===user && S.profilePersona.persona===persona;
+  let fresh=false;
+  conversationCache.get(owner,scope).then(cached=>{if(current() && !fresh && cached?.info)updateProfileInfo(persona,cached.info);});
   try {
-    info = await api(`/api/persona/${enc(user)}/${enc(persona)}`);
-    S.summaries[pkey(user, persona)] = info;
-  } catch (e) { /* ignore */ }
-  if(request!==S.profileRequest || S.profilePersona?.user!==user || S.profilePersona.persona!==persona)return;
-  renderProfile(user, persona, info);
+    const info = await api(scope);
+    if(!current())return;
+    fresh=true;rememberPersona(user,persona,info);updateProfileInfo(persona,info);
+  } catch (e) {
+    if(current() && [403,404].includes(e.status)){
+      conversationCache.remove(owner,scope);delete S.summaries[pkey(user,persona)];
+      S.profilePersona=null;$('profile-body').innerHTML='';showView('contacts');toast('该角色已不可用');
+    }
+  }
+}
+
+function updateProfileInfo(persona, info) {
+  const field=id=>$('profile-body').querySelector('#'+id);
+  if(!field('profile-name'))return;
+  const name=info.persona_basics?.name || persona,tag=info.persona_basics?.tag || info.persona_basics?.description || '';
+  field('profile-name').textContent=name;field('profile-initial').textContent=name.slice(0,1);
+  field('profile-tag').textContent=tag;field('profile-tag').classList.toggle('hidden',!tag);
+  for(const name of ['message_count','note_count','session_count'])field('profile-'+name).textContent=info[name] ?? '—';
+  field('profile-memory-count').textContent=info.note_count==null ? '' : info.note_count+' 条 ';
 }
 
 function renderProfile(user, persona, info) {
@@ -1345,18 +1470,18 @@ function renderProfile(user, persona, info) {
   const tag = basics.tag || basics.description || '';
   body.innerHTML = `
     <div class="profile-hero">
-      <div class="ava ava-xl ${avaClass(persona)}">${esc(name.slice(0, 1))}</div>
-      <div class="profile-name">${esc(name)}</div>
-      ${tag ? `<div class="profile-sub">${esc(tag)}</div>` : ''}
+      <div id="profile-initial" class="ava ava-xl ${avaClass(persona)}">${esc(name.slice(0, 1))}</div>
+      <div class="profile-name" id="profile-name">${esc(name)}</div>
+      <div id="profile-tag" class="profile-sub ${tag ? '' : 'hidden'}">${esc(tag)}</div>
     </div>
     <div class="stats">
-      <div><div class="stat-num">${(info && info.message_count) || 0}</div><div class="stat-label">条消息</div></div>
-      <div><div class="stat-num">${(info && info.note_count) || 0}</div><div class="stat-label">条记忆</div></div>
-      <div><div class="stat-num">${(info && info.session_count) || 0}</div><div class="stat-label">次记录</div></div>
+      <div><div class="stat-num" id="profile-message_count">${info?.message_count ?? '—'}</div><div class="stat-label">条消息</div></div>
+      <div><div class="stat-num" id="profile-note_count">${info?.note_count ?? '—'}</div><div class="stat-label">条记忆</div></div>
+      <div><div class="stat-num" id="profile-session_count">${info?.session_count ?? '—'}</div><div class="stat-label">次记录</div></div>
     </div>
     <div class="group">
       <div class="row" id="row-chat"><span>继续聊天</span><span class="row-val">现在就开始 <span class="chev">›</span></span></div>
-      <div class="row" id="row-memory"><span>TA 的记忆</span><span class="row-val">${(info && info.note_count) || 0} 条 <span class="chev">›</span></span></div>
+      <div class="row" id="row-memory"><span>TA 的记忆</span><span class="row-val"><span id="profile-memory-count">${info?.note_count==null ? '' : info.note_count+' 条 '}</span><span class="chev">›</span></span></div>
       <div class="row" id="row-dates"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>
       <div class="row"><span>主动联系</span><label class="switch-row switch-inline"><input type="checkbox" id="btn-proactive" role="switch" aria-label="主动联系" aria-busy="true" disabled><i class="switch" aria-hidden="true"></i></label></div>
       ${S.debug ? '<div class="row" id="row-relation"><span>后台记忆</span><span class="row-val">任务状态 <span class="chev">›</span></span></div>' : ''}
@@ -1374,8 +1499,15 @@ function renderProfile(user, persona, info) {
   q('btn-persona-delete').onclick = () => deletePersona(user, persona);
   const initiative=q('btn-proactive');
   if (initiative) {
+    const owner=cacheOwner(),actor=S.account?.csrf_token;
+    const scope=personaScope(user,persona),request=S.profileRequest;
+    const current=()=>actor===S.account?.csrf_token && request===S.profileRequest && S.profilePersona?.user===user && S.profilePersona.persona===persona;
     const path=`/api/persona/${enc(user)}/${enc(persona)}/proactive`;
+    const cached=conversationCache.peek(owner,scope)?.proactive;
+    if(cached)initiative.checked=!!cached.enabled;
     api(path).then(state=>{
+      if(!current())return;
+      conversationCache.put(owner,scope,{proactive:state});
       let enabled=state.enabled;
       initiative.checked=enabled;initiative.disabled=false;initiative.setAttribute('aria-busy','false');
       initiative.onclick=async()=>{
@@ -1383,6 +1515,7 @@ function renderProfile(user, persona, info) {
         try {
           const next=await api(path,{method:'PUT',body:JSON.stringify({enabled:!enabled})});
           enabled=next.enabled;
+          if(current())conversationCache.put(owner,scope,{proactive:next});
           toast(enabled?'已允许 TA 在白天主动联系，每天最多一次':'已关闭主动联系');
         } catch(error) {toast(error.message||'设置失败');}
         finally {initiative.checked=enabled;initiative.disabled=false;initiative.setAttribute('aria-busy','false');}
@@ -1842,6 +1975,7 @@ document.addEventListener('visibilitychange', () => {
 localStorage.removeItem('ce_pin');
 
 function invalidateAccess() {
+  if(cacheOwner())accessCacheCleanup=Promise.resolve(conversationCache.clear(cacheOwner()));
   ++usageRequest; usageSnapshot = null;
   $('usage-stats').innerHTML='';$('usage-stats').setAttribute('aria-busy','false');
   $('usage-refresh').disabled=false;$('usage-refresh').textContent='刷新';$('usage-refresh').classList.remove('is-loading');
@@ -1873,6 +2007,7 @@ function invalidateAccess() {
   $('gate-hint').textContent = '和熟悉的 TA 继续聊';
   $('gate-error').textContent = '请登录后继续';
   showGate();
+  return accessCacheCleanup;
 }
 
 function showPasswordForm(required = false) {
@@ -1929,11 +2064,14 @@ async function boot() {
   // 先读设置（show_thinking）再拉历史 —— 并行的话不知道该不该带 think
   if(!S.group && S.persona)await loadSettings();
   if(request!==bootRequest)return;
-  await loadUsers();
-  if(request!==bootRequest)return;
-  await Promise.all([!S.group && S.persona ? loadPersona() : Promise.resolve(),
-    S.persona || S.group ? loadHistory(true) : Promise.resolve()]);
-  if(request!==bootRequest)return;
+  loadUsers().then(()=>renderContacts());
+  // Opening the shell/list must not wait for the initially selected chat.
+  if(S.persona || S.group){
+    if($('chat').dataset.scope!==base())resetChatView(true);
+    restoreChatWindow();
+    if(!S.group)loadPersona();
+    loadHistory(true);
+  }
   const launch = new URLSearchParams(location.search);
   const launchGroup=Number(launch.get('conversation_id'));
   const initialView = launch.get('open') === 'chat' && (!launch.has('persona') || launch.get('persona') === S.persona)
@@ -1966,6 +2104,7 @@ async function resolveTarget(preserveTarget=false) {
   if(request!==bootRequest || actor!==S.account?.csrf_token || navigation!==S.targetRequest)return;
   if (!users.length) { $('persona-sub').textContent = '库里还没有用户，先跑 setup'; return; }
   const u = S.account.user_id;
+  S.users=users;
   const person = users.find((x) => x.id === u) || users[0];
   const wanted = preserveTarget ? S.persona || localStorage.getItem('ce_persona') : params.get('persona') || localStorage.getItem('ce_persona');
   const p = (person.personas || []).includes(wanted) ? wanted : (person.personas[0] || '');
@@ -1981,8 +2120,9 @@ async function resolveTarget(preserveTarget=false) {
 
 async function loadPersona() {
   try {
-    const scope=base(),info=await api(scope);
-    if(scope!==base() || S.group)return;
+    const scope=base(),navigation=S.targetRequest,actor=S.account?.csrf_token,info=await api(scope);
+    if(scope!==base() || S.group || navigation!==S.targetRequest || actor!==S.account?.csrf_token)return;
+    rememberPersona(S.user,S.persona,info);
     S.info = info;
     const basics = S.info.persona_basics || {};
     if (basics.name) {
@@ -2002,20 +2142,40 @@ async function loadSettings() {
 }
 
 async function loadHistory(reset, opts) {
+  opts=opts || {};
+  if(S.locating || S.viewMode!=='live')return;
+  const key=JSON.stringify([S.account?.csrf_token,base(),S.targetRequest,S.latestClientMessageId,opts.withThinking ?? S.showThinking]);
+  if(historyLoads.has(key))return historyLoads.get(key);
+  const promise=fetchHistory(reset,opts);historyLoads.set(key,promise);
+  try{return await promise;}finally{if(historyLoads.get(key)===promise)historyLoads.delete(key);}
+}
+
+async function fetchHistory(reset, opts) {
   opts = opts || {};
   if(S.locating || S.viewMode!=='live')return;
   const scope = base(), clientId = S.latestClientMessageId;
+  const actor=S.account?.csrf_token,navigation=S.targetRequest;
+  const current=()=>scope===base() && clientId===S.latestClientMessageId && actor===S.account?.csrf_token
+    && navigation===S.targetRequest && request===S.historyRequest && S.viewMode==='live' && !S.locating;
   const request = ++S.historyRequest;
+  S.historyLoading=true;S.historyError=false;updateChatSync();
   const box = $('chat');
-  const prevH = box.scrollHeight;
-  const prevTop = box.scrollTop;
+  let prevH = box.scrollHeight;
+  let prevTop = box.scrollTop;
   try {
     // 显式告诉服务端要不要带 think，别依赖服务端自己的设置（两边可能不一致）
     const wantThinking = opts.withThinking !== undefined ? opts.withThinking : S.showThinking;
     const q = new URLSearchParams({ limit: String(PAGE) });
     q.set('include_thinking', wantThinking ? '1' : '0');
     const msgs = await api(`${scope}/history?${q}`);
-    if (scope !== base() || clientId !== S.latestClientMessageId || request !== S.historyRequest) return;
+    if (!current()) return;
+    // Capture at response time: cached content may have appeared, and the user
+    // may have scrolled while the request was in flight.
+    prevH=box.scrollHeight;prevTop=box.scrollTop;
+    const keepScroll=opts.keepScroll || !wasAtBottom;
+    const anchor=keepScroll ? Array.from(box.querySelectorAll('.msg[data-id]')).find(el=>el.offsetTop>=prevTop) : null;
+    const anchorId=anchor?.dataset.id,anchorOffset=anchor ? anchor.offsetTop-prevTop : 0;
+    S.chatVersion=(S.chatVersion || 0)+1;S.historyReady=true;S.historyLoading=false;
     // A history snapshot may predate a websocket message received while fetch
     // was in flight. Preserve the confirmed live tail and unacknowledged input.
     const ids = new Set(msgs.map(m => m.id));
@@ -2043,17 +2203,24 @@ async function loadHistory(reset, opts) {
       S.group && m.role==='assistant' ? m.sender_id : '',m.quoted_message?.id,m.quoted_message?.content,m.quoted_message?.role==='assistant' ? m.quoted_message?.sender_id : '',
       Math.floor(Date.parse(m.created_at)/60000)]));
     const renderedIds=new Set(Array.from(box.querySelectorAll('.msg[data-id]')).map(el=>el.dataset.id));
-    if(!S.streamEl && box.dataset.scope===scope && renderedIds.size===S.messages.length && stamp(previousMessages)===stamp(S.messages) && S.messages.every(m=>renderedIds.has(String(m.id)))){
+    if(S.messages.length && !S.streamEl && box.dataset.scope===scope && renderedIds.size===S.messages.length && stamp(previousMessages)===stamp(S.messages) && S.messages.every(m=>renderedIds.has(String(m.id)))){
       renderReplyStatus();markVisibleChatRead();
     } else renderChat();
-    if (opts.keepScroll) {
+    if (keepScroll) {
       // 保持用户正在看的位置（重绘前后内容高度变了，按差值补偿）
-      box.scrollTop = prevTop + (box.scrollHeight - prevH);
+      const restored=anchorId ? Array.from(box.querySelectorAll('.msg[data-id]')).find(el=>el.dataset.id===anchorId) : null;
+      box.scrollTop = restored ? restored.offsetTop-anchorOffset : prevTop + (box.scrollHeight - prevH);
     } else {
       anchorBottom();
     }
     updateJumpButton();
-  } catch (e) { /* ignore */ }
+    cacheChatWindow();
+  } catch (e) {
+    if(!current())return;
+    if([403,404].includes(e.status)){rejectCachedTarget(scope);return;}
+    S.historyError=true;S.historyLoading=false;
+    if(!S.messages.length)renderChat();
+  } finally {if(current()){S.historyLoading=false;updateChatSync();}}
 }
 
 /** 往上翻：加载更早的一页 */
@@ -2179,9 +2346,14 @@ function renderChat() {
   box.dataset.scope=base();
   box.innerHTML = '';
   if (!S.messages.length) {
+    if(S.historyLoading && !S.historyReady){
+      const loading=document.createElement('div');loading.className='chat-skeleton';
+      loading.setAttribute('role','status');loading.setAttribute('aria-label','正在读取聊天记录');
+      loading.innerHTML='<i></i><i></i><i></i>';box.appendChild(loading);return;
+    }
     const hint = document.createElement('div');
     hint.className = 'empty';
-    hint.textContent = '还没有对话过。说点什么吧。';
+    hint.textContent = S.historyError && !S.historyReady ? '连接恢复后可继续读取消息' : '还没有对话过。说点什么吧。';
     box.appendChild(hint);
     renderReplyStatus();
     return;
@@ -2199,7 +2371,9 @@ function renderChat() {
       since += 1;
     }
     prevAt = m.created_at;
-    box.appendChild(renderMsg(m.role, m.content, m.thinking, m.id, m));
+    const message=renderMsg(m.role, m.content, m.thinking, m.id, m);
+    message.classList.add('history-message');
+    box.appendChild(message);
     if (m.rejected) {
       const status = document.createElement('div'); status.className = 'reply-status';
       const label = document.createElement('span'); label.textContent = '未发送：' + m.rejected;
@@ -2741,6 +2915,7 @@ function flushOutbox(user,persona) {
       if (scope===base()) {
         const saved=S.messages.find(m=>m.client_message_id===id);
         if (saved) { saved.id=receipt.message_id; saved.pending=false; delete saved.rejected;confirmUserBubble(id,saved); }
+        cacheChatWindow();
         if (!S.latestClientMessageId || S.latestClientMessageId===id) S.generationId=receipt.generation_id;
       }
     }
@@ -2806,6 +2981,7 @@ function handleWs(m) {
         rememberQuoteReply(message);
         if(S.viewMode==='live' && !S.locating && !S.messages.some(x=>x.id===message.id)){
           S.messages.push(message);
+          S.chatVersion=(S.chatVersion || 0)+1;cacheChatWindow();
           appendChatMsg(renderMsg('assistant',message.content,null,message.id,message),message.created_at);
           renderReplyStatus();markVisibleChatRead();if(wasAtBottom)anchorBottom();
         }
@@ -2819,6 +2995,7 @@ function handleWs(m) {
       delete pending[m.client_message_id];
       writeOutbox(pending);
       if (!S.latestClientMessageId || m.client_message_id === S.latestClientMessageId) S.generationId = m.generation_id;
+      S.chatVersion=(S.chatVersion || 0)+1;cacheChatWindow();
       recoverReply(true);
       break;
     }
@@ -2834,6 +3011,7 @@ function handleWs(m) {
         if (wasAtBottom) scrollBottom();
       }
       S.streamThinking = '';
+      S.chatVersion=(S.chatVersion || 0)+1;cacheChatWindow();
       renderReplyStatus();
       markVisibleChatRead();
       break;
@@ -3099,6 +3277,7 @@ $('group-save').onclick=createGroup;
 $('btn-group-settings').onclick=openGroupSettings;
 $('group-proactive-enabled').onchange=saveGroupProactive;
 $('group-settings-close').onclick=()=> $('dialog-group-settings').classList.add('hidden');
+$('chat-sync-retry').onclick=()=>loadHistory(true,{keepScroll:!wasAtBottom});
 $('group-cancel').onclick=()=> $('dialog-group').classList.add('hidden');
 $('composer-quote-cancel').onclick=()=>{S.quote=null;renderComposerQuote();$('input').focus();};
 $('message-quote-action').onclick=()=>{if(messageActionTarget)selectQuote(messageActionTarget);};
@@ -3110,6 +3289,7 @@ $('input').addEventListener('beforeinput',mentionBeforeInput);
 $('chat').addEventListener('scroll',()=>{activePressCancel?.();closeMessageActions();},{passive:true});
 $('mention-sheet').addEventListener('click',event=>{if(event.target===$('mention-sheet'))closeMentionPicker();});
 $('dialog-group').addEventListener('click',event=>{if(event.target===$('dialog-group'))$('dialog-group').classList.add('hidden');});
+$('dialog-group-settings').addEventListener('click',event=>{if(event.target===$('dialog-group-settings'))$('dialog-group-settings').classList.add('hidden');});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest?.('#message-actions'))closeMessageActions();});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest?.('.nav-actions'))closeCreateMenu();});
 $('btn-new-conv').addEventListener('keydown',event=>{
@@ -3252,7 +3432,7 @@ async function finishLocalLogout() {
   for (const key of Object.keys(localStorage)) {
     if (key.startsWith('companion-outbox:') || key.startsWith('companion-group-outbox:') || key.startsWith('ce_group_continue:') || key.startsWith('ce_read_') || ['ce_pin','ce_user','ce_persona'].includes(key)) localStorage.removeItem(key);
   }
-  invalidateAccess();
+  await invalidateAccess();
   location.replace('/');
 }
 async function logout() {
@@ -3323,6 +3503,7 @@ document.addEventListener('visibilitychange', () => {
       }).catch(() => {});
     }
   } else {
+    cacheChatWindow();
     stopReplyRecovery();
   }
 });
@@ -3330,7 +3511,7 @@ document.addEventListener('visibilitychange', () => {
 // Safari-family browsers can restore a frozen page from the back/forward cache
 // without a new websocket ready event. HTTP recovery does not depend on it.
 window.addEventListener('pageshow', () => { syncGroupPresence();if (S.user && (S.persona || S.group)) recoverReply(true); });
-window.addEventListener('pagehide', releaseGroupPresence);
+window.addEventListener('pagehide', () => {cacheChatWindow();releaseGroupPresence();});
 window.addEventListener('online', () => { if (S.user && (S.persona || S.group)) { connect(); recoverReply(true); } });
 
 if ('serviceWorker' in navigator) {

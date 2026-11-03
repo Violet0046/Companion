@@ -59,7 +59,7 @@ class NotificationRepo:
                 "WHERE attempt>=3 AND (status='queued' OR (status='running' AND lease_until<=?))", (now,))
             self.conn.execute("UPDATE push_delivery SET status='queued',lease_token=NULL WHERE status='running' AND lease_until<=?", (now,))
             row=self.conn.execute("SELECT p.*,c.kind AS conversation_kind FROM push_delivery p JOIN generation g ON g.id=p.generation_id JOIN conversation c ON c.id=p.conversation_id "
-                "WHERE p.status='queued' AND p.retry_at<=? AND (c.kind!='group' OR g.status IN ('completed','failed')) ORDER BY p.id LIMIT 1", (now,)).fetchone()
+                "WHERE p.status='queued' AND p.retry_at<=? AND g.status IN ('completed','failed') ORDER BY p.id LIMIT 1", (now,)).fetchone()
             if row is None:
                 return None
             token=uuid.uuid4().hex

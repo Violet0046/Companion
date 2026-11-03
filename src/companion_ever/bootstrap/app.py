@@ -108,6 +108,7 @@ class AppContext:
             self.services.usage = AccountUsage(self.conn, self.cfg.account_limits,
                 tz_offset_hours=self.cfg.tz_offset_hours, call_logs=self.call_logs)
         self.services.chat.generations.usage = self.services.usage
+        self.services.chat.notifications = self.services.notifications
         if self.services.groups is None:
             self.services.groups=GroupService(self.services.chat.generations,self.services.conversation.authorizer,self.services.prompt,self.llm)
         self.services.generation.groups=self.services.groups

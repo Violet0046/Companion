@@ -37,7 +37,7 @@ WEB_DIR = Path(__file__).resolve().parent / "static"
 
 def _frontend_version() -> str:
     digest = hashlib.sha256()
-    for name in ('index.html', 'app.js', 'notifications.js', 'styles.css', 'calls.html', 'calls.js', 'sw.js', 'icon.png', 'manifest.webmanifest'):
+    for name in ('index.html', 'app.js', 'conversation-cache.js', 'notifications.js', 'styles.css', 'calls.html', 'calls.js', 'sw.js', 'icon.png', 'manifest.webmanifest'):
         path = WEB_DIR / name
         if path.is_file():
             digest.update(name.encode('utf-8'))
@@ -98,7 +98,7 @@ def create_app(
         response.headers['X-Frame-Options'] = 'DENY'
         if request.url.path.startswith('/api/'):
             response.headers['Cache-Control']='no-store'
-        elif request.url.path in ('/','/index.html','/app.js','/notifications.js','/styles.css','/calls.html','/calls.js'):
+        elif request.url.path in ('/','/index.html','/app.js','/conversation-cache.js','/notifications.js','/styles.css','/calls.html','/calls.js'):
             response.headers['Cache-Control']='no-cache'
         return response
 
@@ -177,7 +177,7 @@ def create_app(
 
         def render_shell(name: str) -> HTMLResponse:
             content = (WEB_DIR / name).read_text(encoding='utf-8')
-            for asset in ('app.js', 'notifications.js', 'styles.css', 'calls.js', 'apple-touch-icon.png'):
+            for asset in ('app.js', 'conversation-cache.js', 'notifications.js', 'styles.css', 'calls.js', 'apple-touch-icon.png'):
                 content = content.replace(f'"/{asset}"', f'"/{asset}?v={app.state.frontend_version}"')
             return HTMLResponse(content)
 

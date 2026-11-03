@@ -355,15 +355,16 @@ async def ws_chat(
     key = user_id
     _register(conn, key)
 
-    await conn.send({
-        "type": "ready",
-        "user_id": user_id,
-        "persona_id": persona_id,
-    })
-
     reply_tasks = set()
     active_generation = None
     try:
+        # A fast conversation switch may close the socket during this first
+        # send. It needs the same unregister cleanup as later disconnects.
+        await conn.send({
+            "type": "ready",
+            "user_id": user_id,
+            "persona_id": persona_id,
+        })
         while True:
             try:
                 msg = await asyncio.wait_for(websocket.receive_json(), timeout=30)

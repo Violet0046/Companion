@@ -30,7 +30,7 @@ class NotificationService:
         self.repo.enqueue(user,persona,gid,message_id,{
             'title':persona, 'body':body[:140], 'tag':'companion-'+gid,
             'url':'/?'+urlencode({'user':user,'persona':persona,'open':'chat'}),
-        })
+        },update_queued=True)
 
     def enqueue_group(self,user,cid,name,gid,message_id,persona,body):
         self.repo.enqueue(user,persona,gid,message_id,{

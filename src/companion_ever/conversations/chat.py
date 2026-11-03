@@ -23,6 +23,7 @@ class ChatService:
         self.session_close_service = session_close_service
         self.idle_session_minutes = idle_session_minutes
         self.generations = GenerationRepo(conversation_service.conv_repo.conn)
+        self.notifications = None
 
     def receive(self, user_id, persona_id, user_input, client_message_id=None, *, quoted_message_id=None):
         self.conversation_service.authorizer.require_persona(user_id,persona_id)
@@ -83,7 +84,7 @@ class ChatService:
                         body,thinking=split_assistant_reply(raw,getattr(self.llm_client,'last_reasoning',None))
                         if not body.strip():
                             continue
-                        saved=self.generations.save_message(gid,index,body,thinking)
+                        saved=self._save_message(generation,index,body,thinking)
                         if saved is None:
                             yield {'type':'cancelled','generation_id':gid}
                             return
@@ -117,7 +118,7 @@ class ChatService:
                     if not parts:
                         raise ValueError('模型未生成可保存的正文')
                     for offset,part in enumerate(parts):
-                        saved=self.generations.save_message(gid,index+offset,part,thinking if offset==0 else None)
+                        saved=self._save_message(generation,index+offset,part,thinking if offset==0 else None)
                         if saved is None:
                             yield {'type':'cancelled','generation_id':gid}
                             return
@@ -137,6 +138,17 @@ class ChatService:
                     chunks.close()
                 if not completed:
                     self.generations.finish(gid,'cancelled')
+
+    def _save_message(self, generation, index, content, thinking=None):
+        """Persist a complete bubble and its aggregated notification atomically."""
+        gid = generation['id']
+        with transaction(self.generations.conn):
+            saved = self.generations.save_message(gid, index, content, thinking)
+            if saved is not None and self.notifications is not None:
+                outputs = self.generations.outputs(gid)
+                self.notifications.enqueue(generation['user_id'], generation['persona_id'], gid,
+                                           saved['id'], '\n'.join(m['content'] for m in outputs))
+            return saved
 
     def _inline_events(self, user_id, persona_id, user_input, client_message_id, *, stream, quoted_message_id=None):
         """Commit receipt and claim together; follow an existing execution to completion.

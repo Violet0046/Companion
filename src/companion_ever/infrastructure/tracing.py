@@ -80,6 +80,13 @@ class CallLogStore:
     def today(self):
         return datetime.now(self.zone).date().isoformat()
 
+    def local_timestamp(self, value):
+        """Use one explicit timezone for filenames, records and legacy readback."""
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError('调用时间必须包含时区，不能依赖服务器系统时区')
+        return parsed.astimezone(self.zone).isoformat()
+
     def _path(self, day):
         if date.fromisoformat(day).isoformat() != day:
             raise ValueError('日期必须使用 YYYY-MM-DD')
@@ -89,8 +96,11 @@ class CallLogStore:
         if os.environ.get('COMPANION_CALL_LOG', '1').lower() in ('0', 'false', 'off', 'no'):
             return
         try:
-            day = datetime.fromisoformat(record['started_at']).astimezone(self.zone).date().isoformat()
-            content = (json.dumps(record, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
+            # The model client measures absolute UTC instants; storage uses the
+            # configured day timezone so `cat YYYY-MM-DD.jsonl` is unambiguous.
+            stored = {**record, 'started_at': self.local_timestamp(record['started_at'])}
+            day = stored['started_at'][:10]
+            content = (json.dumps(stored, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
             with self._lock:
                 self.base_dir.mkdir(parents=True, exist_ok=True)
                 descriptor = os.open(self._path(day), os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
@@ -140,7 +150,9 @@ class CallLogStore:
                                (('user_id', user_id), ('persona_id', persona_id), ('layer', layer),
                                 ('status', status), ('job_id', job_id))):
                             continue
-                        result.append(row)
+                        # Keep existing UTC files intact; normalize the read view
+                        # before sorting, including files mixing old/new formats.
+                        result.append({**row, 'started_at': self.local_timestamp(row['started_at'])})
                     except (ValueError, TypeError):
                         continue  # Ignore an interrupted last line; never rewrite history while reading.
         except FileNotFoundError:

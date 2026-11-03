@@ -54,6 +54,16 @@ body {
 }
 
 .hidden { display: none !important; }
+.msg.history-message { animation: none; }
+.chat-sync { display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 6px 16px; color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
+.chat-sync button { border: 0; background: none; color: var(--accent); font: inherit; padding: 4px 8px; }
+.chat-skeleton { display: flex; flex-direction: column; gap: 22px; padding: 20px 0; }
+.chat-skeleton i { display: block; width: 64%; height: 60px; border-radius: 16px;
+  background: linear-gradient(90deg,var(--surface) 25%,var(--surface-2) 50%,var(--surface) 75%);
+  background-size: 200% 100%; animation: usage-shimmer 1.4s ease-in-out infinite; }
+.chat-skeleton i:nth-child(2) { align-self: flex-end; width: 48%; height: 42px; }
+@media (prefers-reduced-motion: reduce) { .chat-skeleton i { animation: none; } }
 .msg { -webkit-touch-callout: none; }
 .msg .body { -webkit-user-select: none; user-select: none; }
 .msg:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
