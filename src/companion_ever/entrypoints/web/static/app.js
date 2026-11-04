@@ -1286,9 +1286,14 @@ function openMentionPicker() {
   const range=mentionRange;
   if(mentionState)closeMentionPicker(false);
   mentionRange=range;
+  // An input event can precede the queued viewport frame after iOS resumes.
+  // Snapshot the current keyboard height, not the last background layout.
+  syncViewport();
   const input=$('input'),id=S.group.id,actor=S.account?.csrf_token;
   const state=mentionState={scope:base(),phase:'opening',multi:false,selected:new Set(),
     text:input.value,follow:wasAtBottom,keyboardWasOpen:S.kbOpen,restingHeight:S.viewportH || window.innerHeight};
+  const heightValue=($('app').getBoundingClientRect().height || S.appH || window.innerHeight)+'px';
+  document.documentElement.style.setProperty('--app-h',heightValue);S.viewportHeightValue=heightValue;
   keyboardStickUntil=0;chatScrollEpoch++;
   const sheet=$('mention-sheet');sheet.classList.remove('hidden','is-closing');sheet.classList.add('is-opening');
   $('mention-search').value='';renderMentionMembers();
@@ -1333,7 +1338,7 @@ function finishMentionTransition(state) {
   if(state.phase==='opening'){
     state.phase='open';$('mention-sheet').classList.remove('is-opening');
     // No search autofocus: the keyboard first goes away, then the sheet opens.
-    $('mention-title').focus({preventScroll:true});
+    $('mention-sheet').focus({preventScroll:true});
     return;
   }
   if(state.phase!=='closing')return;
@@ -1983,11 +1988,18 @@ function syncViewport() {
   const standalone = navigator.standalone === true || !!window.matchMedia?.('(display-mode: standalone)').matches;
   const dynamicHeight = standalone && !!window.CSS?.supports('height', '100dvh');
 
-  // The selector follows its own visible viewport. The conversation beneath
-  // keeps its exact frame through keyboard dismissal and restoration.
+  // Freeze the conversation's height, not iOS focus panning. A resumed keyboard
+  // can leave offsetTop nonzero; that offset must unwind as the keyboard closes.
+  const visibleHeight=vv?.height || window.innerHeight;
+  const layoutHeight=Math.max(mentionState?.restingHeight || 0,window.innerHeight,root.clientHeight || 0);
+  const mentionTop=Math.max(0,Math.min(vv?.offsetTop || 0,layoutHeight-visibleHeight));
   root.style.setProperty('--mention-h',(vv?.height || window.innerHeight)+'px');
-  root.style.setProperty('--mention-top',(vv?.offsetTop || 0)+'px');
-  if(mentionState){settleMentionTransition();updateDebug();return;}
+  root.style.setProperty('--mention-top',mentionTop+'px');
+  if(mentionState){
+    const topValue=Math.round(mentionTop)+'px';
+    if(S.viewportTopValue!==topValue){root.style.setProperty('--vv-top',topValue);S.viewportTopValue=topValue;}
+    settleMentionTransition();updateDebug();return;
+  }
 
   if (!vv) {
     // 不支持 visualViewport：退回到布局视口

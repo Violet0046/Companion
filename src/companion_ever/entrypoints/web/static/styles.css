@@ -89,11 +89,13 @@ body {
 .message-actions button { background: transparent; border: 0; color: #fff; font: inherit; padding: 10px 18px; border-radius: 6px; }
 .message-actions button:focus-visible { outline: 2px solid #fff; }
 .mention-overlay { position: fixed; z-index: 1200; top: var(--mention-top,0px); left: 0; right: 0; height: var(--mention-h,100dvh); background: #0005; display: flex; align-items: flex-end; justify-content: center; }
+.mention-overlay:focus { outline: none; }
 .mention-panel { width: 100%; max-width: 720px; max-height: 85%; display: flex; flex-direction: column; background: var(--surface); border-radius: 24px 24px 0 0; padding: 12px calc(20px + var(--safe-r)) max(16px,var(--safe-b)) calc(20px + var(--safe-l)); animation: sheet-up .18s ease-out; }
 .mention-overlay.is-opening .mention-panel { visibility: hidden; animation: none; }
 .mention-overlay.is-closing { pointer-events: none; background: transparent; }
 .mention-overlay.is-closing .mention-panel { animation: sheet-down .16s ease-in forwards; }
 .mention-heading { display: grid; grid-template-columns: 76px minmax(0,1fr) 76px; align-items: center; text-align: center; padding-bottom: 15px; }
+#mention-title { font-weight: 400; }
 .mention-heading button { border: 0; font: inherit; color: var(--text); cursor: pointer; }
 #mention-close { display: grid; place-items: center; background: var(--bg); border-radius: 50%; height: 30px; width: 30px; padding: 0; }
 #mention-multi { justify-self: end; padding: 7px 0 7px 8px; background: transparent; font-size: 14px; color: var(--accent); font-weight: 600; white-space: nowrap; }
