@@ -89,6 +89,7 @@ let keyboardStickUntil = 0;
 let chatScrollEpoch = 0;
 let groupPresence=null;
 let groupPresenceTimer=null;
+let chatGesture=null,chatScrollHoldUntil=0,viewportFrame=null;
 
 /* ---------- 工具 ---------- */
 
@@ -228,6 +229,10 @@ function rejectCachedTarget(scope) {
 /** 切换视图。子页面（会话/资料/记忆）不显示底部 tab */
 function showView(name) {
   viewRequest++;closeCreateMenu();
+  if(name!=='chat'){
+    closeMentionPicker(false);chatGesture=null;
+    if(document.activeElement===$('input'))$('input').blur();
+  }
   if(name!=='chat' && S.locating)cancelLocation();
   S.view = name;
   document.querySelectorAll('.view').forEach((v) => {
@@ -1023,6 +1028,7 @@ async function openChat(user, persona) {
 }
 
 function resetChatView(loading=false) {
+  chatGesture=null;chatScrollHoldUntil=0;
   S.chatVersion=(S.chatVersion || 0)+1;
   S.historyReady=false;S.historyLoading=loading;S.historyError=false;
   cancelLocation();S.quoteReturn=null;S.hasNewer=false;S.loadingNewer=false;
@@ -1156,20 +1162,36 @@ function selectQuote(message) {
   if(wasAtBottom)requestAnimationFrame(()=>anchorBottom());
 }
 
-let messageActionTarget=null;
+let messageActionTarget=null,messageActionEl=null,messageSelectedText='';
 let activePressCancel=null;
-function closeMessageActions() {$('message-actions').classList.add('hidden');messageActionTarget=null;}
-function openMessageActions(message,x,y) {
-  if(!Number.isSafeInteger(message.id) || message.localOnly || message.pending)return;
-  messageActionTarget=message;
-  const menu=$('message-actions');menu.classList.remove('hidden');
-  const rect=menu.getBoundingClientRect();
-  const viewport=window.visualViewport;
-  const width=viewport?.width || window.innerWidth || 390;
-  const height=viewport?.height || window.innerHeight || 700;
+function closeMessageActions() {
+  $('message-actions').classList.add('hidden');
+  const selection=window.getSelection?.(),body=messageActionEl?.querySelector('.body');
+  if(selection && body?.contains(selection.anchorNode))selection.removeAllRanges();
+  messageActionEl?.classList.remove('message-selected');messageActionEl=null;messageActionTarget=null;messageSelectedText='';
+}
+function positionMessageActions(x=20,y=80) {
+  const menu=$('message-actions'),rect=menu.getBoundingClientRect(),viewport=window.visualViewport;
+  const width=viewport?.width || window.innerWidth || 390,top=viewport?.offsetTop || 0,height=viewport?.height || window.innerHeight || 700;
+  const bubble=messageActionEl?.getBoundingClientRect();
+  if(bubble){x=bubble.left+bubble.width/2-rect.width/2;y=bubble.top-rect.height-12;if(y<top+8)y=bubble.bottom+12;}
   menu.style.left=Math.max(8,Math.min(x,width-rect.width-8))+'px';
-  menu.style.top=Math.max(8,Math.min(y,height-rect.height-8))+'px';
-  $('message-quote-action').focus({preventScroll:true});
+  menu.style.top=Math.max(top+8,Math.min(y,top+height-rect.height-8))+'px';
+}
+function openMessageActions(message,x,y,element=null,keyboard=false) {
+  if(!Number.isSafeInteger(message.id) || message.localOnly || message.pending)return;
+  closeMessageActions();messageActionTarget=message;
+  messageActionEl=element || Array.from($('chat').querySelectorAll('.msg[data-id]')).find(el=>el.dataset.id===String(message.id));
+  if(document.activeElement===$('input'))$('input').blur();
+  messageActionEl?.classList.add('message-selected');
+  const body=messageActionEl?.querySelector('.body'),selection=window.getSelection?.();
+  messageSelectedText=body?.innerText || message.content;
+  if(body && selection && document.createRange){const range=document.createRange();range.selectNodeContents(body);selection.removeAllRanges();selection.addRange(range);}
+  const mention=$('message-mention-action');
+  mention.classList.toggle('hidden',!S.group || message.role!=='assistant' || !S.group.members?.some(m=>m.persona_id===message.sender_id));
+  const menu=$('message-actions');menu.classList.remove('hidden');
+  positionMessageActions(x,y);
+  if(keyboard)$('message-copy-action').focus({preventScroll:true});
 }
 function bindMessageActions(el,message) {
   el.tabIndex=0;el.setAttribute?.('aria-label',(message.role==='user'?'我的消息':'角色消息')+'，长按或按菜单键操作');
@@ -1177,26 +1199,29 @@ function bindMessageActions(el,message) {
   const cancel=()=>{clearTimeout(timer);timer=null;if(activePressCancel===cancel)activePressCancel=null;};
   el.addEventListener('pointerdown',event=>{
     if(event.button!==0 || event.target.closest?.('button,a,input'))return;
+    if(messageActionEl===el)return; // Keep the native text selection handles usable.
     activePressCancel?.();activePressCancel=cancel;
     start={x:event.clientX,y:event.clientY};
-    timer=setTimeout(()=>{timer=null;openMessageActions(message,start.x,start.y);},480);
+    timer=setTimeout(()=>{timer=null;openMessageActions(message,start.x,start.y,el);},480);
   });
   el.addEventListener('pointermove',event=>{if(start && Math.hypot(event.clientX-start.x,event.clientY-start.y)>8)cancel();});
   for(const event of ['pointerup','pointercancel','pointerleave'])el.addEventListener(event,cancel);
-  el.addEventListener('contextmenu',event=>{event.preventDefault();cancel();openMessageActions(message,event.clientX,event.clientY);});
+  el.addEventListener('contextmenu',event=>{event.preventDefault();cancel();if(messageActionEl!==el)openMessageActions(message,event.clientX,event.clientY,el);});
   el.addEventListener('keydown',event=>{
     if(event.key==='ContextMenu' || (event.shiftKey && event.key==='F10')){
-      event.preventDefault();const rect=el.getBoundingClientRect();openMessageActions(message,rect.left,rect.top);
+      event.preventDefault();const rect=el.getBoundingClientRect();openMessageActions(message,rect.left,rect.top,el,true);
     }
   });
 }
 async function copyMessage() {
   const message=messageActionTarget;if(!message)return;
+  const selection=window.getSelection?.(),body=messageActionEl?.querySelector('.body');
+  const text=selection && !selection.isCollapsed && body?.contains(selection.anchorNode) && body.contains(selection.focusNode) ? selection.toString() : messageSelectedText || message.content;
   try {
-    if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(message.content);
+    if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(text);
     else {
       const field=document.createElement('textarea');field.value=message.content;
-      field.style.position='fixed';field.style.opacity='0';document.body.appendChild(field);field.select();
+      field.style.position='fixed';field.style.opacity='0';document.body.appendChild(field);field.value=text;field.select();
       const ok=document.execCommand('copy');field.remove();if(!ok)throw new Error('copy');
     }
     toast('已复制');
@@ -1204,7 +1229,7 @@ async function copyMessage() {
   finally{closeMessageActions();}
 }
 
-let mentionRange=null,mentionDeletion=null;
+let mentionRange=null,mentionDeletion=null,mentionState=null;
 function updateMentions(next, edit=null) {
   const prev=S.inputBefore || '';let left=0,right=0;
   while(left<prev.length && left<next.length && prev[left]===next[left])left++;
@@ -1258,34 +1283,123 @@ function mentionBeforeInput(event) {
 }
 function openMentionPicker() {
   if(!S.group)return;
-  $('mention-sheet').classList.remove('hidden');$('mention-search').value='';renderMentionMembers();
-  $('mention-search').focus();
-  const id=S.group.id;
-  api(`/api/groups/${id}`).then(group=>{if(S.group?.id===id){S.group=group;renderMentionMembers();}}).catch(()=>{});
+  const range=mentionRange;
+  if(mentionState)closeMentionPicker(false);
+  mentionRange=range;
+  const input=$('input'),id=S.group.id,actor=S.account?.csrf_token;
+  const state=mentionState={scope:base(),phase:'opening',multi:false,selected:new Set(),
+    text:input.value,follow:wasAtBottom,keyboardWasOpen:S.kbOpen,restingHeight:S.viewportH || window.innerHeight};
+  keyboardStickUntil=0;chatScrollEpoch++;
+  const sheet=$('mention-sheet');sheet.classList.remove('hidden','is-closing');sheet.classList.add('is-opening');
+  $('mention-search').value='';renderMentionMembers();
+  input.blur();syncViewport();settleMentionTransition();
+  state.fallback=setTimeout(()=>finishMentionTransition(state),650);
+  api(`/api/groups/${id}`).then(group=>{
+    if(mentionState===state && S.group?.id===id && actor===S.account?.csrf_token){S.group=group;renderMentionMembers();}
+  }).catch(()=>{});
 }
 function closeMentionPicker(focus=true) {
-  $('mention-sheet').classList.add('hidden');mentionRange=null;
-  if(focus)$('input').focus();
+  mentionRange=null;
+  const state=mentionState;
+  if(!state){$('mention-sheet').classList.add('hidden');return;}
+  clearTimeout(state.timer);clearTimeout(state.fallback);
+  if(!focus || state.scope!==base()){
+    mentionState=null;$('mention-sheet').classList.add('hidden');$('mention-sheet').classList.remove('is-opening','is-closing');
+    queueViewportSync();return;
+  }
+  state.phase='closing';state.closedAt=Date.now();
+  $('mention-sheet').classList.remove('is-opening');$('mention-sheet').classList.add('is-closing');
+  // Focus must stay inside the user's tap for iOS to reopen its keyboard.
+  $('input').focus({preventScroll:true});settleMentionTransition();
+  state.fallback=setTimeout(()=>finishMentionTransition(state),650);
+}
+function settleMentionTransition() {
+  const state=mentionState;
+  if(!state || state.phase==='open')return;
+  clearTimeout(state.timer);
+  state.timer=setTimeout(()=>{
+    if(mentionState!==state)return;
+    const height=window.visualViewport?.height || window.innerHeight;
+    if(state.keyboardWasOpen){
+      const open=state.restingHeight-height>120;
+      if(state.phase==='opening' && open || state.phase==='closing' && !open)return;
+    }
+    finishMentionTransition(state);
+  },100);
+}
+function finishMentionTransition(state) {
+  if(mentionState!==state)return;
+  clearTimeout(state.timer);clearTimeout(state.fallback);
+  if(state.phase==='opening'){
+    state.phase='open';$('mention-sheet').classList.remove('is-opening');
+    // No search autofocus: the keyboard first goes away, then the sheet opens.
+    $('mention-title').focus({preventScroll:true});
+    return;
+  }
+  if(state.phase!=='closing')return;
+  if(Date.now()-state.closedAt<160){state.timer=setTimeout(()=>finishMentionTransition(state),160-(Date.now()-state.closedAt));return;}
+  mentionState=null;$('mention-sheet').classList.add('hidden');$('mention-sheet').classList.remove('is-closing');
+  wasAtBottom=state.follow;syncViewport();
+  if(state.follow)anchorBottom();
 }
 function renderMentionMembers() {
   const box=$('mention-members');box.innerHTML='';
+  const state=mentionState;
+  if(!state)return;
+  const multiple=$('mention-multi');multiple.textContent=state.multi ? `完成(${state.selected.size})` : '多选';
+  multiple.disabled=state.multi && !state.selected.size;
+  multiple.setAttribute('aria-label',state.multi ? `完成选择，已选${state.selected.size}位` : '多选成员');
   const query=$('mention-search').value.toLowerCase();
   const members=(S.group?.members || []).filter(m=>m.persona_id.toLowerCase().includes(query));
+  const add=(name,id,all=false)=>{
+    const button=document.createElement('button');button.type='button';button.className='mention-member'+(all?' mention-all':'');
+    button.setAttribute('aria-label',name);
+    const label=document.createElement('span');label.textContent=name;button.appendChild(label);
+    if(state.multi){
+      const selected=all ? S.group.members.every(m=>state.selected.has(m.persona_id)) : state.selected.has(id);
+      button.setAttribute('aria-pressed',String(selected));
+      const check=document.createElement('i');check.className='mention-check'+(selected?' is-checked':'');check.setAttribute('aria-hidden','true');button.appendChild(check);
+    }
+    button.onclick=()=>{
+      const ids=all ? S.group.members.map(m=>m.persona_id) : [id];
+      if(!state.multi){pickMentions(ids);return;}
+      const remove=ids.every(p=>state.selected.has(p));
+      ids.forEach(p=>remove ? state.selected.delete(p) : state.selected.add(p));renderMentionMembers();
+    };
+    box.appendChild(button);
+  };
+  if(!query && S.group?.members?.length)add('全部成员',null,true);
   for(const member of members){
-    const button=document.createElement('button');button.type='button';button.className='mention-member';
-    button.textContent=member.persona_id;button.onclick=()=>pickMention(member.persona_id);box.appendChild(button);
+    add(member.persona_id,member.persona_id);
   }
   if(!members.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='没有匹配的成员';box.appendChild(empty);}
 }
 function pickMention(persona) {
+  pickMentions([persona]);
+}
+function pickMentions(personas) {
   if(!mentionRange || !S.group)return;
-  if(new Set(S.mentions.map(m=>m.persona_id).concat(persona)).size>2){toast('一次最多 @ 两位角色');return;}
-  const input=$('input'),range=mentionRange,token='@'+persona;
-  const next=input.value.slice(0,range.start)+token+' '+input.value.slice(range.end);
+  const input=$('input'),range=mentionRange;
+  if(mentionState && (mentionState.scope!==base() || mentionState.text!==input.value)){closeMentionPicker(false);return;}
+  const existing=new Set(S.mentions.filter(m=>m.end<=range.start || m.start>=range.end).map(m=>m.persona_id));
+  const ids=[...new Set(personas)].filter(p=>!existing.has(p) && S.group.members?.some(m=>m.persona_id===p));
+  if(existing.size+ids.length>8){toast('一次最多 @ 八位角色');return;}
+  const prefix=range.space && range.start && !/\s/u.test(input.value[range.start-1]) ? ' ' : '';
+  const inserted=prefix+ids.map(p=>'@'+p+' ').join('');
+  const next=input.value.slice(0,range.start)+inserted+input.value.slice(range.end);
   updateMentions(next,{start:range.start,end:range.end});input.value=next;
-  S.mentions.push({persona_id:persona,start:range.start,end:range.start+token.length});S.mentions.sort((a,b)=>a.start-b.start);
-  closeMentionPicker(false);input.focus();input.setSelectionRange(range.start+token.length+1,range.start+token.length+1);
+  let cursor=range.start+prefix.length;
+  for(const persona of ids){S.mentions.push({persona_id:persona,start:cursor,end:cursor+persona.length+1});cursor+=persona.length+2;}
+  S.mentions.sort((a,b)=>a.start-b.start);
+  input.setSelectionRange(range.start+inserted.length,range.start+inserted.length);
+  if(mentionState)closeMentionPicker();else{mentionRange=null;input.focus({preventScroll:true});}
   input.dispatchEvent(new Event('input',{bubbles:true}));
+}
+function insertMentionShortcut(personas) {
+  if(!S.group || S.locating)return;
+  const input=$('input');
+  mentionRange={start:input.selectionStart ?? input.value.length,end:input.selectionEnd ?? input.value.length,space:true};
+  pickMentions(personas);
 }
 function sendMentions(text) {
   return S.group ? S.mentions.map(m=>({persona_id:m.persona_id,start:Array.from(text.slice(0,m.start)).length,end:Array.from(text.slice(0,m.end)).length})) : [];
@@ -1869,6 +1983,12 @@ function syncViewport() {
   const standalone = navigator.standalone === true || !!window.matchMedia?.('(display-mode: standalone)').matches;
   const dynamicHeight = standalone && !!window.CSS?.supports('height', '100dvh');
 
+  // The selector follows its own visible viewport. The conversation beneath
+  // keeps its exact frame through keyboard dismissal and restoration.
+  root.style.setProperty('--mention-h',(vv?.height || window.innerHeight)+'px');
+  root.style.setProperty('--mention-top',(vv?.offsetTop || 0)+'px');
+  if(mentionState){settleMentionTransition();updateDebug();return;}
+
   if (!vv) {
     // 不支持 visualViewport：退回到布局视口
     root.style.setProperty('--app-h', dynamicHeight ? '100dvh' : window.innerHeight + 'px');
@@ -1905,14 +2025,22 @@ function syncViewport() {
     top = Math.max(0, vvBottom - h);
   }
 
-  root.style.setProperty('--app-h', dynamicHeight && !kbOpen ? '100dvh' : h + 'px');
-  root.style.setProperty('--vv-top', dynamicHeight && !kbOpen ? '0px' : top + 'px');
+  const heightValue=dynamicHeight && !kbOpen ? '100dvh' : h+'px';
+  const topValue=dynamicHeight && !kbOpen ? '0px' : top+'px';
+  if(S.viewportHeightValue!==heightValue){root.style.setProperty('--app-h',heightValue);S.viewportHeightValue=heightValue;}
+  if(S.viewportTopValue!==topValue){root.style.setProperty('--vv-top',topValue);S.viewportTopValue=topValue;}
   S.appH = h;
   S.kbOpen = kbOpen;
 
   if (prev && (prev !== h || wasKeyboardOpen !== kbOpen) && keepLatest) anchorBottom();
+  if(messageActionTarget)positionMessageActions();
 
   updateDebug();
+}
+
+function queueViewportSync() {
+  if(viewportFrame!==null)return;
+  viewportFrame=requestAnimationFrame(()=>{viewportFrame=null;syncViewport();});
 }
 
 /* ---------- debug 面板（访问页面加 ?debug=1） ---------- */
@@ -1959,10 +2087,10 @@ function updateDebug() {
 }
 
 if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', syncViewport);
-  window.visualViewport.addEventListener('scroll', syncViewport);
+  window.visualViewport.addEventListener('resize', queueViewportSync);
+  window.visualViewport.addEventListener('scroll', queueViewportSync);
 }
-window.addEventListener('resize', syncViewport);
+window.addEventListener('resize', queueViewportSync);
 window.addEventListener('orientationchange', () => { S.viewportH = 0; setTimeout(syncViewport, 250); });
 window.addEventListener('load', () => setTimeout(syncViewport, 100));
 window.addEventListener('pageshow', () => setTimeout(syncViewport, 100));
@@ -2343,6 +2471,7 @@ function appendChatMsg(el, createdAt) {
 
 function renderChat() {
   const box = $('chat');
+  if(messageActionTarget)closeMessageActions();
   box.dataset.scope=base();
   box.innerHTML = '';
   if (!S.messages.length) {
@@ -2551,6 +2680,8 @@ function updateJumpButton() {
 function continueKey() {return `ce_group_continue:${S.user}:${S.group?.id}`;}
 function updateContinueButton() {
   const button=$('btn-group-continue');
+  $('group-actions').classList.toggle('hidden',!S.group);
+  $('btn-mention-all').disabled=!S.group || S.locating || !S.group.members?.length;
   button.classList.toggle('hidden',!S.group);
   button.disabled=!S.group || S.typing || S.sending || S.locating || S.viewMode!=='live'
     || S.continueSubmitting===base() || !S.messages.length || Object.values(readOutbox()).some(pendingEntry);
@@ -2601,6 +2732,7 @@ function rerenderKeepScroll() {
 }
 
 function scrollBottom(instant) {
+  if(mentionState || messageActionTarget || chatGesture?.dragging || Date.now()<chatScrollHoldUntil)return;
   const box = $('chat');
   if (!box) return;
   if (instant) {
@@ -2620,13 +2752,14 @@ function scrollBottom(instant) {
  * - 所以在两帧之后再补两次，保证最终落点一定是底部。
  */
 function anchorBottom() {
+  if(mentionState || messageActionTarget || chatGesture || Date.now()<chatScrollHoldUntil)return;
   const epoch = chatScrollEpoch;
   scrollBottom(true);
   requestAnimationFrame(() => {
-    if (epoch !== chatScrollEpoch) return;
+    if (epoch !== chatScrollEpoch || mentionState || messageActionTarget || chatGesture || Date.now()<chatScrollHoldUntil) return;
     scrollBottom(true);
     requestAnimationFrame(() => {
-      if (epoch !== chatScrollEpoch) return;
+      if (epoch !== chatScrollEpoch || mentionState || messageActionTarget || chatGesture || Date.now()<chatScrollHoldUntil) return;
       scrollBottom(true);
       wasAtBottom = true;
       markVisibleChatRead();
@@ -2636,6 +2769,7 @@ function anchorBottom() {
 
 function shouldFollowLatest() {
   return S.view === 'chat' && S.viewMode === 'live' && !S.locating && document.visibilityState === 'visible'
+    && !mentionState && !messageActionTarget && !chatGesture && Date.now()>=chatScrollHoldUntil
     && !$('app').classList.contains('hidden') && (wasAtBottom || Date.now() < keyboardStickUntil);
 }
 
@@ -3275,6 +3409,7 @@ $('create-persona-action').onclick=openCreatePersona;
 $('create-group-action').onclick=openCreateGroup;
 $('group-save').onclick=createGroup;
 $('btn-group-settings').onclick=openGroupSettings;
+$('btn-mention-all').onclick=()=>insertMentionShortcut((S.group?.members || []).map(m=>m.persona_id));
 $('group-proactive-enabled').onchange=saveGroupProactive;
 $('group-settings-close').onclick=()=> $('dialog-group-settings').classList.add('hidden');
 $('chat-sync-retry').onclick=()=>loadHistory(true,{keepScroll:!wasAtBottom});
@@ -3282,15 +3417,28 @@ $('group-cancel').onclick=()=> $('dialog-group').classList.add('hidden');
 $('composer-quote-cancel').onclick=()=>{S.quote=null;renderComposerQuote();$('input').focus();};
 $('message-quote-action').onclick=()=>{if(messageActionTarget)selectQuote(messageActionTarget);};
 $('message-copy-action').onclick=copyMessage;
+$('message-mention-action').onclick=()=>{
+  const message=messageActionTarget;closeMessageActions();
+  if(S.group && message?.role==='assistant')insertMentionShortcut([message.sender_id]);
+};
 $('mention-close').onclick=()=>closeMentionPicker();
+$('mention-multi').onclick=()=>{
+  if(!mentionState)return;
+  if(mentionState.multi)pickMentions([...mentionState.selected]);
+  else{mentionState.multi=true;renderMentionMembers();}
+};
 $('mention-search').addEventListener('input',renderMentionMembers);
 $('input').addEventListener('input',mentionInput);
 $('input').addEventListener('beforeinput',mentionBeforeInput);
-$('chat').addEventListener('scroll',()=>{activePressCancel?.();closeMessageActions();},{passive:true});
+$('chat').addEventListener('scroll',()=>{activePressCancel?.();if(messageActionTarget)positionMessageActions();},{passive:true});
 $('mention-sheet').addEventListener('click',event=>{if(event.target===$('mention-sheet'))closeMentionPicker();});
 $('dialog-group').addEventListener('click',event=>{if(event.target===$('dialog-group'))$('dialog-group').classList.add('hidden');});
 $('dialog-group-settings').addEventListener('click',event=>{if(event.target===$('dialog-group-settings'))$('dialog-group-settings').classList.add('hidden');});
-document.addEventListener('pointerdown',event=>{if(!event.target.closest?.('#message-actions'))closeMessageActions();});
+document.addEventListener('pointerdown',event=>{if(!event.target.closest?.('#message-actions,.message-selected .body'))closeMessageActions();});
+document.addEventListener('selectionchange',()=>{
+  const selection=window.getSelection?.(),body=messageActionEl?.querySelector('.body');
+  if(selection && !selection.isCollapsed && body?.contains(selection.anchorNode) && body.contains(selection.focusNode))messageSelectedText=selection.toString();
+});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest?.('.nav-actions'))closeCreateMenu();});
 $('btn-new-conv').addEventListener('keydown',event=>{
   if(event.key==='ArrowDown'){event.preventDefault();if($('create-menu').classList.contains('hidden'))toggleCreateMenu();else $('create-persona-action').focus();}
@@ -3348,16 +3496,11 @@ $('input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });
 
-/* iOS 焦点输入框时会滚动文档把输入框“露出来”。
-   我们的 app 是 position:fixed，文档一滚它就被顶出屏幕。
-   常量屏幕时把滚动量拉回来。 */
+/* Let visualViewport report native keyboard panning. Forcing window.scrollTo
+   during focus fights that panning and can repeatedly resize/anchor the chat. */
 $('input').addEventListener('focus', () => {
   keyboardStickUntil = shouldFollowLatest() ? Date.now() + 750 : 0;
-  [0, 60, 180, 360].forEach((d) => setTimeout(() => {
-    if (window.scrollY !== 0) window.scrollTo(0, 0);
-    syncViewport();
-    if (Date.now() < keyboardStickUntil && shouldFollowLatest()) anchorBottom();
-  }, d));
+  queueViewportSync();
 });
 
 $('search-input').addEventListener('input', (e) => {
@@ -3458,17 +3601,45 @@ $('dialog-persona').addEventListener('click', (e) => {
 });
 
 /* 往上滑到顶 → 加载更早的 */
-['touchstart', 'pointerdown', 'wheel'].forEach(type => $('chat').addEventListener(type, () => {
-  keyboardStickUntil = 0;
-  chatScrollEpoch += 1;
-}, {passive: true}));
+function beginChatGesture(event={}) {
+  if(event.type==='pointerdown' && event.pointerType==='touch')return;
+  const point=event.touches?.[0] || event;
+  keyboardStickUntil=0;chatScrollEpoch++;
+  if(!chatGesture)chatGesture={x:point.clientX,y:point.clientY,dragging:false,
+    selection:!!messageActionEl && !!event.target?.closest?.('.message-selected .body')};
+}
+function moveChatGesture(event) {
+  if(!chatGesture)return;
+  if(chatGesture.selection)return;
+  const point=event.touches?.[0] || event;
+  if(Math.hypot(point.clientX-chatGesture.x,point.clientY-chatGesture.y)<8)return;
+  chatGesture.dragging=true;chatScrollHoldUntil=Date.now()+450;wasAtBottom=false;
+  closeMessageActions();activePressCancel?.();
+  if(document.activeElement===$('input'))$('input').blur();
+  queueViewportSync();
+}
+function endChatGesture() {
+  if(chatGesture?.dragging)chatScrollHoldUntil=Date.now()+450;
+  chatGesture=null;
+}
+for(const type of ['touchstart','pointerdown'])$('chat').addEventListener(type,beginChatGesture,{passive:true});
+for(const type of ['touchmove','pointermove'])$('chat').addEventListener(type,moveChatGesture,{passive:true});
+for(const type of ['touchend','touchcancel','pointerup'])$('chat').addEventListener(type,endChatGesture,{passive:true});
+for(const type of ['touchend','touchcancel','pointerup'])document.addEventListener(type,endChatGesture,{passive:true});
+$('chat').addEventListener('pointercancel',event=>{if(event.pointerType!=='touch')endChatGesture();},{passive:true});
+$('chat').addEventListener('wheel',()=>{
+  keyboardStickUntil=0;chatScrollEpoch++;chatScrollHoldUntil=Date.now()+450;wasAtBottom=false;
+  closeMessageActions();
+  if(document.activeElement===$('input'))$('input').blur();
+},{passive:true});
 $('chat').addEventListener('scroll', () => {
   const box = $('chat');
   if (box.scrollTop < 80) loadOlder();
   if(box.scrollHeight-box.scrollTop-box.clientHeight<160)loadNewer();
   // 记住是否贴在底部（发送时不要把用户拉走）
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-  wasAtBottom = atBottom || (Date.now() < keyboardStickUntil && S.view === 'chat' && S.viewMode === 'live');
+  wasAtBottom = chatGesture?.dragging || Date.now()<chatScrollHoldUntil ? false
+    : atBottom || (Date.now() < keyboardStickUntil && S.view === 'chat' && S.viewMode === 'live');
   // 自己滑回底部了 → 角标清零
   if (atBottom) { S.newCount = 0; markVisibleChatRead(); }
   updateJumpButton();

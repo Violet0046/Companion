@@ -43,6 +43,7 @@ html, body {
   margin: 0; padding: 0; height: 100%;
   overscroll-behavior-y: none;
 }
+html.app-shell, html.app-shell body { overflow: hidden; overscroll-behavior: none; }
 
 body {
   background: var(--bg);
@@ -66,6 +67,9 @@ body {
 @media (prefers-reduced-motion: reduce) { .chat-skeleton i { animation: none; } }
 .msg { -webkit-touch-callout: none; }
 .msg .body { -webkit-user-select: none; user-select: none; }
+.msg.message-selected { outline: 2px solid var(--accent-soft); outline-offset: 3px; }
+.msg.message-selected .body { -webkit-user-select: text; user-select: text; }
+.msg.message-selected .body ::selection, .msg.message-selected .body::selection { background: #a9d4ff; color: var(--text); }
 .msg:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .message-sender { font-size: 11px; color: var(--text-dim); margin-bottom: 5px; }
 .message-quote {
@@ -84,19 +88,30 @@ body {
 .message-actions { position: fixed; z-index: 1300; display: flex; background: #303238; border-radius: 10px; box-shadow: 0 4px 24px #0003; padding: 5px; }
 .message-actions button { background: transparent; border: 0; color: #fff; font: inherit; padding: 10px 18px; border-radius: 6px; }
 .message-actions button:focus-visible { outline: 2px solid #fff; }
-.mention-overlay { position: fixed; z-index: 1200; top: var(--vv-top,0px); left: 0; right: 0; height: var(--app-h,100dvh); background: #0005; display: flex; align-items: flex-end; justify-content: center; }
+.mention-overlay { position: fixed; z-index: 1200; top: var(--mention-top,0px); left: 0; right: 0; height: var(--mention-h,100dvh); background: #0005; display: flex; align-items: flex-end; justify-content: center; }
 .mention-panel { width: 100%; max-width: 720px; max-height: 85%; display: flex; flex-direction: column; background: var(--surface); border-radius: 24px 24px 0 0; padding: 12px calc(20px + var(--safe-r)) max(16px,var(--safe-b)) calc(20px + var(--safe-l)); animation: sheet-up .18s ease-out; }
-.mention-heading { display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; text-align: center; padding-bottom: 15px; }
-.mention-heading button { border: 0; background: var(--bg); border-radius: 50%; font-size: 26px; height: 36px; width: 36px; color: var(--text); }
+.mention-overlay.is-opening .mention-panel { visibility: hidden; animation: none; }
+.mention-overlay.is-closing { pointer-events: none; background: transparent; }
+.mention-overlay.is-closing .mention-panel { animation: sheet-down .16s ease-in forwards; }
+.mention-heading { display: grid; grid-template-columns: 76px minmax(0,1fr) 76px; align-items: center; text-align: center; padding-bottom: 15px; }
+.mention-heading button { border: 0; font: inherit; color: var(--text); cursor: pointer; }
+#mention-close { display: grid; place-items: center; background: var(--bg); border-radius: 50%; height: 30px; width: 30px; padding: 0; }
+#mention-multi { justify-self: end; padding: 7px 0 7px 8px; background: transparent; font-size: 14px; color: var(--accent); font-weight: 600; white-space: nowrap; }
+#mention-multi:disabled { opacity: .4; }
 #mention-search { flex: 0 0 auto; width: 100%; border: 0; background: var(--bg); border-radius: 10px; padding: 12px; font: inherit; font-size: 16px; color: var(--text); }
 .mention-members { overflow-y: auto; min-height: 80px; overscroll-behavior: contain; }
-.mention-member { display: block; width: 100%; text-align: left; background: transparent; border: 0; border-bottom: 1px solid var(--line); padding: 19px 8px; font: inherit; color: var(--text); }
+.mention-member { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; text-align: left; background: transparent; border: 0; border-bottom: 1px solid var(--line); padding: 19px 8px; font: inherit; color: var(--text); }
+.mention-check { flex: 0 0 21px; width: 21px; height: 21px; border: 1.5px solid var(--text-muted); border-radius: 50%; display: grid; place-items: center; }
+.mention-check.is-checked { background: var(--accent); border-color: var(--accent); }
+.mention-check.is-checked::after { content: ''; width: 9px; height: 5px; border-left: 2px solid white; border-bottom: 2px solid white; transform: translateY(-1px) rotate(-45deg); }
+.mention-all { font-weight: 600; }
 .member-option { display: flex; align-items: center; gap: 12px; padding: 13px 0; }
 .member-option input { accent-color: var(--accent); width: 19px; height: 19px; }
 #dialog-group, #dialog-group-settings { top: var(--vv-top,0px); bottom: auto; height: var(--app-h,100dvh); }
 #dialog-group .dlg-card, #dialog-group-settings .dlg-card { max-height: 90%; }
 @keyframes sheet-up { from { transform: translateY(24px); } to { transform: translateY(0); } }
-@media (prefers-reduced-motion: reduce) { .mention-panel { animation: none; } }
+@keyframes sheet-down { to { transform: translateY(100%); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .mention-panel, .mention-overlay.is-closing .mention-panel { animation: none; } }
 .muted  { color: var(--text-muted); font-weight: 400; }
 
 /* ---------- 骨架 ---------- */
@@ -155,6 +170,7 @@ body {
 
 .chat {
   flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  min-height: 0; overscroll-behavior-y: contain; overflow-anchor: none;
   padding: 16px calc(14px + var(--safe-r)) 8px calc(14px + var(--safe-l));
   display: flex; flex-direction: column; gap: 12px;
   /* 注意：这里不要加 scroll-behavior: smooth
@@ -243,6 +259,8 @@ body {
   border-radius: 999px; background: var(--surface); color: var(--text-dim); font: inherit; font-size: 12px;
 }
 .group-continue:disabled { opacity: .45; }
+.group-actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 7px; }
+.group-actions .group-continue { margin: 0; }
 
 #input {
   flex: 1 1 auto; resize: none;

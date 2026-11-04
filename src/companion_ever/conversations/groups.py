@@ -153,7 +153,7 @@ class GroupService:
                 raise ValueError('@ 文本已变化，请重新选择角色')
             normalized.append({'persona_id':p,'start':start,'end':stop});end=stop
             if p not in targets:targets.append(p)
-        if len(targets)>2:raise ValueError('一次最多 @ 两位角色')
+        if len(targets)>8:raise ValueError('一次最多 @ 八位角色')
         with transaction(self.conn):
             self.require(user,cid)
             if quoted_message_id is not None:self.repo.messages.quote(cid,quoted_message_id)
@@ -246,7 +246,9 @@ class GroupService:
         targets=json.loads(g['target_persona_ids']);done=json.loads(g['completed_persona_ids'])
         members=[m['persona_id'] for m in self.members(g['user_id'],g['conversation_id'])]
         pending=[p for p in targets if p not in done and p!=persona]
-        limit=MAX_GROUP_SPEAKERS
+        # Explicit user selections all get a turn; automatic handoffs retain
+        # the original three-speaker bound and cannot expand an all-member round.
+        limit=max(MAX_GROUP_SPEAKERS,len(targets))
         source_id=invitation['source_message_id'] if invitation else None
         source=next((m for m in history if m['id']==(source_id or g['trigger_message_id'])),None)
         invocation={

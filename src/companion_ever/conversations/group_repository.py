@@ -106,7 +106,10 @@ class GroupRepo:
         return gid
 
     def reserve_call(self,gid):
-        return self.conn.execute("UPDATE generation SET model_requests=model_requests+1 WHERE id=? AND model_requests<4 AND status='running'",(gid,)).rowcount==1
+        # Ordinary coordination/handoffs retain four calls. Explicit @ selections
+        # may contain all eight members, processed sequentially without a coordinator.
+        return self.conn.execute("UPDATE generation SET model_requests=model_requests+1 WHERE id=? "
+            "AND model_requests<min(8,max(4,json_array_length(target_persona_ids))) AND status='running'",(gid,)).rowcount==1
 
     def save_plan(self,gid,targets,invitations):
         for inv in invitations:

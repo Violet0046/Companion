@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="app-shell">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
@@ -136,7 +136,10 @@
         <div id="load-more-hint" class="load-more-hint hidden">向上滑动加载更旧的聊天</div>
 
         <footer class="composer">
-          <button id="btn-group-continue" class="group-continue hidden" type="button">继续聊聊</button>
+          <div id="group-actions" class="group-actions hidden">
+            <button id="btn-mention-all" class="group-continue" type="button">@ 全部成员</button>
+            <button id="btn-group-continue" class="group-continue hidden" type="button">继续聊聊</button>
+          </div>
           <button id="btn-jump-latest" class="jump-latest hidden" aria-label="回到最新消息">
             <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
               <path fill="currentColor" d="M12 16.5 5.5 10l1.4-1.4L12 13.7l5.1-5.1L18.5 10z"/>
@@ -256,6 +259,7 @@
   <div id="message-actions" class="message-actions hidden" role="menu" aria-label="消息操作">
     <button id="message-copy-action" type="button" role="menuitem">复制</button>
     <button id="message-quote-action" type="button" role="menuitem">引用</button>
+    <button id="message-mention-action" class="hidden" type="button" role="menuitem">@ TA</button>
   </div>
   <div id="dialog-group-settings" class="dlg hidden" role="dialog" aria-modal="true" aria-labelledby="group-settings-title">
     <div class="dlg-card">
@@ -270,7 +274,11 @@
   </div>
   <div id="mention-sheet" class="mention-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="mention-title">
     <div class="mention-panel">
-      <div class="mention-heading"><button id="mention-close" type="button" aria-label="关闭成员选择">⌄</button><strong id="mention-title">选择提醒的角色</strong><span></span></div>
+      <div class="mention-heading">
+        <button id="mention-close" type="button" aria-label="关闭成员选择"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <strong id="mention-title" tabindex="-1">选择提醒的角色</strong>
+        <button id="mention-multi" type="button">多选</button>
+      </div>
       <input id="mention-search" type="search" placeholder="搜索成员" aria-label="搜索群成员" autocomplete="off">
       <div id="mention-members" class="mention-members"></div>
     </div>
