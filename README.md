@@ -29,6 +29,8 @@ $env:COMPANION_WEB_SECURE_COOKIE="0"
 
 配置从工作目录的 `.env` 加载，已设置的进程环境变量优先；相对数据库路径也以工作目录为基准。修改模型、通知或调度参数后重启应用。公网部署使用自己的 HTTPS 入口；仅本机或反向代理时建议将 `COMPANION_WEB_HOST` 显式设为 `127.0.0.1`。应用不依赖 Tailscale。
 
+使用 `MiniMax-M3.1-Flash` 时，统一请求封装默认显式发送 `reasoning_effort: "low"`，避免省略参数后使用供应商的最高思考档位。可通过 `COMPANION_REASONING_EFFORT` 改为 `low`、`medium`、`high`、`xhigh` 或 `max`，覆盖私聊、群聊、主动联系、群协调、整理及摘要的调用。该模型不支持关闭思考，`COMPANION_BACKGROUND_THINKING` 不控制它；其他模型不会自动携带此强度参数。网页「显示思考过程」仅控制展示，关闭它不会减少模型推理。调整后的速度、用量与回答质量仍需实际聊天验证。
+
 ## 账号与数据隔离
 
 本页保留通用命令。含私人部署信息的 `ADMIN_COMMANDS.md` 仅保留在本地，不再跟踪 Git，新克隆仓库不包含它。

@@ -18,12 +18,14 @@ class OpenAICompatibleClient:
         model: str,
         timeout: float = 60.0,
         stream_usage: bool = True,
+        reasoning_effort: str = "low",
     ):
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
         self.timeout = timeout
         self.stream_usage = stream_usage
+        self.reasoning_effort = reasoning_effort
         self._local = threading.local()
         self._client = None  # lazy load
         self._client_lock = threading.Lock()
@@ -72,16 +74,19 @@ class OpenAICompatibleClient:
         if callable(close):
             close()
 
-    def _background_options(self,kwargs):
+    def _model_options(self,kwargs):
         thinking=kwargs.pop('background_thinking',None)
-        # Only the documented M3 capability is adapted. Other providers retain
-        # their configured defaults; chat never passes this internal option.
-        if thinking is not None and self.model.lower()=='minimax-m3':
+        model=self.model.lower()
+        # M3.1 requires thinking; lower its effort instead of disabling it.
+        # Shared by sync, streaming and request descriptions, across all layers.
+        if model=='minimax-m3.1-flash':
+            kwargs.setdefault('reasoning_effort',self.reasoning_effort)
+        elif thinking is not None and model=='minimax-m3':
             kwargs['extra_body']={**kwargs.get('extra_body',{}),'thinking':{'type':'adaptive' if thinking else 'disabled'}}
         return kwargs
 
     def request_description(self,messages,kwargs):
-        options=self._background_options(dict(kwargs))
+        options=self._model_options(dict(kwargs))
         if options.get('stream') and self.stream_usage:
             options.setdefault('stream_options',{'include_usage':True})
         client={k:options.pop(k) for k in ('timeout','max_retries','total_timeout','extra_headers','extra_query') if k in options}
@@ -94,7 +99,7 @@ class OpenAICompatibleClient:
             return ''.join(self.stream_chat(messages,**kwargs))
         self.last_reasoning = None
         self.last_usage = None
-        kwargs=self._background_options(kwargs)
+        kwargs=self._model_options(kwargs)
         client = self.client
         if 'max_retries' in kwargs:
             client = client.with_options(max_retries=kwargs.pop('max_retries'))
@@ -116,7 +121,7 @@ class OpenAICompatibleClient:
         """流式调用。"""
         self.last_reasoning = None
         self.last_usage = None
-        kwargs=self._background_options(kwargs)
+        kwargs=self._model_options(kwargs)
         client=self.client
         if self.stream_usage:
             kwargs.setdefault('stream_options',{'include_usage':True})

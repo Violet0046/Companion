@@ -36,6 +36,11 @@ class LLMConfig:
     timeout: float = 60.0
     provider: str = "openai_compat"
     stream_usage: bool = True
+    reasoning_effort: str = "low"
+
+    def __post_init__(self):
+        if self.reasoning_effort not in ('low', 'medium', 'high', 'xhigh', 'max'):
+            raise ValueError('COMPANION_REASONING_EFFORT 必须为 low、medium、high、xhigh 或 max')
 
     @classmethod
     def from_any(cls, value: "LLMConfig | dict | None") -> "LLMConfig":
@@ -258,6 +263,7 @@ class AppConfig:
                 model=env_source.get("COMPANION_LLM_MODEL") or env_source.get("OPENAI_MODEL", ""),
                 timeout=float(env_source.get("OPENAI_TIMEOUT", "60")),
                 stream_usage=env_source.get('COMPANION_STREAM_USAGE','1').lower() not in ('0','false','off'),
+                reasoning_effort=env_source.get('COMPANION_REASONING_EFFORT','low').strip().lower(),
             ),
         )
 

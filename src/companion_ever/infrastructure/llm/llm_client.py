@@ -34,6 +34,7 @@ def create_llm_client(cfg: LLMConfig) -> LLMClient:
         model=cfg.model,
         timeout=cfg.timeout,
         stream_usage=cfg.stream_usage,
+        reasoning_effort=cfg.reasoning_effort,
     )
     # 统一记录基本用量；不保留请求或回复正文。
     return TracedLLMClient(inner)
