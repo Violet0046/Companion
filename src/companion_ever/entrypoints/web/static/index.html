@@ -261,6 +261,10 @@
     <button id="message-quote-action" type="button" role="menuitem">引用</button>
     <button id="message-mention-action" class="hidden" type="button" role="menuitem">@ TA</button>
   </div>
+  <div id="archived-actions" class="create-menu archived-menu hidden" role="menu" aria-label="角色操作">
+    <button id="archived-restore" type="button" role="menuitem"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1 8M4 4v6h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>恢复角色</span></button>
+    <button id="archived-purge" type="button" role="menuitem"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>彻底删除</span></button>
+  </div>
   <div id="dialog-group-settings" class="dlg hidden" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="group-settings-title">
     <div class="dlg-card">
       <div class="dlg-head"><div class="dlg-title" id="group-settings-title">群聊设置</div><button id="group-members-save" class="group-member-action group-settings-action hidden" type="button">添加</button></div>

@@ -228,7 +228,7 @@ function rejectCachedTarget(scope) {
 
 /** 切换视图。子页面（会话/资料/记忆）不显示底部 tab */
 function showView(name) {
-  viewRequest++;closeCreateMenu();
+  viewRequest++;closeCreateMenu();closeArchivedActions();
   if(name!=='chat'){
     closeMentionPicker(false);chatGesture=null;
     if(document.activeElement===$('input'))$('input').blur();
@@ -611,6 +611,7 @@ function personaTag(p) {
 }
 
 function renderContacts() {
+  closeArchivedActions();
   const box = $('contact-list');
   if (!box) return;
   const ps = allPersonas();
@@ -629,7 +630,7 @@ function renderContacts() {
     html += archived.map((p) => `<div class="cell" data-archived="${escAttr(p.persona_id)}">
       <div class="ava" style="background:var(--surface-2);color:var(--text-muted)">${esc(p.name.slice(0, 1))}</div>
       <div class="cell-body"><div class="cell-title">${esc(p.name)}</div><div class="cell-sub">${esc(p.identity || '已删除')}</div></div>
-      <button class="dlg-danger-btn persona-purge" data-archived="${escAttr(p.persona_id)}" type="button">彻底删除</button><button class="action-pill persona-restore" data-archived="${escAttr(p.persona_id)}">恢复</button>
+      <button class="archived-more" data-archived="${escAttr(p.persona_id)}" type="button" aria-label="管理${escAttr(p.name)}" aria-haspopup="menu" aria-expanded="false" aria-controls="archived-actions"><span aria-hidden="true">⋯</span></button>
     </div>`).join('');
   }
   html += '<div class="group-label">功能</div>';
@@ -645,13 +646,47 @@ function renderContacts() {
   if (nb) nb.onclick = () => openCreatePersona();
   const gb = $('cell-group-chat');
   if (gb) gb.onclick = openCreateGroup;
-  box.querySelectorAll('.persona-purge').forEach(el=>{el.onclick=ev=>{ev.stopPropagation();purgePersona(S.user,el.dataset.archived,el);};});
-  box.querySelectorAll('.persona-restore').forEach((el) => {
-    el.onclick = (ev) => {
-      ev.stopPropagation();
-      restorePersona(S.user, el.dataset.archived);
-    };
+  box.querySelectorAll('.archived-more').forEach(el=>{
+    el.onclick=event=>{event.stopPropagation();openArchivedActions(S.user,el.dataset.archived,el);};
+    el.onkeydown=event=>{if(event.key==='ArrowDown'){event.preventDefault();openArchivedActions(S.user,el.dataset.archived,el);}};
   });
+}
+
+let archivedActionTarget=null;
+function closeArchivedActions(focus=false) {
+  const target=archivedActionTarget;archivedActionTarget=null;
+  $('archived-actions')?.classList.add('hidden');
+  target?.trigger?.setAttribute('aria-expanded','false');
+  if(focus && target?.trigger?.isConnected)target.trigger.focus({preventScroll:true});
+}
+function openArchivedActions(user,persona,trigger) {
+  const same=archivedActionTarget?.trigger===trigger;
+  closeArchivedActions();closeCreateMenu();
+  if(same)return;
+  const role=(S.archived || []).find(p=>p.persona_id===persona);
+  if(!role || !S.account || S.account.user_id!==user)return;
+  archivedActionTarget={user,persona,trigger,actor:S.account.csrf_token};
+  const menu=$('archived-actions');
+  menu.setAttribute('aria-label',role.name+'的操作');trigger.setAttribute('aria-expanded','true');
+  menu.classList.remove('hidden','is-above');
+  const rect=trigger.getBoundingClientRect(),width=menu.offsetWidth,height=menu.offsetHeight;
+  const left=Math.max(8,Math.min(window.innerWidth-width-8,rect.right-width));
+  const above=rect.bottom+10+height>window.innerHeight-8;
+  const top=Math.max(8,above ? rect.top-height-10 : rect.bottom+10);
+  menu.classList.toggle('is-above',above);menu.style.left=left+'px';menu.style.top=top+'px';
+  menu.style.setProperty('--menu-arrow-left',Math.max(12,Math.min(width-20,rect.left+rect.width/2-left-4))+'px');
+  $('archived-restore').focus({preventScroll:true});
+}
+
+async function runArchivedAction(kind) {
+  const target=archivedActionTarget;
+  if(!target || target.actor!==S.account?.csrf_token)return closeArchivedActions();
+  closeArchivedActions(true);
+  target.trigger.disabled=true;
+  try {
+    if(kind==='restore')await restorePersona(target.user,target.persona);
+    else await purgePersona(target.user,target.persona,target.trigger);
+  } finally {if(target.trigger.isConnected)target.trigger.disabled=false;}
 }
 
 /* ---------- 新建 / 删除角色 ---------- */
@@ -917,12 +952,15 @@ function disconnectTarget() {
 }
 
 async function restorePersona(user, persona) {
+  const actor=S.account?.csrf_token;
   try {
     await api(`/api/persona/${enc(user)}/${enc(persona)}/restore`, { method: 'POST' });
+    if(actor!==S.account?.csrf_token)return;
     toast('已恢复');
     await loadUsers();
-    await loadConvs();
+    if(actor!==S.account?.csrf_token)return;
     renderContacts();
+    await loadConvs();
   } catch (e) {
     toast('恢复失败：' + e.message);
   }
@@ -2226,6 +2264,7 @@ document.addEventListener('visibilitychange', () => {
 localStorage.removeItem('ce_pin');
 
 function invalidateAccess() {
+  closeArchivedActions();
   if(cacheOwner())accessCacheCleanup=Promise.resolve(conversationCache.clear(cacheOwner()));
   ++usageRequest; usageSnapshot = null;
   $('usage-stats').innerHTML='';$('usage-stats').setAttribute('aria-busy','false');
@@ -3536,6 +3575,21 @@ $('create-group-action').onclick=openCreateGroup;
 $('group-save').onclick=createGroup;
 $('btn-group-settings').onclick=openGroupSettings;
 $('group-delete').onclick=deleteGroup;
+$('archived-restore').onclick=()=>runArchivedAction('restore');
+$('archived-purge').onclick=()=>runArchivedAction('purge');
+$('contact-list').addEventListener('scroll',()=>closeArchivedActions(),{passive:true});
+document.addEventListener('pointerdown',event=>{if(!event.target.closest?.('#archived-actions,.archived-more'))closeArchivedActions();});
+window.addEventListener('resize',()=>closeArchivedActions());
+$('archived-actions').addEventListener('keydown',event=>{
+  if(event.key==='Tab'){closeArchivedActions(true);return;}
+  const items=Array.from($('archived-actions').querySelectorAll('button'));
+  const index=items.indexOf(document.activeElement);
+  if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
+    event.preventDefault();
+    const next=event.key==='Home'?0:event.key==='End'?items.length-1:(index+(event.key==='ArrowDown'?1:items.length-1))%items.length;
+    items[next]?.focus({preventScroll:true});
+  }
+});
 $('btn-mention-all').onclick=()=>insertMentionShortcut((S.group?.members || []).map(m=>m.persona_id));
 $('group-proactive-enabled').onchange=saveGroupProactive;
 $('group-members-add').onclick=()=>{if(groupMemberEdit){groupMemberEdit.adding=true;groupMemberEdit.selected.clear();renderGroupMembers();}};
@@ -3583,6 +3637,7 @@ $('create-menu').addEventListener('keydown',event=>{
 });
 document.addEventListener('keydown',event=>{
   if(event.key==='Escape'){
+    closeArchivedActions(true);
     closeCreateMenu(!$('create-menu').classList.contains('hidden'));
     closeMessageActions();closeMentionPicker(false);$('dialog-group').classList.add('hidden');$('dialog-group-settings').classList.add('hidden');
   }
