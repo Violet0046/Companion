@@ -2019,7 +2019,7 @@ async function openMemory(user, persona) {
   S.memoryAction = null;
   S.memoryNotes = [];
   showView('memory');
-  $('memory-title').textContent = persona + '的记忆';
+  $('memory-title').textContent = personaName(user, persona) + '的记忆';
   const box = $('memory-list');
   box.innerHTML = '<div class="empty">载入中…</div>';
   try {
