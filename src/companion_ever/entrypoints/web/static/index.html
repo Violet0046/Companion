@@ -150,8 +150,9 @@
             <span id="composer-quote-text"></span><button id="composer-quote-cancel" type="button" aria-label="取消引用">×</button>
           </div>
           <div class="composer-row">
+            <!-- Explicit text assistance when the native keyboard switches from login fields to chat. -->
             <textarea id="input" rows="1" placeholder="说点什么…" autocomplete="off"
-                      enterkeyhint="send" aria-label="消息输入"></textarea>
+                      autocorrect="on" spellcheck="true" enterkeyhint="send" aria-label="消息输入"></textarea>
             <button id="btn-send" class="send-btn" aria-label="发送">
               <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
                 <path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10.2 15 12 3.4 13.8z"/>
