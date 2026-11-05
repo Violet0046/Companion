@@ -49,8 +49,8 @@ def check_prompt_invariants(
         system_prompt: 渲染出的 system prompt
         retrieved_count: 本轮召回到的 note 数
         last_db_message: 本轮之前 DB 里最新一条消息的 content
-            （用来验证历史是不是"最近"的；本轮输入不在 messages 里，
-            所以不是 DB 里绝对最新的那条）
+            （用来验证历史是不是"最近"的；本轮输入是最后一条 user，
+            比对它之前的最近历史）
         total_notes: 该 persona 的记忆总数（0 = 还没有记忆，此时召回为空不算违规）
 
     Returns:
@@ -79,8 +79,8 @@ def check_prompt_invariants(
     # 3. 历史必须是"最近的"，而不是"最早的"
     #    —— 曾经的 bug：get_messages_between 无边界时 ORDER BY id ASC，
     #       取到的是最早的 N 条，模型完全看不到最近的对话
-    #    注意：本轮输入不在 messages 里（由 system 的「当前这一轮」承载），
-    #    所以比对对象是"本轮之前最新的那条"，不是 DB 里绝对最新的那条。
+    #    本轮输入是最后一条 user，比对其前面的最近历史。
+    #    应用资料消息不是对话历史，也不替代本轮原话。
     if last_db_message:
         tail = "".join(
             str(m.get("content", "")) for m in messages[-3:]

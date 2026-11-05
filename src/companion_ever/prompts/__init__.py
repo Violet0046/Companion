@@ -6,8 +6,10 @@ fragments/：外部上下文、群整理视角、两类校验纠错的按需片�
 
 调用方显式 load('目录/名称.txt')；不自动继承或追加公共规则。
 compose 按二级标题填充占位符，空节连标题移除，插入值不再次展开。
-本轮引用和触发类型由 conversations.context 组装；结构化输出的
-Schema 及校验错误由对应链路附加，目录只存静态规则。
+conversations 的 system 仅含人设、行为和协议；时间、记忆、摘要、
+本轮引用与触发类型由 conversations.context 放入 user 资料消息。
+整理、摘要、协调的 system 定义各自职责，不扮演被整理或调度的角色。
+结构化输出的 Schema 及校验反馈由对应链路附加，目录只存静态规则。
 """
 from __future__ import annotations
 
