@@ -114,8 +114,32 @@ class GroupService:
     def leave(self,user,cid,persona):
         with transaction(self.conn):
             self.require_member(user,cid,persona)
+            if len(self.members(user,cid))<=2:raise ValueError('群聊至少保留两位角色，请先添加成员再移出')
             self.group_repo.leave(cid,persona)
+            self.group_repo.event(user,cid,persona+'已被移出群聊')
             if self.on_member_left is not None:self.on_member_left(user,persona,cid)
+        return self.info(user,cid)
+
+    def add_members(self,user,cid,personas):
+        if not personas or len(personas)>8 or len(set(personas))!=len(personas):raise ValueError('请选择不同的角色')
+        with transaction(self.conn):
+            self.require(user,cid)
+            existing={m['persona_id'] for m in self.members(user,cid)}
+            if len(existing|set(personas))>8:raise ValueError('群聊最多八位角色')
+            for persona in personas:
+                self.authorizer.require_persona(user,persona)
+                if persona in existing:raise ValueError('角色已经在群里，请刷新成员列表')
+            for persona in personas:
+                self.group_repo.join(cid,persona)
+                self.group_repo.event(user,cid,persona+'加入了群聊')
+        return self.info(user,cid)
+
+    def remove_persona(self,user,persona):
+        """Runs inside role deactivation's transaction, before access is revoked."""
+        ids=[cid for cid in self.group_repo.list_ids(user) if self.group_repo.members(cid,persona)]
+        for cid in ids:
+            if len(self.members(user,cid))<=2:raise ValueError('角色所在群聊至少需两位角色，请先补充成员再删除角色')
+        for cid in ids:self.leave(user,cid,persona)
 
     def present(self,row):
         m=dict(row)
@@ -181,13 +205,14 @@ class GroupService:
                 return generation,False
             if self.conn.execute("SELECT 1 FROM generation WHERE conversation_id=? AND status IN ('queued','running')",(cid,)).fetchone():
                 raise ValueError('群里正在回复，请等这一轮结束后再继续')
-            history=self.group_repo.history(cid,limit=1)
+            full_history=self.group_repo.history(cid,limit=50)
+            history=[m for m in full_history if m['role']!='system']
             if not history:raise ValueError('先发一条消息，再邀请大家接话')
-            anchor=history[0]['id']
-            if after_message_id is not None and after_message_id!=anchor:
+            anchor=history[-1]['id']
+            if after_message_id is not None and after_message_id!=full_history[-1]['id']:
                 raise ValueError('群聊已有新消息，请回到最新后再继续')
             self.repo.usage.require_capacity(user,new_message=True)
-            gid=self.group_repo.continue_group(cid,anchor,request_key)
+            gid=self.group_repo.continue_group(cid,anchor,request_key,full_history[-1]['id'])
             return self.repo.get(gid),True
 
     def _history_for(self,g,persona=None):
@@ -202,7 +227,7 @@ class GroupService:
             m['created_at']=m['created_at'].replace(' ','T')+'Z'
             if m['quoted_message']:
                 q=m['quoted_message'];q['created_at']=q['created_at'].replace(' ','T')+'Z'
-        return [{k:m[k] for k in ('id','sender_kind','sender_id','content','created_at','quoted_message','mentions')} for m in history]
+        return [{k:m[k] for k in ('id','role','sender_kind','sender_id','content','created_at','quoted_message','mentions')} for m in history]
 
     def _request(self,g,layer,persona,messages,purpose):
         with transaction(self.conn):

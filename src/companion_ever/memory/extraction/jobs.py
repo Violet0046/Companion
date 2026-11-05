@@ -20,6 +20,7 @@ class MemoryJobRepo:
 
     def source_visible(self,job,row):
         if row is None or row['user_id']!=job['user_id']:return False
+        if row['role'] not in ('user','assistant'):return False
         if job['conversation_kind']!='group':return row['persona_id']==job['persona_id']
         scope=ConversationRepo(self.conn).memory_scope(job['user_id'],job['persona_id'],job['conversation_id'])
         return row['conversation_id']==job['conversation_id'] and row['id']>scope['joined_after_message_id']
@@ -32,7 +33,9 @@ class MemoryJobRepo:
                                  "AND role IN ('user','assistant')",(user_id,persona_id)).fetchone()[0]
 
     def pending_for_conversation(self, conversation_id,persona_id=None):
-        return bool(self.conn.execute("SELECT 1 FROM memory_job WHERE conversation_id=? AND (? IS NULL OR persona_id=?) AND status!='succeeded'",
+        return bool(self.conn.execute("SELECT 1 FROM memory_job WHERE conversation_id=? AND (? IS NULL OR persona_id=?) AND status!='succeeded' "
+            "AND (member_revision IS NULL OR EXISTS(SELECT 1 FROM conversation_member m WHERE m.conversation_id=memory_job.conversation_id "
+            "AND m.persona_id=memory_job.persona_id AND m.revision=memory_job.member_revision AND m.left_after_message_id IS NULL))",
                                      (conversation_id,persona_id,persona_id)).fetchone())
 
     def progress(self, conversation):
@@ -72,7 +75,7 @@ class MemoryJobRepo:
         with transaction(self.conn):
             cid = conversation_id if conversation_id is not None else ConversationRepo(self.conn).ensure_conversation(user_id,persona_id)
             scope=ConversationRepo(self.conn).memory_scope(user_id,persona_id,cid)
-            row = self.conn.execute("SELECT id FROM memory_job WHERE conversation_id=? AND persona_id=? AND status!='succeeded'",(cid,persona_id)).fetchone()
+            row = self.conn.execute("SELECT id FROM memory_job WHERE conversation_id=? AND persona_id=? AND member_revision IS ? AND status!='succeeded'",(cid,persona_id,scope['member_revision'])).fetchone()
             if row:
                 return self.get(row[0])
             start=self.progress({'id':cid,'persona_id':persona_id,'memory_start_message_id':max(scope['memory_start_message_id'],scope['joined_after_message_id'] or 0)})

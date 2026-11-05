@@ -89,6 +89,10 @@ class ConversationService:
         self.authorizer.require_persona(user,persona)
         return self.conv_repo.memory_messages(user,persona,cid,**bounds)
 
+    def membership_events(self,user,persona,cid,after,through):
+        self.authorizer.require_persona(user,persona)
+        return self.conv_repo.membership_events(user,persona,cid,after,through)
+
     # === 写入（3 个）===
 
     def mark_read(self, user, persona, message_id):

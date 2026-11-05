@@ -198,7 +198,7 @@ class PromptService:
             'trigger_message_id':trigger_message_id,'root_message':current,'invocation':invocation or {},'messages':history},ensure_ascii=False)}]}
 
     def build_group_coordination(self,user,*,members,eligible_ids,history,trigger_message_id,spoken_ids,remaining,conversation_id=None,manual=False):
-        cards=[{'persona_id':m['persona_id'],'persona':self._get_persona_basics(user,m['persona_id'])} for m in members]
+        cards=[{'persona_id':m['persona_id'],'joined_after_message_id':m.get('joined_after_message_id',0),'persona':self._get_persona_basics(user,m['persona_id'])} for m in members]
         if self.summary_service is not None and conversation_id is not None:
             for card in cards:
                 card['relationship']=self.summary_service.prompt_text(user,card['persona_id'],conversation_id=conversation_id,relationship_only=True)

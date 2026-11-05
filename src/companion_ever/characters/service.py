@@ -38,6 +38,7 @@ class PersonaService:
         self._on_created = tuple(on_created)
         self._on_deactivated = tuple(on_deactivated)
         self._on_restored = tuple(on_restored)
+        self.before_deactivate = None
 
     def create_persona(self, user_id: str, persona_id: str, definition: str) -> None:
         if not isinstance(persona_id, str) or not persona_id.strip() or ',' in persona_id:
@@ -75,6 +76,7 @@ class PersonaService:
         """撤销访问并使旧执行失效；钩子必须使用同一连接事务且不能调用模型。"""
         with transaction(self.persona_repo.conn):
             self.authorizer.require_persona(user_id, persona_id)
+            if self.before_deactivate is not None:self.before_deactivate(user_id,persona_id)
             self.user_repo.remove_persona(user_id, persona_id)
             self.persona_repo.invalidate_edits(user_id, persona_id)
             for invalidate in self._on_deactivated:

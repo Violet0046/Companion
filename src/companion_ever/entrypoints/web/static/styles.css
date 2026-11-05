@@ -111,6 +111,17 @@ body {
 .member-option input { accent-color: var(--accent); width: 19px; height: 19px; }
 #dialog-group, #dialog-group-settings { top: var(--vv-top,0px); bottom: auto; height: var(--app-h,100dvh); }
 #dialog-group .dlg-card, #dialog-group-settings .dlg-card { max-height: 90%; }
+#dialog-group-settings:focus { outline: none; }
+.group-members-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: 13px; color: var(--text-dim); }
+.group-member-action { border: 0; background: transparent; color: var(--accent); font: inherit; padding: 10px 0 10px 12px; white-space: nowrap; cursor: pointer; }
+.group-member-action:disabled { opacity: .4; cursor: default; }
+.group-member-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; border-bottom: 1px solid var(--line); }
+.group-member-name { overflow-wrap: anywhere; min-width: 0; }
+.group-member-remove { color: var(--text-muted); font-size: 13px; }
+.group-members-hint { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin: 10px 0 16px; }
+.group-settings-action { flex: 0 0 auto; min-height: 40px; font-size: 14px; font-weight: 600; }
+.group-proactive-row { padding: 16px 0 0; border-top: 1px solid var(--line); border-radius: 0; }
+.group-system-event { align-self: center; max-width: 90%; text-align: center; color: var(--text-muted); font-size: 12px; line-height: 1.6; padding: 3px 8px; overflow-wrap: anywhere; }
 @keyframes sheet-up { from { transform: translateY(24px); } to { transform: translateY(0); } }
 @keyframes sheet-down { to { transform: translateY(100%); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .mention-panel, .mention-overlay.is-closing .mention-panel { animation: none; } }

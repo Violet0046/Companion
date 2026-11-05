@@ -261,15 +261,22 @@
     <button id="message-quote-action" type="button" role="menuitem">引用</button>
     <button id="message-mention-action" class="hidden" type="button" role="menuitem">@ TA</button>
   </div>
-  <div id="dialog-group-settings" class="dlg hidden" role="dialog" aria-modal="true" aria-labelledby="group-settings-title">
+  <div id="dialog-group-settings" class="dlg hidden" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="group-settings-title">
     <div class="dlg-card">
-      <div class="dlg-head"><div class="dlg-title" id="group-settings-title">群聊设置</div></div>
+      <div class="dlg-head"><div class="dlg-title" id="group-settings-title">群聊设置</div><button id="group-members-save" class="group-member-action group-settings-action hidden" type="button">添加</button></div>
       <div class="dlg-body">
-        <div id="group-settings-members" class="hint"></div>
-        <label class="member-option"><input id="group-proactive-enabled" type="checkbox"><span>允许主动消息发到本群</span></label>
-        <p class="hint">在角色资料中开启主动联系后，角色可选择在这里开口。与私聊共用主动联系频率。</p>
+        <div class="group-members-heading"><span id="group-members-label">群成员</span><button id="group-members-add" class="group-member-action" type="button">添加成员</button></div>
+        <div id="group-settings-members" class="group-settings-members"></div>
+        <p id="group-members-hint" class="group-members-hint" role="status"></p>
+        <div id="group-member-picker" class="hidden">
+          <div class="group-members-heading"><span>选择要加入的角色</span><button id="group-members-cancel" class="group-member-action" type="button">取消</button></div>
+          <div id="group-member-candidates"></div>
+        </div>
+        <div id="group-settings-options">
+          <label class="switch-row group-proactive-row"><span>允许主动消息发到本群</span><input id="group-proactive-enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label>
+          <p class="group-members-hint">角色开启主动联系后，可选择在这里开口；与私聊共用联系频率。</p>
+        </div>
       </div>
-      <div class="dlg-foot"><button id="group-settings-close" class="btn-primary" type="button">完成</button></div>
     </div>
   </div>
   <div id="mention-sheet" class="mention-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="mention-title" tabindex="-1">

@@ -43,12 +43,31 @@ class GroupRepo:
 
     def leave(self,cid,persona):
         last=self.conn.execute('SELECT coalesce(max(id),0) FROM conversation_log WHERE conversation_id=?',(cid,)).fetchone()[0]
+        self.conn.execute('INSERT OR IGNORE INTO conversation_membership_history SELECT conversation_id,persona_id,revision,'
+            'joined_after_message_id,? FROM conversation_member WHERE conversation_id=? AND persona_id=? AND left_after_message_id IS NULL',(last,cid,persona))
         self.conn.execute('UPDATE conversation_member SET left_after_message_id=?,revision=revision+1 WHERE conversation_id=? AND persona_id=?',(last,cid,persona))
+        self.conn.execute("UPDATE push_delivery SET status='skipped',lease_token=NULL,last_error='群成员已变化' "
+            "WHERE conversation_id=? AND status IN ('queued','running')",(cid,))
+        self.cancel_round(cid)
+
+    def cancel_round(self,cid):
         self.conn.execute("UPDATE generation SET status='cancelled',last_error='群成员已变化',completed_at=CURRENT_TIMESTAMP "
             "WHERE conversation_id=? AND status IN ('queued','running')",(cid,))
 
+    def join(self,cid,persona):
+        last=self.conn.execute('SELECT coalesce(max(id),0) FROM conversation_log WHERE conversation_id=?',(cid,)).fetchone()[0]
+        self.conn.execute('INSERT INTO conversation_member(conversation_id,persona_id,joined_after_message_id) VALUES (?,?,?) '
+            'ON CONFLICT(conversation_id,persona_id) DO UPDATE SET joined_after_message_id=excluded.joined_after_message_id,'
+            'left_after_message_id=NULL,revision=conversation_member.revision+1',(cid,persona,last))
+        self.cancel_round(cid)
+
+    def event(self,user,cid,content):
+        turn=self.conn.execute('SELECT coalesce(max(turn_index),0)+1 FROM conversation_log WHERE conversation_id=?',(cid,)).fetchone()[0]
+        self.conn.execute("INSERT INTO conversation_log(user_id,conversation_id,turn_index,role,sender_kind,sender_id,content) "
+            "VALUES (?,?,?,'system','system','system',?)",(user,cid,turn,content))
+
     def history(self,cid,*,before_id=None,after_id=None,limit=50):
-        sql="SELECT * FROM conversation_log WHERE conversation_id=? AND role IN ('user','assistant')"
+        sql="SELECT * FROM conversation_log WHERE conversation_id=? AND role IN ('user','assistant','system')"
         args=[cid];direction='DESC'
         if before_id is not None:sql+=' AND id<?';args.append(before_id)
         elif after_id is not None:sql+=' AND id>?';args.append(after_id);direction='ASC'
@@ -81,10 +100,10 @@ class GroupRepo:
             'SELECT ?,persona_id,suggestion,anchor_message_ids,source_message_id FROM group_invitation WHERE generation_id=?',(gid,old['id']))
         return gid
 
-    def continue_group(self,cid,anchor,request_key):
+    def continue_group(self,cid,anchor,request_key,context_id=None):
         gid=uuid.uuid4().hex
         self.conn.execute("INSERT INTO generation(id,conversation_id,trigger_message_id,status,trigger_kind,request_key,context_message_id) "
-            "VALUES (?,?,?,'queued','manual_continue',?,?)",(gid,cid,anchor,request_key,anchor))
+            "VALUES (?,?,?,'queued','manual_continue',?,?)",(gid,cid,anchor,request_key,context_id or anchor))
         return gid
 
     def continuation(self,cid,request_key):

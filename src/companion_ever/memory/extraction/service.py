@@ -157,6 +157,8 @@ class ExtractionService:
         group_id=job['conversation_id'] if job['conversation_kind']=='group' else None
         if group_id is not None:
             case['conversation']={'id':group_id,'kind':'group','self_persona_id':persona_id}
+            case['membership_events']=self.conversation_service.membership_events(user_id,persona_id,group_id,
+                reference[0].id if reference else job['after_message_id'],job['through_message_id'])
             for data,message in zip(case['messages'],reference+messages):
                 data.update(sender_kind=message.sender_kind,sender_id=message.sender_id)
         return {'messages':messages,'case':case,'snapshots':{},

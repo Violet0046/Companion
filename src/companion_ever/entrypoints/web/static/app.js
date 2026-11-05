@@ -1074,26 +1074,86 @@ async function openGroup(id) {
   } catch(error){if(current())toast(error.message);}
 }
 
+let groupMemberEdit=null;
+function currentMemberEdit(state) {
+  return groupMemberEdit===state && state.actor===S.account?.csrf_token && state.scope===base() && S.group?.id===state.id;
+}
+function renderGroupMembers() {
+  const state=groupMemberEdit;if(!state || !currentMemberEdit(state))return;
+  const members=S.group.members || [],box=$('group-settings-members');box.innerHTML='';
+  $('group-members-label').textContent=`群成员（${members.length}/8）`;
+  $('group-members-add').disabled=!state.ready || state.busy || members.length>=8;
+  $('group-member-picker').classList.toggle('hidden',!state.adding);
+  $('group-settings-options').classList.toggle('hidden',!!state.adding);
+  $('group-members-add').classList.toggle('hidden',!!state.adding);
+  $('group-members-save').classList.toggle('hidden',!state.adding);
+  $('group-members-hint').textContent=state.busy ? '正在保存成员变更…' : !state.ready ? '正在同步成员…'
+    : state.error || (members.length<=2 ? '群聊至少保留两位角色，可先添加成员再移出。' : '移出仅退出本群，角色和已有聊天记录会保留。');
+  for(const member of members){
+    const row=document.createElement('div');row.className='group-member-row';
+    const name=document.createElement('span');name.className='group-member-name';name.textContent=member.persona_id;
+    const button=document.createElement('button');button.type='button';button.className='group-member-action group-member-remove';
+    button.textContent='移出';button.setAttribute('aria-label','移出'+member.persona_id);
+    button.disabled=!state.ready || state.busy || state.adding || members.length<=2;
+    button.onclick=()=>{
+      if(!confirm(`将${member.persona_id}移出本群？角色、私聊和已有记忆都会保留。`))return;
+      changeGroupMembers('DELETE',member.persona_id);
+    };
+    row.append(name,button);box.appendChild(row);
+  }
+  if(state.adding){
+    const candidates=allPersonas().filter(p=>p.user===S.user && !members.some(m=>m.persona_id===p.persona));
+    const list=$('group-member-candidates');list.innerHTML='';
+    for(const person of candidates){
+      const label=document.createElement('label');label.className='member-option';
+      const check=document.createElement('input');check.type='checkbox';check.checked=state.selected.has(person.persona);
+      check.disabled=state.busy || !check.checked && members.length+state.selected.size>=8;
+      check.onchange=()=>{check.checked ? state.selected.add(person.persona) : state.selected.delete(person.persona);renderGroupMembers();};
+      const name=document.createElement('span');name.textContent=person.persona;label.append(check,name);list.appendChild(label);
+    }
+    if(!candidates.length){const empty=document.createElement('p');empty.className='group-members-hint';empty.textContent='其他角色都已在群里，可先到通讯录新建角色。';list.appendChild(empty);}
+    $('group-members-save').textContent=state.selected.size ? `添加（${state.selected.size}）` : '添加';
+    $('group-members-save').disabled=state.busy || !state.selected.size;
+    $('group-members-cancel').disabled=state.busy;
+  }
+}
+async function changeGroupMembers(method,persona=null) {
+  const state=groupMemberEdit;if(!state || !currentMemberEdit(state) || !state.ready || state.busy)return;
+  state.busy=true;state.error='';renderGroupMembers();
+  try {
+    const group=await api(`/api/groups/${state.id}/members${persona ? '/'+enc(persona) : ''}`,{
+      method,...(method==='POST' ? {body:JSON.stringify({persona_ids:[...state.selected]})} : {})});
+    if(!currentMemberEdit(state))return;
+    S.group=group;state.adding=false;state.selected.clear();
+    const before=S.mentions.length;S.mentions=S.mentions.filter(m=>group.members.some(p=>p.persona_id===m.persona_id));
+    if(before!==S.mentions.length)toast('已移出角色的 @ 提醒已取消');
+    conversationCache.put(cacheOwner(),state.scope,{group});updateContinueButton();
+    await loadHistory(true,{keepScroll:!wasAtBottom});
+    if(currentMemberEdit(state)){recoverReply();loadConvs();}
+  } catch(error){if(currentMemberEdit(state))state.error=error.message;}
+  finally{state.busy=false;if(currentMemberEdit(state))renderGroupMembers();}
+}
 async function openGroupSettings() {
   if(!S.group)return;
   const id=S.group.id,scope=base(),actor=S.account?.csrf_token;
   const panel=$('dialog-group-settings'),toggle=$('group-proactive-enabled');
   const request=S.groupSettingsRequest=(S.groupSettingsRequest || 0)+1;
+  const state=groupMemberEdit={id,scope,actor,ready:false,busy:false,adding:false,selected:new Set(),error:''};
   panel.dataset.group=id;
   $('group-settings-title').textContent=S.group.name;
-  $('group-settings-members').textContent=S.group.members?.map(m=>m.persona_id).join('、') || '正在同步成员…';
+  renderGroupMembers();
   toggle.checked=!!S.group.proactive_enabled;toggle.disabled=true;
-  panel.classList.remove('hidden');$('group-settings-close').focus();
-  const current=()=>actor===S.account?.csrf_token && request===S.groupSettingsRequest && S.group?.id===id && !panel.classList.contains('hidden');
+  panel.classList.remove('hidden');panel.focus({preventScroll:true});
+  const current=()=>currentMemberEdit(state) && request===S.groupSettingsRequest && !panel.classList.contains('hidden');
   try {
     const [group,setting]=await Promise.all([api(`/api/groups/${id}`),api(`/api/groups/${id}/proactive`)]);
     if(!current())return;
     S.group=group;S.group.proactive_enabled=setting.enabled;
     conversationCache.put(cacheOwner(),scope,{group:S.group});
     $('group-settings-title').textContent=group.name;
-    $('group-settings-members').textContent=group.members.map(m=>m.persona_id).join('、');
+    state.ready=true;renderGroupMembers();
     toggle.checked=setting.enabled;toggle.disabled=false;
-  } catch(error){if(current())toast('群设置暂未同步，请稍后重试');}
+  } catch(error){if(current()){state.error='群设置暂未同步，请关闭后重试';$('group-members-hint').textContent=state.error;}}
 }
 
 async function saveGroupProactive() {
@@ -2570,6 +2630,9 @@ async function retryReply(state) {
 
 function renderMsg(role, content, thinking, id, message = null) {
   const el = document.createElement('div');
+  if(role==='system'){
+    el.className='group-system-event';if(id)el.dataset.id=id;el.textContent=content;return el;
+  }
   el.className = 'msg ' + (role === 'user' ? 'me' : 'them');
   if (id) el.dataset.id = id;
   const text = document.createElement('div');
@@ -3423,7 +3486,9 @@ $('group-save').onclick=createGroup;
 $('btn-group-settings').onclick=openGroupSettings;
 $('btn-mention-all').onclick=()=>insertMentionShortcut((S.group?.members || []).map(m=>m.persona_id));
 $('group-proactive-enabled').onchange=saveGroupProactive;
-$('group-settings-close').onclick=()=> $('dialog-group-settings').classList.add('hidden');
+$('group-members-add').onclick=()=>{if(groupMemberEdit){groupMemberEdit.adding=true;groupMemberEdit.selected.clear();renderGroupMembers();}};
+$('group-members-cancel').onclick=()=>{if(groupMemberEdit){groupMemberEdit.adding=false;groupMemberEdit.selected.clear();renderGroupMembers();}};
+$('group-members-save').onclick=()=>changeGroupMembers('POST');
 $('chat-sync-retry').onclick=()=>loadHistory(true,{keepScroll:!wasAtBottom});
 $('group-cancel').onclick=()=> $('dialog-group').classList.add('hidden');
 $('composer-quote-cancel').onclick=()=>{S.quote=null;renderComposerQuote();$('input').focus();};

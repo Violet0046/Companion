@@ -7,7 +7,7 @@ import re
 
 def migrate(conn):
     version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > 15:
+    if version > 16:
         raise ValueError('数据库版本比当前程序新，拒绝降级运行')
     if version < 1:
         _migrate_jobs(conn)
@@ -39,6 +39,49 @@ def migrate(conn):
         _add_group_handoffs(conn)
     if conn.execute('PRAGMA user_version').fetchone()[0] < 15:
         _add_proactive_opportunities(conn)
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 16:
+        _add_membership_events(conn)
+
+
+def _add_membership_events(conn):
+    """Preserve message IDs/FKs; retain completed membership periods for note visibility."""
+    if conn.in_transaction:raise ValueError('群成员迁移必须在启动时独立执行')
+    path=conn.execute('PRAGMA database_list').fetchone()[2]
+    if path and conn.execute('SELECT 1 FROM user LIMIT 1').fetchone():
+        target=Path(path+'.bak-before-membership-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
+        target.touch(mode=0o600,exist_ok=False)
+        backup=sqlite3.connect(target)
+        try:conn.backup(backup)
+        finally:backup.close()
+    conn.execute('PRAGMA foreign_keys=OFF')
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        definition=conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='conversation_log'").fetchone()[0]
+        if "'system'" not in definition:
+            definition=re.sub(r'CREATE TABLE\s+(?:"conversation_log"|conversation_log)\s*\(', 'CREATE TABLE conversation_log_new (',definition,count=1)
+            definition=definition.replace("'user','assistant','session_close'", "'user','assistant','session_close','system'")
+            objects=[r[0] for r in conn.execute("SELECT sql FROM sqlite_master WHERE tbl_name='conversation_log' AND type IN ('index','trigger') AND sql IS NOT NULL")]
+            sequence=conn.execute("SELECT seq FROM sqlite_sequence WHERE name='conversation_log'").fetchone()
+            conn.execute(definition)
+            conn.execute('INSERT INTO conversation_log_new SELECT * FROM conversation_log')
+            conn.execute('DROP TABLE conversation_log')
+            conn.execute('ALTER TABLE conversation_log_new RENAME TO conversation_log')
+            if sequence:conn.execute("UPDATE sqlite_sequence SET seq=max(seq,?) WHERE name='conversation_log'",(sequence[0],))
+            for sql in objects:conn.execute(sql)
+        conn.execute('CREATE TABLE IF NOT EXISTS conversation_membership_history ('
+            'conversation_id INTEGER NOT NULL REFERENCES conversation(id), persona_id TEXT NOT NULL, '
+            'revision INTEGER NOT NULL, joined_after_message_id INTEGER NOT NULL, left_after_message_id INTEGER NOT NULL, '
+            'PRIMARY KEY(conversation_id,persona_id,revision))')
+        conn.execute('INSERT OR IGNORE INTO conversation_membership_history SELECT conversation_id,persona_id,max(1,revision-1),'
+            'joined_after_message_id,left_after_message_id FROM conversation_member WHERE left_after_message_id IS NOT NULL')
+        conn.execute('DROP INDEX IF EXISTS idx_memory_scope_pending')
+        conn.execute("CREATE UNIQUE INDEX idx_memory_scope_pending ON memory_job(conversation_id,persona_id,coalesce(member_revision,0)) WHERE status!='succeeded'")
+        if conn.execute('PRAGMA foreign_key_check').fetchone():raise ValueError('群成员迁移外键检查失败')
+        conn.execute('PRAGMA user_version=16')
+        conn.commit()
+    except BaseException:
+        conn.rollback();raise
+    finally:conn.execute('PRAGMA foreign_keys=ON')
 
 
 def _add_proactive_opportunities(conn):

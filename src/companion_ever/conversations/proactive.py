@@ -133,7 +133,7 @@ class ProactiveService:
 
     def _history(self,snapshot):
         rows=self.repo.conn.execute("SELECT id,sender_kind,sender_id,content,created_at,quoted_message_id FROM conversation_log "
-            "WHERE conversation_id=? AND id>? AND role IN ('user','assistant') ORDER BY id DESC LIMIT 12",
+            "WHERE conversation_id=? AND id>? AND role IN ('user','assistant','system') ORDER BY id DESC LIMIT 12",
             (snapshot['id'],snapshot.get('joined_after_message_id',0))).fetchall()
         history=[]
         for row in reversed(rows):

@@ -66,12 +66,14 @@ class NoteRepo:
                 'LEFT JOIN conversation c ON c.id=l.conversation_id WHERE e.note_id=n.id AND '
                 '(l.id IS NULL OR c.id IS NULL OR l.user_id!=? OR c.user_id!=? OR coalesce('
                 "(c.kind='private' AND c.persona_id=? AND l.persona_id=?) OR "
-                "(c.kind='group' AND c.id=? AND l.id>?),0)=0))",
+                "(c.kind='group' AND c.id=? AND (l.id>? OR EXISTS(SELECT 1 FROM conversation_membership_history h "
+                "WHERE h.conversation_id=c.id AND h.persona_id=n.persona_id AND l.id>h.joined_after_message_id AND l.id<=h.left_after_message_id))),0)=0))",
                 (user_id,persona_id,user_id,user_id,persona_id,persona_id,conversation_id,scope[0]))}
         return {r[0] for r in self.conn.execute('SELECT n.id FROM note n WHERE n.user_id=? AND n.persona_id=? '
             'AND EXISTS(SELECT 1 FROM note_evidence e WHERE e.note_id=n.id) AND NOT EXISTS('
             'SELECT 1 FROM note_evidence e JOIN conversation_log l ON l.id=e.message_id WHERE e.note_id=n.id '
-            'AND (l.user_id!=? OR l.conversation_id!=? OR l.id<=?))',
+            'AND (l.user_id!=? OR l.conversation_id!=? OR NOT (l.id>? OR EXISTS(SELECT 1 FROM conversation_membership_history h '
+            'WHERE h.conversation_id=l.conversation_id AND h.persona_id=n.persona_id AND l.id>h.joined_after_message_id AND l.id<=h.left_after_message_id))))',
             (user_id,persona_id,user_id,conversation_id,scope[0]))}
 
     def sources(self,user,persona,note_ids):
@@ -103,7 +105,9 @@ class NoteRepo:
             'WHERE e.note_id=? AND n.user_id=? AND n.persona_id=? AND m.user_id=n.user_id AND '
             "((c.kind='private' AND c.persona_id=n.persona_id) OR (c.kind='group' AND EXISTS(SELECT 1 FROM conversation_member cm "
             'WHERE cm.conversation_id=c.id AND cm.persona_id=n.persona_id AND m.id>cm.joined_after_message_id '
-            'AND (cm.left_after_message_id IS NULL OR m.id<=cm.left_after_message_id))))' + role + ' ORDER BY e.message_id DESC LIMIT ?',
+            'AND (cm.left_after_message_id IS NULL OR m.id<=cm.left_after_message_id) OR cm.conversation_id=c.id AND cm.persona_id=n.persona_id AND EXISTS('
+            'SELECT 1 FROM conversation_membership_history h WHERE h.conversation_id=c.id AND h.persona_id=n.persona_id '
+            'AND m.id>h.joined_after_message_id AND m.id<=h.left_after_message_id))))' + role + ' ORDER BY e.message_id DESC LIMIT ?',
             (note_id, user_id, persona_id, limit))]
 
     def get(self, note_id: str) -> Optional[Note]:

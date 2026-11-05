@@ -24,6 +24,10 @@ class GroupChatIn(ChatIn):
     mentions:list[dict]=Field(default_factory=list,max_length=8)
 
 
+class MembersIn(BaseModel):
+    persona_ids:list[str]=Field(min_length=1,max_length=8)
+
+
 class ReadIn(BaseModel):
     message_id:StrictInt=Field(gt=0)
 
@@ -131,4 +135,9 @@ def retry(request:Request,cid:int,gid:str):
 
 @router.delete('/api/groups/{cid}/members/{persona}')
 def leave(request:Request,cid:int,persona:str):
-    ctx,user=target(request,cid);ctx.services.groups.leave(user,cid,persona);return {'ok':True}
+    ctx,user=target(request,cid);return checked(ctx.services.groups.leave,user,cid,persona)
+
+
+@router.post('/api/groups/{cid}/members')
+def add_members(request:Request,cid:int,payload:MembersIn):
+    ctx,user=target(request,cid);return checked(ctx.services.groups.add_members,user,cid,payload.persona_ids)

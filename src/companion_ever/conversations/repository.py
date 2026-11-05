@@ -79,6 +79,13 @@ class ConversationRepo:
             "AND role IN ('user','assistant') ORDER BY id DESC LIMIT ?",(cid,lower,until_id,until_id,limit)).fetchall()
         return [row_to_conversation_message(r) for r in reversed(rows)]
 
+    def membership_events(self,user,persona,cid,after,through):
+        scope=self.memory_scope(user,persona,cid)
+        return [dict(r) for r in self.conn.execute(
+            "SELECT id,content,created_at FROM conversation_log WHERE conversation_id=? AND role='system' "
+            "AND id>? AND id<=? ORDER BY id DESC LIMIT 12",
+            (cid,max(after,scope['joined_after_message_id'] or 0),through))]
+
     def external_source_ids(self, user, persona, current_group_id=None):
         """Chat context only: private -> joined groups; group -> own private."""
         if current_group_id is not None:

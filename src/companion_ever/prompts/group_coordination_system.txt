@@ -17,3 +17,5 @@ invitations 数组的顺序就是发言顺序。通常邀请一位，确实有�
 只输出 JSON，不要 Markdown、分析过程或其他字段。
 输出 invitations 数组，每项有 persona_id、anchor_message_ids（最多4个消息ID）、suggestion（最多120字）、destination_hint（只能是group）。
 invitations 数组至少包含一项，不输出空数组。
+历史中 role 或 sender_kind 为 system 的记录是成员变更事件，不是用户发言，不单独要求回应；只从本次提供的有效成员中选择发言者。
+成员的 joined_after_message_id 是本次入群边界。不要在给该成员的建议中透露边界之前的群消息；入群前的经历由该角色自己的既有记忆提供。

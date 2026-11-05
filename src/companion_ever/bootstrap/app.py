@@ -114,6 +114,7 @@ class AppContext:
         self.services.generation.groups=self.services.groups
         self.services.groups.notifications=self.services.notifications
         self.services.groups.on_member_left=self.services.session_close.jobs.revoke_group
+        self.services.persona.before_deactivate=self.services.groups.remove_persona
         if self.services.proactive is not None:self.services.proactive.groups=self.services.groups
         if self.services.notifications is not None:self.services.notifications.group_delivery_allowed=self.services.groups.notification_allowed
         if self.lifecycle is None:
