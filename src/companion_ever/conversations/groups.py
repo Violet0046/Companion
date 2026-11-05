@@ -275,7 +275,8 @@ class GroupService:
         invitation=self.group_repo.invitation(g['id'],persona)
         history=self._history_for(g,persona)
         targets=json.loads(g['target_persona_ids']);done=json.loads(g['completed_persona_ids'])
-        members=[m['persona_id'] for m in self.members(g['user_id'],g['conversation_id'])]
+        member_rows=self.members(g['user_id'],g['conversation_id'])
+        members=[m['persona_id'] for m in member_rows]
         pending=[p for p in targets if p not in done and p!=persona]
         # Explicit user selections all get a turn; automatic handoffs retain
         # the original three-speaker bound and cannot expand an all-member round.
@@ -288,7 +289,7 @@ class GroupService:
             'root_message_id':g['trigger_message_id'],
             'source_message_id':source_id or g['trigger_message_id'],
             'source_message':source,
-            'member_names':{m['persona_id']:m['name'] for m in self.members(g['user_id'],g['conversation_id'])},
+            'member_names':{m['persona_id']:m['name'] for m in member_rows},
             'members':members,'already_spoken_ids':done,'pending_persona_ids':pending,
             'handoff_eligible_ids':[p for p in members if p!=persona and p not in done and (p in pending or len(targets)<limit)],
             'remaining_new_speakers':max(0,limit-len(targets)),
@@ -300,6 +301,13 @@ class GroupService:
         reply=GroupReply.model_validate_json(clean_response(self._request(g,'chat',persona,prompt['messages'],'group_reply')))
         if (reply.decision=='skip' and (reply.channel is not None or reply.messages)) or (reply.decision=='speak' and (reply.channel!='group' or not reply.messages or any(not m.strip() or len(m)>16000 for m in reply.messages))):
             raise ValueError('群回复格式无效')
+        # Some models return a display name in this explicit routing field.
+        # Resolve only an exact, unique current-member name; IDs take precedence.
+        # Never infer an invitation from ordinary reply text or quoted @ mentions.
+        if reply.handoff and reply.handoff.persona_id not in members:
+            matches=[m['persona_id'] for m in member_rows if m['name']==reply.handoff.persona_id]
+            if len(matches)==1:
+                reply.handoff=reply.handoff.model_copy(update={'persona_id':matches[0]})
         saved=[]
         with transaction(self.conn):
             current_member=self.require_member(g['user_id'],g['conversation_id'],persona)
