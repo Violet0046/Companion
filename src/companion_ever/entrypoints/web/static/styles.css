@@ -15,6 +15,7 @@
   --text-dim:    #565c66;
   --text-muted:  #9aa0aa;
   --accent:      #ff2442;   /* 小红书红 */
+  --success:     #168653;   /* 恢复等正向操作 */
   --accent-soft: #ff6b81;
   --accent-dim:  #ffdde3;   /* 浅粉底（开关选中 / 标签 / 提示条） */
   --bubble-me:   #3a7dff;   /* 我的气泡：蓝底白字（红底看久了刺眼） */
@@ -1003,11 +1004,15 @@ body {
 .dlg-danger {
   margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line);
 }
-.dlg-danger-btn {
+.dlg-danger-btn, .action-outline {
   font: inherit; font-size: 13.5px; cursor: pointer;
-  background: none; border: 1px solid var(--line); color: var(--text-dim);
+  background: none; border: 1px solid var(--line);
   border-radius: var(--radius-sm); padding: 8px 14px;
+  flex: 0 0 auto; white-space: nowrap;
 }
+.dlg-danger-btn { color: var(--accent); }
+.action-outline.persona-restore { color: var(--success); }
+.dlg-danger-btn:disabled, .action-outline:disabled { opacity: .45; cursor: default; }
 
 .account-input { display: block; margin: 12px 0; width: 100%; box-sizing: border-box; }
 .account-row { width: 100%; text-align: left; font: inherit; background: transparent; border: 0; color: inherit; cursor: pointer; }
@@ -1015,8 +1020,3 @@ body {
 
 /* Pinned chats retain the list rhythm, with a quiet surface distinction. */
 #conv-list .conversation-pinned { background: var(--surface-2, #f1f2f5); }
-.persona-purge { flex: 0 0 auto; border: 0; background: none; color: var(--primary, #ff244d); padding: 10px 8px; font: inherit; font-size: 13px; white-space: nowrap; }
-.persona-purge:disabled { opacity: .45; }
-
-.group-delete { color: var(--accent); }
-.group-delete:disabled { opacity: .45; cursor: default; }
