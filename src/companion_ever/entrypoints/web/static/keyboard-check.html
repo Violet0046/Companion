@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="键盘检查">
+<meta name="theme-color" content="#f2f3f6">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<title>同行 · 键盘检查</title>
+<style>
+:root { color-scheme: light; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#16181c; background:#f2f3f6; }
+body { margin:0; padding:calc(18px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom)); }
+main { max-width:520px; margin:auto; }
+h1 { font-size:22px; margin:0 0 12px; }
+p { font-size:14px; line-height:1.7; color:#565c66; }
+section { background:#fff; border-radius:14px; padding:16px; margin:16px 0; }
+h2 { font-size:16px; margin:0 0 8px; }
+textarea, [contenteditable] { display:block; box-sizing:border-box; width:100%; min-height:80px; padding:12px; border:1px solid #d8dce3; border-radius:10px; background:#fff; font:inherit; font-size:17px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
+textarea:focus, [contenteditable]:focus { outline:2px solid #ff6b81; outline-offset:1px; }
+label { display:block; }
+.mode { display:inline-block; border-radius:8px; padding:5px 9px; background:#e8eaee; font-size:13px; }
+a { color:#c51032; }
+</style>
+</head>
+<body><main>
+<h1>键盘检查</h1>
+<div id="mode" class="mode">正在识别运行方式</div>
+<p>在每个区域点击九宫格左上角的标点键，观察是否展开「？、！、……」供选择。可以向下滚动测试下一项。</p>
+<p>此页不调用模型，不发送或保存测试文本。请把结果记成「A 正常／异常，B 正常／异常，C 正常／异常」。</p>
+<section><h2><label for="case-a">A · 当前聊天框的输入属性</label></h2>
+<textarea id="case-a" rows="2" autocomplete="off" autocorrect="on" spellcheck="true" enterkeyhint="send" placeholder="点这里，再点击标点键"></textarea></section>
+<section><h2><label for="case-b">B · 不带附加属性的文本框</label></h2>
+<textarea id="case-b" rows="2" placeholder="点这里，再点击标点键"></textarea></section>
+<section><h2 id="case-c-label">C · 可编辑文本区域</h2>
+<div id="case-c" contenteditable="plaintext-only" role="textbox" aria-multiline="true" aria-labelledby="case-c-label"></div></section>
+<p>请在 Safari 和主屏幕两种模式下比较。可在 Safari 分享菜单将这个检查页临时添加到主屏幕；不用删除原来的同行。主屏幕入口应直接打开此页，并在顶部显示「主屏幕模式」。</p>
+<p><a href="/">返回同行</a></p>
+</main>
+<script>
+const standalone=navigator.standalone===true || window.matchMedia('(display-mode: standalone)').matches;
+document.getElementById('mode').textContent=standalone ? '主屏幕模式 · 检查页 v1' : '浏览器模式 · 检查页 v1';
+</script>
+</body></html>
