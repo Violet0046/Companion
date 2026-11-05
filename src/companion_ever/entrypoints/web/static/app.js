@@ -629,7 +629,7 @@ function renderContacts() {
     html += archived.map((p) => `<div class="cell" data-archived="${escAttr(p.persona_id)}">
       <div class="ava" style="background:var(--surface-2);color:var(--text-muted)">${esc(p.name.slice(0, 1))}</div>
       <div class="cell-body"><div class="cell-title">${esc(p.name)}</div><div class="cell-sub">${esc(p.identity || '已删除')}</div></div>
-      <button class="dlg-danger-btn persona-purge" data-archived="${escAttr(p.persona_id)}" type="button">彻底删除</button><button class="action-outline persona-restore" data-archived="${escAttr(p.persona_id)}">恢复</button>
+      <button class="dlg-danger-btn persona-purge" data-archived="${escAttr(p.persona_id)}" type="button">彻底删除</button><button class="action-pill persona-restore" data-archived="${escAttr(p.persona_id)}">恢复</button>
     </div>`).join('');
   }
   html += '<div class="group-label">功能</div>';

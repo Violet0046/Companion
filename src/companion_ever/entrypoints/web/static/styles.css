@@ -1004,15 +1004,14 @@ body {
 .dlg-danger {
   margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line);
 }
-.dlg-danger-btn, .action-outline {
-  font: inherit; font-size: 13.5px; cursor: pointer;
-  background: none; border: 1px solid var(--line);
-  border-radius: var(--radius-sm); padding: 8px 14px;
+.dlg-danger-btn, .action-pill {
+  font: inherit; font-size: 13.5px; font-weight: 600; line-height: 1.6; cursor: pointer;
+  border: 0; color: #fff; border-radius: 999px; padding: 6px 14px;
   flex: 0 0 auto; white-space: nowrap;
 }
-.dlg-danger-btn { color: var(--accent); }
-.action-outline.persona-restore { color: var(--success); }
-.dlg-danger-btn:disabled, .action-outline:disabled { opacity: .45; cursor: default; }
+.dlg-danger-btn { background: var(--accent); }
+.action-pill.persona-restore { background: var(--success); }
+.dlg-danger-btn:disabled, .action-pill:disabled { opacity: .45; cursor: default; }
 
 .account-input { display: block; margin: 12px 0; width: 100%; box-sizing: border-box; }
 .account-row { width: 100%; text-align: left; font: inherit; background: transparent; border: 0; color: inherit; cursor: pointer; }
