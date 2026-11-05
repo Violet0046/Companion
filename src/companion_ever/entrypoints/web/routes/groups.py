@@ -153,3 +153,10 @@ def group_pin(request:Request,cid:int):
 def set_group_pin(request:Request,cid:int,payload:ProactiveIn):
     ctx,user=target(request,cid)
     return ctx.services.conversation.pin(user,conversation_id=cid,enabled=payload.enabled)
+
+
+@router.delete('/api/groups/{cid}')
+def delete_group(request:Request,cid:int):
+    ctx,user=target(request,cid)
+    ctx.services.groups.delete(user,cid)
+    return {'status':'deleted','conversation_id':cid}

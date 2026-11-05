@@ -1105,6 +1105,7 @@ function renderGroupMembers() {
   const members=S.group.members || [],box=$('group-settings-members');box.innerHTML='';
   $('group-members-label').textContent=`群成员（${members.length}/8）`;
   $('group-members-add').disabled=!state.ready || state.busy || members.length>=8;
+  $('group-delete').disabled=!state.ready || state.busy;
   $('group-member-picker').classList.toggle('hidden',!state.adding);
   $('group-settings-options').classList.toggle('hidden',!!state.adding);
   $('group-members-add').classList.toggle('hidden',!!state.adding);
@@ -1177,6 +1178,31 @@ async function openGroupSettings() {
     state.ready=true;renderGroupMembers();
     toggle.checked=setting.enabled;toggle.disabled=false;
   } catch(error){if(current()){state.error='群设置暂未同步，请关闭后重试';$('group-members-hint').textContent=state.error;}}
+}
+
+async function deleteGroup() {
+  const state=groupMemberEdit;
+  if(!state || !currentMemberEdit(state) || !state.ready || state.busy)return;
+  const id=state.id,user=S.user,name=S.group.name,actor=S.account?.csrf_token;
+  if(!confirm(`删除群聊「${name}」？\n\n群聊与聊天记录将永久删除，无法恢复。角色及已经形成的记忆仍保留。`))return;
+  state.busy=true;renderGroupMembers();
+  try {
+    await api(`/api/groups/${id}`,{method:'DELETE'});
+    if(actor!==S.account?.csrf_token)return;
+    S.convsRequest=(S.convsRequest || 0)+1;
+    S.convs=S.convs.filter(c=>c.group_id!==id);
+    conversationCache.remove(cacheOwner(),state.scope);composerDrafts.delete(state.scope);
+    localStorage.removeItem(outboxKey(user,null,id));localStorage.removeItem(`ce_group_continue:${user}:${id}`);
+    localStorage.removeItem('ce_read_'+`group/${user}/${id}`);
+    if(groupMemberEdit===state){S.groupSettingsRequest=(S.groupSettingsRequest || 0)+1;groupMemberEdit=null;$('dialog-group-settings').classList.add('hidden');}
+    if(S.group?.id===id){
+      releaseGroupPresence();disconnectTarget();S.targetRequest=(S.targetRequest || 0)+1;
+      S.group=null;S.persona=null;S.info=null;S.personaTitle='';S.generationId=null;S.replyState=null;S.latestClientMessageId=null;
+      $('input').value='';clearComposerContext();resetChatView();$('persona-name').textContent='';
+      showView('messages');
+    }
+    renderConvs();renderMe();toast('群聊已删除');loadConvs();
+  } catch(error){if(currentMemberEdit(state)){state.busy=false;renderGroupMembers();toast('删除失败：'+error.message);}}
 }
 
 async function saveGroupProactive() {
@@ -3509,6 +3535,7 @@ $('create-persona-action').onclick=openCreatePersona;
 $('create-group-action').onclick=openCreateGroup;
 $('group-save').onclick=createGroup;
 $('btn-group-settings').onclick=openGroupSettings;
+$('group-delete').onclick=deleteGroup;
 $('btn-mention-all').onclick=()=>insertMentionShortcut((S.group?.members || []).map(m=>m.persona_id));
 $('group-proactive-enabled').onchange=saveGroupProactive;
 $('group-members-add').onclick=()=>{if(groupMemberEdit){groupMemberEdit.adding=true;groupMemberEdit.selected.clear();renderGroupMembers();}};

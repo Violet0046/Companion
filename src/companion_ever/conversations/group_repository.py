@@ -164,3 +164,38 @@ class GroupRepo:
         done=json.loads(g['completed_persona_ids']);done.append(persona)
         self.conn.execute('UPDATE generation SET completed_persona_ids=? WHERE id=?',(json.dumps(done),g['id']))
         return saved
+
+
+    def delete(self,cid):
+        """Caller authorizes and owns the transaction. Keep notes, remove raw evidence."""
+        messages='SELECT id FROM conversation_log WHERE conversation_id=?1'
+        jobs='SELECT id FROM memory_job WHERE conversation_id=?1'
+        generations=f'SELECT id FROM generation WHERE conversation_id=?1 OR trigger_message_id IN ({messages}) OR context_message_id IN ({messages})'
+        # A deleted conversation must not refund already accepted user requests.
+        self.conn.execute("INSERT INTO deleted_message_usage(user_id,accepted_at,count) SELECT user_id,created_at,count(*) FROM conversation_log WHERE conversation_id=? AND role='user' GROUP BY user_id,created_at ON CONFLICT(user_id,accepted_at) DO UPDATE SET count=count+excluded.count",(cid,))
+        self.conn.execute("INSERT INTO deleted_message_usage(user_id,accepted_at,count) SELECT c.user_id,g.accepted_at,count(*) FROM (SELECT min(created_at) AS accepted_at,conversation_id FROM generation WHERE conversation_id=? AND trigger_kind='manual_continue' AND request_key IS NOT NULL GROUP BY request_key,conversation_id) g JOIN conversation c ON c.id=g.conversation_id GROUP BY c.user_id,g.accepted_at ON CONFLICT(user_id,accepted_at) DO UPDATE SET count=count+excluded.count",(cid,))
+        # Pending proactive work can be owned by a private conversation, while its
+        # source or proposed destination is this group. Cancel instead of rerouting.
+        self.conn.execute("UPDATE generation SET status='cancelled',lease_expires_at=NULL,opportunity_json=NULL,last_error='群聊已删除',completed_at=CURRENT_TIMESTAMP WHERE status IN ('queued','running') AND opportunity_json IS NOT NULL AND (json_extract(opportunity_json,'$.source.id')=?1 OR json_extract(opportunity_json,'$.forced_group_id')=?1 OR EXISTS(SELECT 1 FROM json_each(opportunity_json,'$.destinations') d WHERE json_extract(d.value,'$.id')=?1))",(cid,))
+        self.conn.execute(f'DELETE FROM push_delivery WHERE conversation_id=?1 OR message_id IN ({messages}) OR generation_id IN ({generations})',(cid,))
+        attempts=f"SELECT id FROM task_attempt WHERE kind='memory' AND job_id IN ({jobs})"
+        self.conn.execute(f'DELETE FROM task_event WHERE attempt_id IN ({attempts})',(cid,))
+        self.conn.execute(f'DELETE FROM task_attempt WHERE id IN ({attempts})',(cid,))
+        # Evidence-removal triggers journal the source change for independent summaries.
+        self.conn.execute(f'DELETE FROM note_evidence WHERE message_id IN ({messages})',(cid,))
+        for table,column in [('note_link','job_id'),('note_revision','job_id'),('fact_change','source_job_id')]:
+            self.conn.execute(f'UPDATE {table} SET {column}=NULL WHERE {column} IN ({jobs})',(cid,))
+        self.conn.execute('DELETE FROM memory_job WHERE conversation_id=?',(cid,))
+        self.conn.execute(f'DELETE FROM group_invitation WHERE generation_id IN ({generations})',(cid,))
+        self.conn.execute(f'UPDATE group_invitation SET source_message_id=NULL WHERE source_message_id IN ({messages})',(cid,))
+        self.conn.execute('DELETE FROM conversation_membership_history WHERE conversation_id=?',(cid,))
+        self.conn.execute('DELETE FROM conversation_member WHERE conversation_id=?',(cid,))
+        # Proactive outputs in a private conversation survive even if their original
+        # group anchor is removed; only their now-unusable generation metadata goes.
+        self.conn.execute(f'UPDATE conversation_log SET generation_id=NULL WHERE generation_id IN ({generations})',(cid,))
+        self.conn.execute(f'DELETE FROM generation WHERE id IN ({generations})',(cid,))
+        self.conn.execute(f'UPDATE conversation_log SET quoted_message_id=NULL WHERE quoted_message_id IN ({messages})',(cid,))
+        self.conn.execute(f'UPDATE conversation_log SET reply_to_message_id=NULL WHERE reply_to_message_id IN ({messages})',(cid,))
+        self.conn.execute(f'DELETE FROM thinking_log WHERE message_id IN ({messages})',(cid,))
+        self.conn.execute('DELETE FROM conversation_log WHERE conversation_id=?',(cid,))
+        self.conn.execute('DELETE FROM conversation WHERE id=?',(cid,))

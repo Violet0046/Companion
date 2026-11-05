@@ -106,6 +106,11 @@ class GroupService:
             cid=self.group_repo.create(user,name,personas)
         return self.info(user,cid)
 
+    def delete(self,user,cid):
+        with transaction(self.conn):
+            self.require(user,cid)
+            self.group_repo.delete(cid)
+
     def info(self,user,cid):
         return {**self.require(user,cid),'members':self.members(user,cid)}
 
@@ -323,7 +328,8 @@ class GroupService:
         gid=g['id'];self.require(g['user_id'],g['conversation_id'])
         if not self.repo.claim(gid):
             for m in self.repo.outputs(gid):yield {'type':'message_done','generation_id':gid,'message':m,'replayed':True}
-            status=self.repo.get(gid)['status'];yield {'type':'done' if status=='completed' else status,'generation_id':gid}
+            saved=self.repo.get(gid)
+            status=saved['status'] if saved else 'cancelled';yield {'type':'done' if status=='completed' else status,'generation_id':gid}
             return
         try:
             yield {'type':'start','generation_id':gid}
