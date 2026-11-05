@@ -188,7 +188,7 @@ class PromptService:
         else:
             trigger='协调助手邀请你接话。先读最新群历史，再判断能补充什么；不要重新起头或重复已完成的回应。'
         quoted=(current or {}).get('quoted_message')
-        system=compose(load('group_chat_system.txt'),{
+        system=compose(load('conversations/group.txt'),{
             'persona_section':self._render_persona_basics(self._get_persona_basics(user,persona)),
             'self_persona_id':persona,'now':format_now(self.tz_offset_hours),'suggestion':suggestion,
             'notes_section':self._render_related_notes(notes,self.note_service.sources(user,persona,[n.id for n in notes]) if notes else None),'summary_section':derived,
@@ -202,7 +202,7 @@ class PromptService:
         if self.summary_service is not None and conversation_id is not None:
             for card in cards:
                 card['relationship']=self.summary_service.prompt_text(user,card['persona_id'],conversation_id=conversation_id,relationship_only=True)
-        system=compose(load('group_coordination_system.txt'),{'now':format_now(self.tz_offset_hours),'remaining':str(remaining),
+        system=compose(load('conversations/coordination.txt'),{'now':format_now(self.tz_offset_hours),'remaining':str(remaining),
             'trigger_section':'这是用户主动点击“继续聊聊”的请求。虽然没有新用户消息，但用户希望群成员继续接话，从最新发言继续。' if manual else '这是用户在群内发送新消息引起的一次协调。'})
         payload={'trigger':'manual_continue' if manual else 'user_message','trigger_message_id':trigger_message_id,'already_spoken_ids':spoken_ids,
             'eligible_persona_ids':eligible_ids,'members':cards,'messages':history}
@@ -215,7 +215,7 @@ class PromptService:
         group=next((d for d in destinations if d['kind']=='group'),None)
         derived=self.summary_service.prompt_text(user_id,persona_id,conversation_id=group['conversation_id']) if self.summary_service and group else (
             self.summary_service.prompt_text(user_id,persona_id) if self.summary_service else '')
-        system=compose(load('proactive_system.txt'),{
+        system=compose(load('conversations/proactive.txt'),{
             'persona_section':self._render_persona_basics(self._get_persona_basics(user_id,persona_id)),
             'self_persona_id':persona_id,'now':format_now(self.tz_offset_hours),'summary_section':derived,
             'decision_section':'这是用户要求的功能测试，请选择候选会话并生成自然的主动消息，decision 必须为 speak。' if test else '没有合适理由或用户希望暂不打扰时，选择 skip。',
@@ -286,7 +286,7 @@ class PromptService:
                         for m in source['messages']]
             payload.append({k: source[k] for k in ('conversation_id', 'kind', 'name', 'omitted_earlier')})
             payload[-1]['messages'] = messages
-        return '\n\n' + load('external_context.txt').strip() + '\n' + json.dumps(payload, ensure_ascii=False)
+        return '\n\n' + load('fragments/external_context.txt').strip() + '\n' + json.dumps(payload, ensure_ascii=False)
 
     def _get_recent_messages(
         self,
@@ -374,7 +374,7 @@ class PromptService:
         current_input: str = "",
         note_sources: dict | None = None,
     ) -> str:
-        """按 chat_system.txt 渲染完整 system prompt。
+        """按 conversations/private.txt 渲染完整 system prompt。
 
         章节标题与行为指引都在模板里，这里只提供各小节的正文；
         正文为空的小节（无相关记忆、无摘要）连标题一起消失。

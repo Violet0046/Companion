@@ -220,7 +220,7 @@ class ExtractionService:
 
     def _repair(self,state):
         checkpoint('repair',error=describe_error(state['validation_error']))
-        return {'model_messages':state['model_messages']+correction_messages(state['response'],state['validation_error'],load('repair_evidence.txt')),
+        return {'model_messages':state['model_messages']+correction_messages(state['response'],state['validation_error'],load('fragments/extraction_repair.txt')),
                 'repaired':True}
 
     def _tools(self,state):

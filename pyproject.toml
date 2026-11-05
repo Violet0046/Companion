@@ -39,4 +39,4 @@ where = ["src"]
 
 # PWA 前端静态文件（web/）跟着包一起装
 [tool.setuptools.package-data]
-companion_ever = ["entrypoints/web/static/*", "entrypoints/web/static/**/*", "prompts/*.txt", "infrastructure/database/*.sql"]
+companion_ever = ["entrypoints/web/static/*", "entrypoints/web/static/**/*", "prompts/**/*.txt", "infrastructure/database/*.sql"]

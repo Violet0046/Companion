@@ -200,7 +200,7 @@ class SummaryService:
             raise ValueError('本批摘要输入超过预算，未截断或跳过操作；请精简过长事实后重试')
         return {'checkpoint':checkpoint,'expected_cursor':expected_cursor,'previous':previous,
                 'referenced':referenced,'impacted':impacted,'available':available,'before_blocks':before_blocks,
-                'events':events,'model_messages':[{'role':'system','content':load('summary_system.txt')+'\n输出 JSON Schema：\n'+json.dumps(schema,ensure_ascii=False)},
+                'events':events,'model_messages':[{'role':'system','content':load('memory/summary.txt')+'\n输出 JSON Schema：\n'+json.dumps(schema,ensure_ascii=False)},
                                                 {'role':'user','content':json.dumps(payload,ensure_ascii=False)}]}
 
     def check_budget(self,state):
@@ -262,7 +262,7 @@ class SummaryService:
 
     def _repair(self,state):
         task_checkpoint('repair',error=describe_error(state['validation_error']))
-        return {'model_messages':state['model_messages']+correction_messages(state['response'],state['validation_error'],load('repair_citation.txt')),
+        return {'model_messages':state['model_messages']+correction_messages(state['response'],state['validation_error'],load('fragments/summary_repair.txt')),
                 'repaired':True}
 
     def _commit(self,state):
@@ -350,7 +350,7 @@ class SummaryService:
                 lines.append(label+'（上次成功整理）：\n'+'\n'.join(entries))
         if not lines:
             return ''
-        # 只给数据。"旧摘要不能否定用户最新陈述"这条规则在 prompts/chat_system.txt 里——
+        # 只给数据。"旧摘要不能否定用户最新陈述"这条规则在 prompts/conversations/private.txt 里——
         # 那是聊天侧该管的事，不该由摘要服务塞进正文。
         return '\n\n'.join(lines)
 

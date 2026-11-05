@@ -187,6 +187,7 @@ def case_payload(case: dict) -> dict:
         'relation_rules': {relation.value: {'from_kind':source,'to_kind':target}
                            for relation,(source,target) in RELATION_KINDS.items()},
         **({'conversation':case['conversation']} if case.get('conversation') else {}),
+        **({'membership_events':case['membership_events']} if case.get('conversation',{}).get('kind')=='group' and case.get('membership_events') else {}),
         'messages': [{k: m[k] for k in ('id', 'role', 'content', 'created_at', 'local_time','sender_kind','sender_id') if k in m}
                      for m in case['messages']],
     }
@@ -216,7 +217,7 @@ def draft_messages(case: dict, *, response_schema=None, tools=None,
     """组装首轮请求：system 是协议与规则，user 是案例与首轮进展。
 
     静态协议（工具说明、调用预算、空召回规则、载荷说明）在
-    prompts/memory_draft_system.txt 里；这里只填数据。
+    prompts/memory/extraction.txt 里；这里只填数据。
     """
     validate_case(case)
     payload = {
@@ -230,7 +231,7 @@ def draft_messages(case: dict, *, response_schema=None, tools=None,
                        tools=tools),
     }
     return [
-        {'role': 'system', 'content': load('memory_draft_system.txt') + ('\n\n'+load('memory_group_mode.txt') if case.get('conversation',{}).get('kind')=='group' else '') + '\n输出 JSON Schema：\n'
+        {'role': 'system', 'content': load('memory/extraction.txt') + ('\n\n'+load('fragments/group_memory.txt') if case.get('conversation',{}).get('kind')=='group' else '') + '\n输出 JSON Schema：\n'
          + json.dumps(response_schema or Draft.model_json_schema(), ensure_ascii=False)},
         {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
     ]
@@ -239,4 +240,4 @@ def draft_messages(case: dict, *, response_schema=None, tools=None,
 def generate_draft(case: dict, llm, *, repair_attempts=0, **kwargs) -> Draft:
     return checked_json(llm,draft_messages(case),lambda data:validate_draft(case,data),
                         repair_attempts=repair_attempts,
-                        source_rule=load('repair_evidence.txt'),**kwargs)
+                        source_rule=load('fragments/extraction_repair.txt'),**kwargs)

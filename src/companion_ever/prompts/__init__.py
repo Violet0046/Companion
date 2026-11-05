@@ -1,25 +1,13 @@
-"""prompts — LLM 提示词模板。
+"""按链路组织的 LLM 提示词，首次读取后缓存。
 
-使用 importlib.resources 从包内读取 .txt 文件。
-模块加载时缓存（@lru_cache），无运行时 IO。
+conversations/：私聊、群聊、协调、主动触达的完整模板。
+memory/：记忆整理、画像与关系摘要的完整模板。
+fragments/：外部上下文、群整理视角、两类校验纠错的按需片段。
 
-可用模板：
-- chat_system.txt: 聊天 system prompt 的完整骨架（章节标题 + 行为指引）
-- group_chat_system.txt: 群角色身份、顺序接话、交棒与 JSON 回复契约
-- group_coordination_system.txt: 一次协调产生有顺序的成员邀请
-- external_context.txt: 私聊/群聊有未整理外部原文时才动态附加的来源说明
-- proactive_system.txt: 角色主动机会，一次 JSON 输出选择私聊或群聊并生成正文
-- memory_draft_system.txt: 后台整理两层笔记的系统提示
-- summary_system.txt: 从 fact 操作独立演化两个摘要的系统提示
-- repair_evidence.txt / repair_citation.txt: 校验失败后的来源约束（按场景区分）
-
-模板约定：
-- chat_system.txt 用 `{name}` 占位符填充小节正文；小节标题是字面文本，
-  行为指引直接引用同一批标题，因此"提示词引用的章节"与"实际渲染的章节"
-  不会走偏。占位符为空的小节连同标题一起消失。
-- 私聊与群聊的本轮引用均由 PromptService 统一组装；没有引用时不增加说明。
-- 群角色共用一个模板，通过 invocation 区分用户 @、AI 交棒、协调邀请和手动续聊，不为组合新增模板。
-- 其余模板由调用方自行拼接（摘要、纠错说明等），只提供静态文本。
+调用方显式 load('目录/名称.txt')；不自动继承或追加公共规则。
+compose 按二级标题填充占位符，空节连标题移除，插入值不再次展开。
+本轮引用和触发类型由 conversations.context 组装；结构化输出的
+Schema 及校验错误由对应链路附加，目录只存静态规则。
 """
 from __future__ import annotations
 
@@ -62,7 +50,7 @@ def compose(template: str, values: dict[str, str]) -> str:
 
 
 # 模块级常量（首次访问时加载；之后命中 lru_cache）
-CHAT_SYSTEM: str = load("chat_system.txt")
+CHAT_SYSTEM: str = load("conversations/private.txt")
 
 
 __all__ = [
