@@ -66,8 +66,9 @@ class GroupRepo:
         self.conn.execute("INSERT INTO conversation_log(user_id,conversation_id,turn_index,role,sender_kind,sender_id,content) "
             "VALUES (?,?,?,'system','system','system',?)",(user,cid,turn,content))
 
-    def history(self,cid,*,before_id=None,after_id=None,limit=50):
+    def history(self,cid,*,before_id=None,after_id=None,limit=50,messages_only=False):
         sql="SELECT * FROM conversation_log WHERE conversation_id=? AND role IN ('user','assistant','system')"
+        if messages_only:sql+=" AND role!='system'"
         args=[cid];direction='DESC'
         if before_id is not None:sql+=' AND id<?';args.append(before_id)
         elif after_id is not None:sql+=' AND id>?';args.append(after_id);direction='ASC'

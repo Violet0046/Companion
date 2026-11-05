@@ -25,6 +25,7 @@ def row_to_conversation_message(row: sqlite3.Row) -> ConversationMessage:
         conversation_id=row['conversation_id'] if 'conversation_id' in row.keys() else None,
         sender_kind=row['sender_kind'] if 'sender_kind' in row.keys() else None,
         sender_id=row['sender_id'] if 'sender_id' in row.keys() else None,
+        sender_name=row['sender_name'] if 'sender_name' in row.keys() else None,
     )
 
 
@@ -104,7 +105,7 @@ class ConversationRepo:
     def quote(self, conversation_id, message_id):
         if type(message_id) is not int or message_id <= 0:
             raise ValueError('引用消息 ID 无效')
-        row = self.conn.execute("SELECT id,role,content,sender_kind,sender_id,created_at FROM conversation_log "
+        row = self.conn.execute("SELECT id,role,content,sender_kind,sender_id,sender_name,created_at FROM conversation_log "
             "WHERE id=? AND conversation_id=? AND role IN ('user','assistant')", (message_id,conversation_id)).fetchone()
         if row is None:
             raise ValueError('只能引用当前会话中可见的已发送消息')

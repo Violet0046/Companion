@@ -121,6 +121,7 @@ class MemoryJobRepo:
             return claimed
 
     def valid_scope(self,job):
+        if not job:return False
         if job['conversation_kind']!='group':return True
         try:scope=ConversationRepo(self.conn).memory_scope(job['user_id'],job['persona_id'],job['conversation_id'])
         except PermissionError:return False

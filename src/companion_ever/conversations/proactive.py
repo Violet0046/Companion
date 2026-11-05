@@ -132,7 +132,7 @@ class ProactiveService:
             except (PermissionError,ValueError):continue
 
     def _history(self,snapshot):
-        rows=self.repo.conn.execute("SELECT id,sender_kind,sender_id,content,created_at,quoted_message_id FROM conversation_log "
+        rows=self.repo.conn.execute("SELECT id,sender_kind,sender_id,sender_name,content,created_at,quoted_message_id FROM conversation_log "
             "WHERE conversation_id=? AND id>? AND role IN ('user','assistant','system') ORDER BY id DESC LIMIT 12",
             (snapshot['id'],snapshot.get('joined_after_message_id',0))).fetchall()
         history=[]
@@ -162,6 +162,7 @@ class ProactiveService:
         for scope in selected:
             views.append({'kind':scope['kind'],'conversation_id':scope['id'],'name':scope['name'] if scope['kind']=='group' else '与用户私聊',
                 'members':[m['persona_id'] for m in self.groups.members(user,scope['id'])] if scope['kind']=='group' else [persona],
+                'member_names':{m['persona_id']:m['name'] for m in self.groups.members(user,scope['id'])} if scope['kind']=='group' else {},
                 'messages':self._history(scope) if scope['kind']=='group' or group is None else []})
         return selected,views
 

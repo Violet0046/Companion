@@ -26,9 +26,10 @@ class NotificationService:
         self._stop.set()
 
     def enqueue(self, user, persona, gid, message_id, body):
+        from companion_ever.characters.repository import persona_name
         # Called inside the conversation transaction: queue only, never send here.
         self.repo.enqueue(user,persona,gid,message_id,{
-            'title':persona, 'body':body[:140], 'tag':'companion-'+gid,
+            'title':persona_name(self.repo.conn,user,persona), 'body':body[:140], 'tag':'companion-'+gid,
             'url':'/?'+urlencode({'user':user,'persona':persona,'open':'chat'}),
         },update_queued=True)
 

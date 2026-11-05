@@ -497,3 +497,18 @@ async def _stream_reply(conn, ctx, generation, channel) -> None:
 
 
 __all__ = ["router", "broadcast", "notify_record_done"]
+
+
+@router.get('/api/conversation-pins')
+def conversation_pins(request:Request):
+    return request.app.state.ctx.services.conversation.pins(request.state.account['user_id'])
+
+
+@router.get('/api/persona/{user_id}/{persona_id}/pin')
+def private_pin(request:Request,user_id:str,persona_id:str):
+    return _authorized_ctx(request,user_id,persona_id).services.conversation.pin(user_id,persona=persona_id)
+
+
+@router.put('/api/persona/{user_id}/{persona_id}/pin')
+def set_private_pin(request:Request,user_id:str,persona_id:str,payload:ProactiveIn):
+    return _authorized_ctx(request,user_id,persona_id).services.conversation.pin(user_id,persona=persona_id,enabled=payload.enabled)

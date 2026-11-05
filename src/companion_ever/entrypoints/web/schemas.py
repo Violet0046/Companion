@@ -134,6 +134,8 @@ class PersonaCreateIn(BaseModel):
     两条路径：用 template_id 走内置模板，或用 definition 传自己填的 JSON。
     """
 
+    # Creation-only legacy field name: this is the chosen display name.
+    # The response returns a newly generated persona_id for subsequent requests.
     persona_id: str
     template_id: str = ""
     definition: Optional[str] = None
@@ -165,6 +167,7 @@ class UserOut(BaseModel):
 
     id: str
     personas: list[str] = Field(default_factory=list)
+    persona_names: dict[str,str] = Field(default_factory=dict)
 
 
 __all__ = [

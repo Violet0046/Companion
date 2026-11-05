@@ -119,7 +119,8 @@ def list_users(request: Request) -> list[UserOut]:
     """当前登录用户及其有效角色。"""
     ctx, cfg = _ctx_and_cfg(request)
     user = request.state.account['user_id']
-    return [UserOut(id=user, personas=ctx.services.persona.list_user_personas(user))]
+    return [UserOut(id=user, personas=ctx.services.persona.list_user_personas(user),
+        persona_names={p['persona_id']:p['display_name'] for p in ctx.services.persona.persona_repo.list_by_user(user)})]
 
 
 @router.get("/api/persona/{user_id}/{persona_id}", response_model=PersonaSummary)

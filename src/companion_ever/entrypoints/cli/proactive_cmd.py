@@ -6,6 +6,7 @@ def cmd_proactive(args):
     from companion_ever.entrypoints.cli import _build_app
     ctx=_build_app(args.db)
     try:
+        if args.proactive_cmd in ('check','trigger'):args.persona=ctx.services.persona.resolve_name(args.user,args.persona)
         if args.proactive_cmd=='groups':
             result=[{'id':g['id'],'name':g['name'],'proactive_enabled':bool(g['proactive_enabled']),
                 'members':[m['persona_id'] for m in g['members']]} for g in ctx.services.groups.list(args.user)]

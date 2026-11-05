@@ -7,7 +7,7 @@ import re
 
 def migrate(conn):
     version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if version > 16:
+    if version > 17:
         raise ValueError('数据库版本比当前程序新，拒绝降级运行')
     if version < 1:
         _migrate_jobs(conn)
@@ -41,6 +41,38 @@ def migrate(conn):
         _add_proactive_opportunities(conn)
     if conn.execute('PRAGMA user_version').fetchone()[0] < 16:
         _add_membership_events(conn)
+
+    if conn.execute('PRAGMA user_version').fetchone()[0] < 17:
+        _add_persona_names_and_pins(conn)
+
+
+def _add_persona_names_and_pins(conn):
+    """Legacy IDs remain immutable; new public creation uses opaque IDs, never names."""
+    from companion_ever.infrastructure.database.connection import transaction
+    path=conn.execute('PRAGMA database_list').fetchone()[2]
+    if path and conn.execute('SELECT 1 FROM user LIMIT 1').fetchone():
+        target=Path(path+'.bak-before-role-identity-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
+        target.touch(mode=0o600,exist_ok=False)
+        backup=sqlite3.connect(target)
+        try:conn.backup(backup)
+        finally:backup.close()
+    with transaction(conn):
+        if 'display_name' not in {r[1] for r in conn.execute('PRAGMA table_info(persona_definition)')}:
+            conn.execute("ALTER TABLE persona_definition ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
+            conn.execute('UPDATE persona_definition SET display_name=persona_id')
+        conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS uq_persona_name ON persona_definition(user_id,display_name) WHERE is_archived=0')
+        if 'pinned' not in {r[1] for r in conn.execute('PRAGMA table_info(conversation)')}:
+            conn.execute('ALTER TABLE conversation ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1))')
+        if 'sender_name' not in {r[1] for r in conn.execute('PRAGMA table_info(conversation_log)')}:
+            conn.execute("ALTER TABLE conversation_log ADD COLUMN sender_name TEXT NOT NULL DEFAULT ''")
+            conn.execute("UPDATE conversation_log SET sender_name=sender_id WHERE sender_kind='persona'")
+        conn.execute("""CREATE TRIGGER IF NOT EXISTS message_sender_name AFTER INSERT ON conversation_log
+            WHEN new.sender_kind='persona' AND new.sender_name=''
+            BEGIN UPDATE conversation_log SET sender_name=coalesce(
+              (SELECT display_name FROM persona_definition WHERE user_id=new.user_id AND persona_id=new.sender_id AND is_archived=0),new.sender_id)
+              WHERE id=new.id; END""")
+        conn.execute('CREATE TABLE IF NOT EXISTS deleted_message_usage(user_id TEXT NOT NULL REFERENCES user(id),accepted_at TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(user_id,accepted_at))')
+        conn.execute('PRAGMA user_version=17')
 
 
 def _add_membership_events(conn):

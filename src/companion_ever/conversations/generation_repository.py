@@ -106,7 +106,7 @@ class GenerationRepo:
             raise ValueError('模型未生成可保存的正文')
         with transaction(self.conn):
             g = self.get(gid)
-            if g['status'] != 'running' or not self.active(gid):
+            if not g or g['status'] != 'running' or not self.active(gid):
                 return None
             prior = self.conn.execute('SELECT * FROM conversation_log WHERE generation_id=? AND output_index=?',
                                       (gid,index)).fetchone()

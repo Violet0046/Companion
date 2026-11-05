@@ -78,9 +78,9 @@ def cmd_setup(args) -> int:
 
         # 3. 创建 persona
         try:
-            ctx.services.persona.create_persona(
+            ctx.services.persona.create_named(
                 user_id=args.user,
-                persona_id=args.persona,
+                name=args.persona,
                 definition=definition,
             )
             print(f"[OK] Created persona '{args.persona}' for user '{args.user}'")
@@ -100,6 +100,7 @@ def cmd_chat(args) -> int:
         if not ctx.repos.user.exists(args.user):
             print(f"[FAIL] User '{args.user}' 不存在。先跑 setup。")
             return 1
+        args.persona=ctx.services.persona.resolve_name(args.user,args.persona)
         if not ctx.services.persona.exists(args.user, args.persona):
             print(f"[FAIL] User '{args.user}' 不拥有 persona '{args.persona}'。先跑 setup。")
             return 1
@@ -143,6 +144,7 @@ def cmd_show(args) -> int:
         print(f"User '{args.user}' owns {len(personas)} persona(s): {personas}")
 
         if args.persona:
+            args.persona=ctx.services.persona.resolve_name(args.user,args.persona)
             if args.persona not in personas:
                 print(f"[FAIL] User '{args.user}' 不拥有 persona '{args.persona}'。")
                 return 1

@@ -46,7 +46,8 @@ class AccountUsage:
         continuations=self.conn.execute("SELECT count(*) FROM (SELECT min(g.created_at) AS accepted_at FROM generation g "
             "JOIN conversation c ON c.id=g.conversation_id WHERE c.user_id=? AND g.trigger_kind='manual_continue' AND g.request_key IS NOT NULL "
             "GROUP BY g.conversation_id,g.request_key HAVING accepted_at>=? AND accepted_at<?)",(user,start,end)).fetchone()[0]
-        return messages+continuations
+        deleted=self.conn.execute('SELECT coalesce(sum(count),0) FROM deleted_message_usage WHERE user_id=? AND accepted_at>=? AND accepted_at<?',(user,start,end)).fetchone()[0]
+        return messages+continuations+deleted
 
     def active_replies(self, user, *, excluding_persona=None, excluding_conversation=None, running_only=False):
         sql = ("SELECT count(*) FROM generation g JOIN conversation c ON c.id=g.conversation_id "

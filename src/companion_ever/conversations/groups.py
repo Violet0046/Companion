@@ -1,4 +1,5 @@
 """Owned group conversations and bounded, durable invitations on the shared generation runtime."""
+from companion_ever.characters.repository import persona_name
 import json
 import logging
 import time
@@ -79,7 +80,7 @@ class GroupService:
             try:group=self.require(g['user_id'],g['conversation_id'])
             except PermissionError:return
             self.notifications.enqueue_group(g['user_id'],group['id'],group['name'],gid,outputs[-1]['id'],outputs[-1]['sender_id'],
-                '\n'.join(m['sender_id']+'：'+m['content'] for m in outputs))
+                '\n'.join((m.get('sender_name') or persona_name(self.conn,g['user_id'],m['sender_id']))+'：'+m['content'] for m in outputs))
 
     def require(self,user,cid):
         row=self.group_repo.owned(user,cid)
@@ -88,7 +89,7 @@ class GroupService:
 
     def members(self,user,cid):
         self.require(user,cid)
-        return [m for m in self.group_repo.members(cid) if self.authorizer.owns_persona(user,m['persona_id'])]
+        return [{**m,'name':persona_name(self.conn,user,m['persona_id'])} for m in self.group_repo.members(cid) if self.authorizer.owns_persona(user,m['persona_id'])]
 
     def require_member(self,user,cid,persona):
         self.require(user,cid);self.authorizer.require_persona(user,persona)
@@ -116,7 +117,7 @@ class GroupService:
             self.require_member(user,cid,persona)
             if len(self.members(user,cid))<=2:raise ValueError('群聊至少保留两位角色，请先添加成员再移出')
             self.group_repo.leave(cid,persona)
-            self.group_repo.event(user,cid,persona+'已被移出群聊')
+            self.group_repo.event(user,cid,persona_name(self.conn,user,persona)+'已被移出群聊')
             if self.on_member_left is not None:self.on_member_left(user,persona,cid)
         return self.info(user,cid)
 
@@ -131,7 +132,7 @@ class GroupService:
                 if persona in existing:raise ValueError('角色已经在群里，请刷新成员列表')
             for persona in personas:
                 self.group_repo.join(cid,persona)
-                self.group_repo.event(user,cid,persona+'加入了群聊')
+                self.group_repo.event(user,cid,persona_name(self.conn,user,persona)+'加入了群聊')
         return self.info(user,cid)
 
     def remove_persona(self,user,persona):
@@ -147,9 +148,9 @@ class GroupService:
         m['quoted_message']=self.repo.messages.quote(m['conversation_id'],m['quoted_message_id']) if m.get('quoted_message_id') is not None else None
         return m
 
-    def history(self,user,cid,*,before_id=None,after_id=None,limit=50):
+    def history(self,user,cid,*,before_id=None,after_id=None,limit=50,messages_only=False):
         self.require(user,cid)
-        return [self.present(r) for r in self.group_repo.history(cid,before_id=before_id,after_id=after_id,limit=limit)]
+        return [self.present(r) for r in self.group_repo.history(cid,before_id=before_id,after_id=after_id,limit=limit,messages_only=messages_only)]
 
     def unread(self,user,cid,after_id=0):
         group=self.require(user,cid)
@@ -171,7 +172,7 @@ class GroupService:
         for mention in mentions:
             if not isinstance(mention,dict) or set(mention)!={'persona_id','start','end'}:raise ValueError('@ 信息无效')
             p=mention['persona_id'];start=mention['start'];stop=mention['end']
-            if not isinstance(p,str) or type(start) is not int or type(stop) is not int or start<end or not 0<=start<stop<=len(content) or content[start:stop]!='@'+p:
+            if not isinstance(p,str) or type(start) is not int or type(stop) is not int or start<end or not 0<=start<stop<=len(content) or content[start:stop]!='@'+persona_name(self.conn,user,p):
                 raise ValueError('@ 文本已变化，请重新选择角色')
             if stop<len(content) and (content[stop].isalnum() or content[stop]=='_'):
                 raise ValueError('@ 文本已变化，请重新选择角色')
@@ -227,7 +228,7 @@ class GroupService:
             m['created_at']=m['created_at'].replace(' ','T')+'Z'
             if m['quoted_message']:
                 q=m['quoted_message'];q['created_at']=q['created_at'].replace(' ','T')+'Z'
-        return [{k:m[k] for k in ('id','role','sender_kind','sender_id','content','created_at','quoted_message','mentions')} for m in history]
+        return [{k:m[k] for k in ('id','role','sender_kind','sender_id','sender_name','content','created_at','quoted_message','mentions')} for m in history]
 
     def _request(self,g,layer,persona,messages,purpose):
         with transaction(self.conn):
@@ -282,6 +283,7 @@ class GroupService:
             'root_message_id':g['trigger_message_id'],
             'source_message_id':source_id or g['trigger_message_id'],
             'source_message':source,
+            'member_names':{m['persona_id']:m['name'] for m in self.members(g['user_id'],g['conversation_id'])},
             'members':members,'already_spoken_ids':done,'pending_persona_ids':pending,
             'handoff_eligible_ids':[p for p in members if p!=persona and p not in done and (p in pending or len(targets)<limit)],
             'remaining_new_speakers':max(0,limit-len(targets)),
@@ -305,7 +307,7 @@ class GroupService:
                 handoff=None
             if handoff:
                 self.require_member(g['user_id'],g['conversation_id'],handoff.persona_id)
-                i=handoff.message_index;token='@'+handoff.persona_id
+                i=handoff.message_index;token='@'+persona_name(self.conn,g['user_id'],handoff.persona_id)
                 # Program-generated suffix keeps display and Unicode mention offsets
                 # identical. Textual @ alone never schedules a model.
                 if not texts[i].endswith(token):texts[i]+=' '+token

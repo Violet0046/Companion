@@ -57,12 +57,7 @@ def create_persona(
     ctx, _ = _ctx_and_cfg(request)
     persona_id = (payload.persona_id or "").strip()
     try:
-        if payload.template_id:
-            ctx.services.persona.create_from_template(user_id, persona_id, payload.template_id)
-        elif payload.definition and payload.definition.strip():
-            ctx.services.persona.create_persona(user_id, persona_id, payload.definition)
-        else:
-            raise ValueError("要指定 template_id 或 definition 之一")
+        persona_id=ctx.services.persona.create_named(user_id,persona_id,payload.definition,payload.template_id)
     except Exception as exc:
         raise _fail(exc)
     return {"user_id": user_id, "persona_id": persona_id, "status": "created"}
@@ -109,3 +104,11 @@ def archived_personas(
         return ctx.services.persona.list_archived(user_id)
     except Exception as exc:
         raise _fail(exc)
+
+
+@router.delete('/api/persona/{user_id}/{persona_id}/permanent')
+def purge_persona(request:Request,user_id:str,persona_id:str):
+    ctx,_=_ctx_and_cfg(request)
+    try:ctx.services.persona.purge(user_id,persona_id)
+    except Exception as exc:raise _fail(exc)
+    return {'status':'deleted','persona_id':persona_id}

@@ -285,9 +285,23 @@ async function loadUsers() {
 function allPersonas() {
   const out = [];
   (S.users || []).forEach((u) => {
-    (u.personas || []).forEach((p) => out.push({ user: u.id, persona: p }));
+    (u.personas || []).forEach((p) => out.push({ user: u.id, persona: p, name: u.persona_names?.[p] || p }));
   });
   return out;
+}
+
+// IDs route requests and caches; names are presentation only, including @ text.
+function personaName(user,id) {
+  return S.users.find(u=>u.id===user)?.persona_names?.[id]
+    || S.group?.members?.find(m=>m.persona_id===id)?.name
+    || S.summaries[pkey(user,id)]?.persona_basics?.name || id;
+}
+function memberName(id) { return personaName(S.user,id); }
+function conversationOrder(a,b) {
+  return Number(!!b.pinned)-Number(!!a.pinned)
+    || (Date.parse(b.last?.created_at) || 0)-(Date.parse(a.last?.created_at) || 0)
+    || (b.last?.id || 0)-(a.last?.id || 0)
+    || String(a.group_id || a.persona).localeCompare(String(b.group_id || b.persona));
 }
 
 /** 已读标记：记住每个角色读到哪条，用来算未读数 */
@@ -382,6 +396,7 @@ async function refreshConv(user, persona) {
   const fresh=await fetchConv(item);
   const current=S.convs.indexOf(item);
   if(actor!==S.account?.csrf_token || current<0)return;
+  fresh.pinned=!!S.convs[current].pinned;
   S.convs[current] = fresh;
   renderConvs();
 }
@@ -448,7 +463,7 @@ function resetSending() {
 async function fetchConv(p) {
   const actor=S.account?.csrf_token;
   const item = {
-    user: p.user, persona: p.persona, last: null, unread: 0, summary: null, error: null,
+    user: p.user, persona: p.persona, name: p.name || personaName(p.user,p.persona), pinned: !!p.pinned, last: null, unread: 0, summary: null, error: null,
   };
   // 两个请求**各自独立**失败 —— 以前用 Promise.all，一个挂了另一个也白费，
   // 结果错误被吞掉，界面上显示成"还没有聊过"（其实是有记录的）。
@@ -490,15 +505,16 @@ async function loadConvs() {
 }
 
 async function fetchConvs() {
+  const pinRevision=S.pinRevision || 0;
   const request=S.convsRequest=(S.convsRequest || 0)+1;
   const accountUser=S.account?.user_id || S.user,actor=S.account?.csrf_token;
   const ps = allPersonas();
   const previousGroups=S.convs.filter(c=>c.group_id);
-  const [privates,groups] = await Promise.all([Promise.all(ps.map(fetchConv)),api('/api/groups').catch(()=>previousGroups.map(c=>({id:c.group_id,name:c.name})))]);
+  const [privates,groups,pins] = await Promise.all([Promise.all(ps.map(fetchConv)),api('/api/groups').catch(()=>previousGroups.map(c=>({id:c.group_id,name:c.name}))),api('/api/conversation-pins').catch(()=>null)]);
   const grouped = await Promise.all((Array.isArray(groups) ? groups : []).map(async g => {
     const scope=`/api/groups/${g.id}`;
     const previous=previousGroups.find(c=>c.group_id===g.id);
-    const [history,unread]=await Promise.allSettled([api(`${scope}/history?limit=1`),api(`${scope}/unread-count`)]);
+    const [history,unread]=await Promise.allSettled([api(`${scope}/history?limit=1&messages_only=1`),api(`${scope}/unread-count`)]);
     return {user:accountUser,persona:null,group_id:g.id,name:g.name,
       last:history.status==='fulfilled' ? history.value[0]||null : previous?.last,
       unread:unread.status==='fulfilled' ? unread.value.count : previous?.unread || 0,
@@ -512,7 +528,12 @@ async function fetchConvs() {
     if(group.user_id===accountUser && Array.isArray(group.members) && group.id!==S.group?.id)
       conversationCache.put(cacheOwner(),`/api/groups/${group.id}`,{group});
   }
-  S.convs = privates.concat(grouped);
+  const previous=S.convs;
+  S.convs = privates.concat(grouped).map(c=>{
+    const pin=(Array.isArray(pins) ? pins : []).find(p=>c.group_id ? p.conversation_id===c.group_id : p.persona_id===c.persona);
+    const known=!!previous.find(p=>p.user===c.user && p.persona===c.persona && p.group_id===c.group_id)?.pinned;
+    return {...c,pinned:pin && pinRevision===(S.pinRevision || 0) ? pin.enabled : known};
+  });
   renderConvs();
   renderMe();
   // 有加载失败的（比如服务器刚重启时请求打不通）→ 自动重试
@@ -534,7 +555,7 @@ function renderConvs() {
   for (const c of S.convs) {
     if (Number.isSafeInteger(c.unreadThrough) && (readMark(c.user,c.persona,c.group_id) ?? -1) >= c.unreadThrough) c.unread = 0;
   }
-  const items = S.convs;
+  const items = [...S.convs].sort(conversationOrder);
   if (!items.length) {
     box.innerHTML = '<div class="empty">还没有角色</div>';
     return;
@@ -548,7 +569,7 @@ function renderConvs() {
       ? `<span class="badge">${c.unread > 99 ? '99+' : c.unread}</span>`
       : '<span style="height:18px"></span>';
     const title=c.name || c.persona;
-    return `<div class="cell" data-user="${escAttr(c.user)}" data-persona="${escAttr(c.persona || '')}" data-group="${c.group_id || ''}">
+    return `<div class="cell${c.pinned ? ' conversation-pinned' : ''}" data-user="${escAttr(c.user)}" data-persona="${escAttr(c.persona || '')}" data-group="${c.group_id || ''}">
       <div class="ava ${avaClass(title)}">${c.group_id ? '群' : esc(title.slice(0, 1))}</div>
       <div class="cell-body">
         <div class="cell-title">${esc(title)}</div>
@@ -597,8 +618,8 @@ function renderContacts() {
   if (ps.length) {
     html += '<div class="group-label">角色</div>';
     html += ps.map((p) => `<div class="cell" data-user="${escAttr(p.user)}" data-persona="${escAttr(p.persona)}">
-      <div class="ava ${avaClass(p.persona)}">${esc(p.persona.slice(0, 1))}</div>
-      <div class="cell-body"><div class="cell-title">${esc(p.persona)}</div>
+      <div class="ava ${avaClass(p.name)}">${esc(p.name.slice(0, 1))}</div>
+      <div class="cell-body"><div class="cell-title">${esc(p.name)}</div>
       <div class="cell-sub">${esc(personaTag(p))}</div></div>
     </div>`).join('');
   }
@@ -608,7 +629,7 @@ function renderContacts() {
     html += archived.map((p) => `<div class="cell" data-archived="${escAttr(p.persona_id)}">
       <div class="ava" style="background:var(--surface-2);color:var(--text-muted)">${esc(p.name.slice(0, 1))}</div>
       <div class="cell-body"><div class="cell-title">${esc(p.name)}</div><div class="cell-sub">${esc(p.identity || '已删除')}</div></div>
-      <button class="btn-mini persona-restore" data-archived="${escAttr(p.persona_id)}">恢复</button>
+      <button class="persona-purge" data-archived="${escAttr(p.persona_id)}" type="button">彻底删除</button><button class="btn-mini persona-restore" data-archived="${escAttr(p.persona_id)}">恢复</button>
     </div>`).join('');
   }
   html += '<div class="group-label">功能</div>';
@@ -624,6 +645,7 @@ function renderContacts() {
   if (nb) nb.onclick = () => openCreatePersona();
   const gb = $('cell-group-chat');
   if (gb) gb.onclick = openCreateGroup;
+  box.querySelectorAll('.persona-purge').forEach(el=>{el.onclick=ev=>{ev.stopPropagation();purgePersona(S.user,el.dataset.archived,el);};});
   box.querySelectorAll('.persona-restore').forEach((el) => {
     el.onclick = (ev) => {
       ev.stopPropagation();
@@ -823,12 +845,12 @@ async function savePersona() {
   const definition = collectPersonaDefinition();
   if (!definition.name) { toast('给角色起个名字'); return; }
   if (!definition.identity) { toast('写一句这个角色是谁'); return; }
-  // 角色标识就是角色名——不再单开一个字段
+  // 表单提交显示名；服务器生成独立的不可变角色 ID。
   const personaId = String(definition.name).trim();
   if (personaId.includes(',')) { toast('名字里不能有逗号'); return; }
   const user = S.user;
   try {
-    await api(`/api/persona/${enc(user)}`, {
+    const created=await api(`/api/persona/${enc(user)}`, {
       method: 'POST',
       body: JSON.stringify({ persona_id: personaId, definition: JSON.stringify(definition) }),
     });
@@ -837,7 +859,7 @@ async function savePersona() {
     await loadUsers();
     await loadConvs();
     renderContacts();
-    await openChat(user, personaId);
+    await openChat(user, created.persona_id);
   } catch (e) {
     toast('创建失败：' + e.message);
   }
@@ -845,7 +867,7 @@ async function savePersona() {
 
 /** 删除角色 = 停用：撤销访问，记忆和聊天记录都留着，可以恢复。 */
 async function deletePersona(user, persona) {
-  if (!confirm(`删除角色「${persona}」？\n\n记忆和聊天记录都会保留，之后可以在「已删除的角色」里恢复。`)) return;
+  if (!confirm(`删除角色「${personaName(user,persona)}」？\n\n记忆和聊天记录都会保留，之后可以在「已删除的角色」里恢复。`)) return;
   const actor=S.account?.csrf_token,navigation=viewRequest;
   const returnView=S.profileFrom==='contacts' ? 'contacts' : 'messages';
   const current=()=>S.user===user && S.persona===persona && !S.group;
@@ -1006,11 +1028,11 @@ async function switchTarget(user, persona, opts={}) {
   if(changed)restoreComposerDraft();
   localStorage.setItem('ce_user', user);
   localStorage.setItem('ce_persona', persona);
-  S.personaTitle = persona;
+  S.personaTitle = personaName(user,persona);
   S.info=S.summaries[pkey(user,persona)] || conversationCache.peek(cacheOwner(),personaScope(user,persona))?.info || null;
-  S.personaTitle=S.info?.persona_basics?.name || persona;
+  S.personaTitle=S.info?.persona_basics?.name || personaName(user,persona);
   $('persona-name').textContent = S.personaTitle;
-  $('btn-avatar').textContent = persona.slice(0, 1);
+  $('btn-avatar').textContent = S.personaTitle.slice(0,1);
   if (changed) {
     stopReplyRecovery();
     S.latestClientMessageId = null; S.generationId = null; S.replyState = null;
@@ -1091,12 +1113,12 @@ function renderGroupMembers() {
     : state.error || (members.length<=2 ? '群聊至少保留两位角色，可先添加成员再移出。' : '移出仅退出本群，角色和已有聊天记录会保留。');
   for(const member of members){
     const row=document.createElement('div');row.className='group-member-row';
-    const name=document.createElement('span');name.className='group-member-name';name.textContent=member.persona_id;
+    const name=document.createElement('span');name.className='group-member-name';name.textContent=member.name || memberName(member.persona_id);
     const button=document.createElement('button');button.type='button';button.className='group-member-action group-member-remove';
-    button.textContent='移出';button.setAttribute('aria-label','移出'+member.persona_id);
+    button.textContent='移出';button.setAttribute('aria-label','移出'+(member.name || memberName(member.persona_id)));
     button.disabled=!state.ready || state.busy || state.adding || members.length<=2;
     button.onclick=()=>{
-      if(!confirm(`将${member.persona_id}移出本群？角色、私聊和已有记忆都会保留。`))return;
+      if(!confirm(`将${member.name || memberName(member.persona_id)}移出本群？角色、私聊和已有记忆都会保留。`))return;
       changeGroupMembers('DELETE',member.persona_id);
     };
     row.append(name,button);box.appendChild(row);
@@ -1109,7 +1131,7 @@ function renderGroupMembers() {
       const check=document.createElement('input');check.type='checkbox';check.checked=state.selected.has(person.persona);
       check.disabled=state.busy || !check.checked && members.length+state.selected.size>=8;
       check.onchange=()=>{check.checked ? state.selected.add(person.persona) : state.selected.delete(person.persona);renderGroupMembers();};
-      const name=document.createElement('span');name.textContent=person.persona;label.append(check,name);list.appendChild(label);
+      const name=document.createElement('span');name.textContent=person.name;label.append(check,name);list.appendChild(label);
     }
     if(!candidates.length){const empty=document.createElement('p');empty.className='group-members-hint';empty.textContent='其他角色都已在群里，可先到通讯录新建角色。';list.appendChild(empty);}
     $('group-members-save').textContent=state.selected.size ? `添加（${state.selected.size}）` : '添加';
@@ -1144,6 +1166,7 @@ async function openGroupSettings() {
   renderGroupMembers();
   toggle.checked=!!S.group.proactive_enabled;toggle.disabled=true;
   panel.classList.remove('hidden');panel.focus({preventScroll:true});
+  bindPin($('group-pinned'),S.user,null,id);
   const current=()=>currentMemberEdit(state) && request===S.groupSettingsRequest && !panel.classList.contains('hidden');
   try {
     const [group,setting]=await Promise.all([api(`/api/groups/${id}`),api(`/api/groups/${id}/proactive`)]);
@@ -1179,7 +1202,7 @@ function openCreateGroup() {
   people.forEach(p=>{
     const label=document.createElement('label');label.className='member-option';
     const check=document.createElement('input');check.type='checkbox';check.value=p.persona;
-    const name=document.createElement('span');name.textContent=p.persona;
+    const name=document.createElement('span');name.textContent=p.name;
     label.appendChild(check);label.appendChild(name);box.appendChild(label);
   });
   $('dialog-group').classList.remove('hidden');$('group-title').focus({preventScroll:true});
@@ -1207,7 +1230,7 @@ function restoreComposerDraft() {
   S.quote=draft?.quote || null;S.mentions=draft?.mentions?.map(m=>({...m})) || [];renderComposerQuote();
   $('input').style.height='auto';
 }
-function quoteLabel(message) { return message.role==='user' ? '我' : (message.sender_id || S.personaTitle || '对方'); }
+function quoteLabel(message) { return message.role==='user' ? '我' : (message.sender_name || (message.sender_id && personaName(S.user,message.sender_id)) || S.personaTitle || '对方'); }
 function renderComposerQuote() {
   const box=$('composer-quote');box.classList.toggle('hidden',!S.quote);
   $('composer-quote-text').textContent=S.quote ? quoteLabel(S.quote)+'：'+S.quote.content : '';
@@ -1217,7 +1240,7 @@ function clearComposerContext() {
   renderComposerQuote();closeMessageActions();closeMentionPicker(false);
 }
 function selectQuote(message) {
-  S.quote={id:message.id,content:message.content,role:message.role,sender_id:message.sender_id};
+  S.quote={id:message.id,content:message.content,role:message.role,sender_id:message.sender_id,sender_name:message.sender_name};
   renderComposerQuote();closeMessageActions();$('input').focus();
   if(wasAtBottom)requestAnimationFrame(()=>anchorBottom());
 }
@@ -1297,7 +1320,7 @@ function updateMentions(next, edit=null) {
   if(edit)left=edit.start;
   const oldEnd=edit ? edit.end : prev.length-right,delta=next.length-prev.length;
   S.mentions=S.mentions.flatMap(m=>m.end<=left ? [m] : m.start>=oldEnd ? [{...m,start:m.start+delta,end:m.end+delta}] : [])
-    .filter(m=>next.slice(m.start,m.end)==='@'+m.persona_id && !/[\p{L}\p{N}_]/u.test(next[m.end] || ''));
+    .filter(m=>next.slice(m.start,m.end)==='@'+memberName(m.persona_id) && !/[\p{L}\p{N}_]/u.test(next[m.end] || ''));
   S.inputBefore=next;
 }
 function mentionInput(event) {
@@ -1415,7 +1438,7 @@ function renderMentionMembers() {
   multiple.disabled=state.multi && !state.selected.size;
   multiple.setAttribute('aria-label',state.multi ? `完成选择，已选${state.selected.size}位` : '多选成员');
   const query=$('mention-search').value.toLowerCase();
-  const members=(S.group?.members || []).filter(m=>m.persona_id.toLowerCase().includes(query));
+  const members=(S.group?.members || []).filter(m=>(m.name || memberName(m.persona_id)).toLowerCase().includes(query));
   const add=(name,id,all=false)=>{
     const button=document.createElement('button');button.type='button';button.className='mention-member'+(all?' mention-all':'');
     button.setAttribute('aria-label',name);
@@ -1435,7 +1458,7 @@ function renderMentionMembers() {
   };
   if(!query && S.group?.members?.length)add('全部成员',null,true);
   for(const member of members){
-    add(member.persona_id,member.persona_id);
+    add(member.name || memberName(member.persona_id),member.persona_id);
   }
   if(!members.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='没有匹配的成员';box.appendChild(empty);}
 }
@@ -1450,11 +1473,11 @@ function pickMentions(personas) {
   const ids=[...new Set(personas)].filter(p=>!existing.has(p) && S.group.members?.some(m=>m.persona_id===p));
   if(existing.size+ids.length>8){toast('一次最多 @ 八位角色');return;}
   const prefix=range.space && range.start && !/\s/u.test(input.value[range.start-1]) ? ' ' : '';
-  const inserted=prefix+ids.map(p=>'@'+p+' ').join('');
+  const inserted=prefix+ids.map(p=>'@'+memberName(p)+' ').join('');
   const next=input.value.slice(0,range.start)+inserted+input.value.slice(range.end);
   updateMentions(next,{start:range.start,end:range.end});input.value=next;
   let cursor=range.start+prefix.length;
-  for(const persona of ids){S.mentions.push({persona_id:persona,start:cursor,end:cursor+persona.length+1});cursor+=persona.length+2;}
+  for(const persona of ids){S.mentions.push({persona_id:persona,start:cursor,end:cursor+memberName(persona).length+1});cursor+=memberName(persona).length+2;}
   S.mentions.sort((a,b)=>a.start-b.start);
   input.setSelectionRange(range.start+inserted.length,range.start+inserted.length);
   if(mentionState)closeMentionPicker();else{mentionRange=null;input.focus({preventScroll:true});}
@@ -1634,7 +1657,7 @@ async function openProfile(user, persona) {
 function updateProfileInfo(persona, info) {
   const field=id=>$('profile-body').querySelector('#'+id);
   if(!field('profile-name'))return;
-  const name=info.persona_basics?.name || persona,tag=info.persona_basics?.tag || info.persona_basics?.description || '';
+  const name=info.persona_basics?.name || personaName(S.profilePersona?.user,persona),tag=info.persona_basics?.tag || info.persona_basics?.description || '';
   field('profile-name').textContent=name;field('profile-initial').textContent=name.slice(0,1);
   field('profile-tag').textContent=tag;field('profile-tag').classList.toggle('hidden',!tag);
   for(const name of ['message_count','note_count','session_count'])field('profile-'+name).textContent=info[name] ?? '—';
@@ -1645,7 +1668,7 @@ function renderProfile(user, persona, info) {
   const body = $('profile-body');
   if (!body) return;
   const basics = (info && info.persona_basics) || {};
-  const name = basics.name || persona;
+  const name = basics.name || personaName(user,persona);
   const tag = basics.tag || basics.description || '';
   body.innerHTML = `
     <div class="profile-hero">
@@ -1662,6 +1685,7 @@ function renderProfile(user, persona, info) {
       <div class="row" id="row-chat"><span>继续聊天</span><span class="row-val">现在就开始 <span class="chev">›</span></span></div>
       <div class="row" id="row-memory"><span>TA 的记忆</span><span class="row-val"><span id="profile-memory-count">${info?.note_count==null ? '' : info.note_count+' 条 '}</span><span class="chev">›</span></span></div>
       <div class="row" id="row-dates"><span>聊天记录</span><span class="row-val">按日期回溯 <span class="chev">›</span></span></div>
+      <div class="row"><span>置顶聊天</span><label class="switch-row switch-inline"><input type="checkbox" id="profile-pin" role="switch" aria-label="置顶聊天"><i class="switch" aria-hidden="true"></i></label></div>
       <div class="row"><span>主动联系</span><label class="switch-row switch-inline"><input type="checkbox" id="btn-proactive" role="switch" aria-label="主动联系" aria-busy="true" disabled><i class="switch" aria-hidden="true"></i></label></div>
       ${S.debug ? '<div class="row" id="row-relation"><span>后台记忆</span><span class="row-val">任务状态 <span class="chev">›</span></span></div>' : ''}
     </div>
@@ -1676,6 +1700,7 @@ function renderProfile(user, persona, info) {
   const maintenance = q('row-relation');
   if (S.debug && maintenance) maintenance.onclick = () => openRelation(user, persona);
   q('btn-persona-delete').onclick = () => deletePersona(user, persona);
+  bindPin(q('profile-pin'),user,persona);
   const initiative=q('btn-proactive');
   if (initiative) {
     const owner=cacheOwner(),actor=S.account?.csrf_token;
@@ -1725,7 +1750,7 @@ function renderRelationPage(user, persona, info) {
   const body = $('relation-body');
   if (!body) return;
   const basics = (info && info.persona_basics) || {};
-  const name = basics.name || persona;
+  const name = basics.name || personaName(user,persona);
   const key = pkey(user, persona);
   // 「记录中」两个来源：本地刚点的 / 服务器说正在记
   const recording = !!S.recording[key] || !!(info && info.recording);
@@ -2640,7 +2665,7 @@ function renderMsg(role, content, thinking, id, message = null) {
   text.innerHTML = renderMarkdown(content);
   el.appendChild(text);
   if (S.group && role === 'assistant' && message?.sender_id) {
-    const sender=document.createElement('div');sender.className='message-sender';sender.textContent=message.sender_id;
+    const sender=document.createElement('div');sender.className='message-sender';sender.textContent=message.sender_name || personaName(S.user,message.sender_id);
     el.insertBefore(sender,text);
   }
   if (message?.quoted_message) {
@@ -3786,3 +3811,42 @@ if ('serviceWorker' in navigator) {
 
 syncViewport();
 boot();
+
+
+async function purgePersona(user,persona,button) {
+  const name=(S.archived || []).find(p=>p.persona_id===persona)?.name || persona;
+  if(!confirm(`彻底删除「${name}」？\n\n将永久删除角色设定、私聊和记忆，无法恢复。群聊中的历史发言仍保留。删除后可重新创建同名角色。`))return;
+  const actor=S.account?.csrf_token;button.disabled=true;
+  try {
+    await api(`/api/persona/${enc(user)}/${enc(persona)}/permanent`,{method:'DELETE'});
+    if(actor!==S.account?.csrf_token)return;
+    conversationCache.remove(cacheOwner(),personaScope(user,persona));
+    composerDrafts.delete(personaScope(user,persona));localStorage.removeItem(outboxKey(user,persona));
+    localStorage.removeItem('ce_read_'+pkey(user,persona));delete S.summaries[pkey(user,persona)];
+    S.archived=(S.archived || []).filter(p=>p.persona_id!==persona);
+    const owner=S.users.find(u=>u.id===user);if(owner?.persona_names)delete owner.persona_names[persona];
+    renderContacts();renderMe();toast('已彻底删除，可以重新创建同名角色');
+  } catch(error){if(actor===S.account?.csrf_token){button.disabled=false;toast('删除失败：'+error.message);}}
+}
+
+function bindPin(toggle,user,persona,groupId=null) {
+  const request=toggle.pinRequest=(toggle.pinRequest || 0)+1;
+  const actor=S.account?.csrf_token,scope=groupId ? `/api/groups/${groupId}` : personaScope(user,persona);
+  const current=()=>request===toggle.pinRequest && actor===S.account?.csrf_token && toggle.isConnected && (groupId ? ! $('dialog-group-settings').classList.contains('hidden') && S.group?.id===groupId : S.profilePersona?.user===user && S.profilePersona?.persona===persona);
+  const item=()=>S.convs.find(c=>c.user===user && (groupId ? c.group_id===groupId : c.persona===persona));
+  let enabled=!!item()?.pinned;toggle.checked=enabled;toggle.disabled=true;
+  api(scope+'/pin').then(state=>{if(current()){enabled=state.enabled;toggle.checked=enabled;toggle.disabled=false;}})
+    .catch(()=>{if(current())toast('置顶设置暂未同步，请重新打开');});
+  toggle.onchange=async()=>{
+    const next=toggle.checked;toggle.disabled=true;
+    try {
+      const state=await api(scope+'/pin',{method:'PUT',body:JSON.stringify({enabled:next})});
+      if(actor!==S.account?.csrf_token)return;
+      S.pinRevision=(S.pinRevision || 0)+1;
+      enabled=state.enabled;const c=item();if(c)c.pinned=enabled;
+      if(groupId && S.group?.id===groupId)S.group.pinned=Number(enabled);
+      renderConvs();
+    }catch(error){if(current())toast('设置失败：'+error.message);}
+    finally{if(current()){toggle.checked=enabled;toggle.disabled=false;}}
+  };
+}

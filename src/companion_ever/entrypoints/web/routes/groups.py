@@ -67,9 +67,9 @@ def get_group(request:Request,cid:int):
 
 
 @router.get('/api/groups/{cid}/history')
-def history(request:Request,cid:int,limit:int=Query(50,ge=1,le=500),before_id:int|None=None,after_id:int|None=None):
+def history(request:Request,cid:int,limit:int=Query(50,ge=1,le=500),before_id:int|None=None,after_id:int|None=None,messages_only:bool=False):
     ctx,user=target(request,cid)
-    return [_present_message(m) for m in ctx.services.groups.history(user,cid,limit=limit,before_id=before_id,after_id=after_id)]
+    return [_present_message(m) for m in ctx.services.groups.history(user,cid,limit=limit,before_id=before_id,after_id=after_id,messages_only=messages_only)]
 
 
 @router.get('/api/groups/{cid}/unread-count')
@@ -141,3 +141,15 @@ def leave(request:Request,cid:int,persona:str):
 @router.post('/api/groups/{cid}/members')
 def add_members(request:Request,cid:int,payload:MembersIn):
     ctx,user=target(request,cid);return checked(ctx.services.groups.add_members,user,cid,payload.persona_ids)
+
+
+@router.get('/api/groups/{cid}/pin')
+def group_pin(request:Request,cid:int):
+    ctx,user=target(request,cid)
+    return ctx.services.conversation.pin(user,conversation_id=cid)
+
+
+@router.put('/api/groups/{cid}/pin')
+def set_group_pin(request:Request,cid:int,payload:ProactiveIn):
+    ctx,user=target(request,cid)
+    return ctx.services.conversation.pin(user,conversation_id=cid,enabled=payload.enabled)

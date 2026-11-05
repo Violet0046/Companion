@@ -21,8 +21,8 @@ class PersonaRepo:
                                   (content.strip(),row['id']))
                 return row['id']
             pid = 'persona_' + uuid.uuid4().hex
-            self.conn.execute('INSERT INTO persona_definition(id,user_id,persona_id,content) VALUES (?,?,?,?)',
-                              (pid,user_id,persona_id,content.strip()))
+            self.conn.execute('INSERT INTO persona_definition(id,user_id,persona_id,content,display_name) VALUES (?,?,?,?,?)',
+                              (pid,user_id,persona_id,content.strip(),persona_id))
             return pid
 
     def invalidate_edits(self, user_id, persona_id):
@@ -41,3 +41,9 @@ class PersonaRepo:
             (user_id,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def persona_name(conn, user, persona):
+    """Presentation only. Never resolve a display name in a task or authorization check."""
+    row=conn.execute('SELECT display_name FROM persona_definition WHERE user_id=? AND persona_id=? AND is_archived=0',(user,persona)).fetchone()
+    return row[0] if row else persona

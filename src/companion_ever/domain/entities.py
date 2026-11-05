@@ -108,6 +108,7 @@ class ConversationMessage:
     conversation_id: Optional[int] = None
     sender_kind: Optional[str] = None
     sender_id: Optional[str] = None
+    sender_name: Optional[str] = None
 
     def to_llm_dict(self) -> dict:
         return {"role": self.role, "content": self.content}

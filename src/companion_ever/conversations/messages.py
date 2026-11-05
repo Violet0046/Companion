@@ -24,6 +24,26 @@ class ConversationService:
         self.memory_jobs = memory_jobs
         self.background = background
 
+    def pin(self,user,*,persona=None,conversation_id=None,enabled=None):
+        from companion_ever.infrastructure.database.connection import transaction
+        conn=self.conv_repo.conn
+        with transaction(conn):
+            if persona is not None:
+                self.authorizer.require_persona(user,persona)
+                cid=self.conv_repo.ensure_conversation(user,persona)
+            else:
+                row=conn.execute("SELECT id FROM conversation WHERE id=? AND user_id=? AND kind='group'",(conversation_id,user)).fetchone()
+                if row is None:raise PermissionError('群聊不存在或不可访问')
+                cid=row[0]
+            if enabled is not None:conn.execute('UPDATE conversation SET pinned=? WHERE id=?',(int(enabled),cid))
+            return {'enabled':bool(conn.execute('SELECT pinned FROM conversation WHERE id=?',(cid,)).fetchone()[0])}
+
+    def pins(self,user):
+        from companion_ever.characters.users import UserRepo
+        active=UserRepo(self.conv_repo.conn).list_personas(user)
+        return [{'conversation_id':r['id'],'persona_id':r['persona_id'],'enabled':bool(r['pinned'])} for r in self.conv_repo.conn.execute(
+            'SELECT id,persona_id,kind,pinned FROM conversation WHERE user_id=?',(user,)) if r['kind']=='group' or r['persona_id'] in active]
+
     def external_context(self, user, persona, *, current_group_id=None):
         """Bounded, unprocessed source messages; collecting never schedules memory."""
         self.authorizer.require_persona(user, persona)
@@ -55,7 +75,7 @@ class ConversationService:
             text = message.content[:remaining]
             remaining -= len(text)
             chosen[message.id] = {'id': message.id, 'created_at': message.created_at,
-                                  'sender_kind': message.sender_kind, 'sender_id': message.sender_id,
+                                  'sender_kind': message.sender_kind, 'sender_id': message.sender_id, 'sender_name':message.sender_name,
                                   'content': text, 'truncated': len(text) < len(message.content)}
             # Quoted text is deliberately not expanded across source/size boundaries.
             if message.quoted_message_id is not None:

@@ -160,7 +160,7 @@ class ExtractionService:
             case['membership_events']=self.conversation_service.membership_events(user_id,persona_id,group_id,
                 reference[0].id if reference else job['after_message_id'],job['through_message_id'])
             for data,message in zip(case['messages'],reference+messages):
-                data.update(sender_kind=message.sender_kind,sender_id=message.sender_id)
+                data.update(sender_kind=message.sender_kind,sender_id=message.sender_id,sender_name=message.sender_name)
         return {'messages':messages,'case':case,'snapshots':{},
                 'llm_result':{'proposals':[],'links':[],'skipped':[],'uncertainties':[]},
                 'tools':MemoryTools(self.note_service,self.retrieval,user_id,persona_id,conversation_id=group_id),

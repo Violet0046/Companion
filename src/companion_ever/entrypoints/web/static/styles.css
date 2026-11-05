@@ -1012,3 +1012,8 @@ body {
 .account-input { display: block; margin: 12px 0; width: 100%; box-sizing: border-box; }
 .account-row { width: 100%; text-align: left; font: inherit; background: transparent; border: 0; color: inherit; cursor: pointer; }
 .account-link { display: block; margin: 16px auto; border: 0; background: transparent; color: var(--accent); font: inherit; }
+
+/* Pinned chats retain the list rhythm, with a quiet surface distinction. */
+#conv-list .conversation-pinned { background: var(--surface-2, #f1f2f5); }
+.persona-purge { flex: 0 0 auto; border: 0; background: none; color: var(--primary, #ff244d); padding: 10px 8px; font: inherit; font-size: 13px; white-space: nowrap; }
+.persona-purge:disabled { opacity: .45; }
