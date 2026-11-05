@@ -31,6 +31,20 @@ $env:COMPANION_WEB_SECURE_COOKIE="0"
 
 使用 `MiniMax-M3.1-Flash` 时，统一请求封装默认显式发送 `reasoning_effort: "low"`，避免省略参数后使用供应商的最高思考档位。可通过 `COMPANION_REASONING_EFFORT` 改为 `low`、`medium`、`high`、`xhigh` 或 `max`，覆盖私聊、群聊、主动联系、群协调、整理及摘要的调用。该模型不支持关闭思考，`COMPANION_BACKGROUND_THINKING` 不控制它；其他模型不会自动携带此强度参数。网页「显示思考过程」仅控制展示，关闭它不会减少模型推理。调整后的速度、用量与回答质量仍需实际聊天验证。
 
+### 火山方舟 / 豆包角色模型
+
+沿用现有 OpenAI 兼容客户端，无需安装 `volcengine-python-sdk`。在已有 `.env` 中修改以下三项，其他部署配置保留：
+
+```dotenv
+OPENAI_API_KEY=你的方舟项目APIKey
+OPENAI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+COMPANION_LLM_MODEL=你的方舟推理接入点ID
+```
+
+`COMPANION_LLM_MODEL` 使用控制台调用示例中的 `ep-...`，也可使用账号已开通的模型 ID（如 `doubao-seed-character-260628`）。`OPENAI_API_KEY` 是兼容接口的通用凭据配置，不限定供应商；不要误填旧供应商的 Key。修改后重启服务；已有进程环境变量会优先于 `.env`。
+
+当前四层共用这一组配置，切换同时影响私聊、群聊、主动联系、整理、摘要与群协调。豆包请求不会携带 MiniMax 专用思考参数；流式用量、独立思考字段和既有输出校验沿用现有客户端。`COMPANION_REASONING_EFFORT` 目前不会控制豆包。接通 API 不代表已验证角色质量和群聊/整理 JSON 稳定性，需实际验收；不合格输出不会绕过校验写入。
+
 ## 账号与数据隔离
 
 本页保留通用命令。含私人部署信息的 `ADMIN_COMMANDS.md` 仅保留在本地，不再跟踪 Git，新克隆仓库不包含它。
