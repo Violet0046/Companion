@@ -337,6 +337,10 @@ class ConversationService:
         self.authorizer.require_persona(user_id, persona_id)
         return self.conv_repo.count(user_id=user_id, persona_id=persona_id)
 
+    def last_group_exchange(self,user,persona,*,before_id=None):
+        self.authorizer.require_persona(user,persona)
+        return self.conv_repo.last_group_exchange(user,persona,before_id=before_id)
+
     def get_messages_between(
         self,
         *,

@@ -134,6 +134,7 @@ class PromptService:
             derived=derived,
             current_input=current_input,
             note_sources=self.note_service.sources(user_id, persona_id, [n.id for n in related_notes]) if related_notes else None,
+            last_group_exchange=self.conversation_service.last_group_exchange(user_id,persona_id,before_id=current_message_id),
         )
         if current_message_id is not None and current is not None and current.quoted_message_id is not None:
             quoted = self.conversation_service.quote(user_id,persona_id,current.quoted_message_id)
@@ -373,6 +374,7 @@ class PromptService:
         derived: str = "",
         current_input: str = "",
         note_sources: dict | None = None,
+        last_group_exchange: dict | None = None,
     ) -> str:
         """按 conversations/private.txt 渲染完整 system prompt。
 
@@ -388,86 +390,31 @@ class PromptService:
         否则模型会顺着上一条 user 消息答错问题。
         """
         return compose(CHAT_SYSTEM, {
-            'time_section':self._render_time_section(last_conv_at,current_input),
+            'time_section':self._render_time_section(last_conv_at,current_input,last_group_exchange=last_group_exchange),
             'persona_section': self._render_persona_basics(persona_basics),
             'notes_section': self._render_related_notes(related_notes or [], note_sources),
             'summary_section': derived,
         })
 
-    def _render_time_section(self, last_conv_at: str | None, current_input: str = "") -> str:
-        """当前这一轮（现在 + 间隔 + 本轮用户说的话 + 怎么开口的指引）。
-
-        为什么重写这个段（一行行的历史）：
-        原来的写法是
-
-            - 现在（这是用户发本条消息的时间）：2026-10-28 周三 10:54
-            - 用户上次对话的起始时间（注意：这不是当前消息时间）：2026-10-28 00:08:47
-
-        问题：
-        1. 那个"起始时间"写得很易让模型当成"现在"，实际上模型就回答过
-           "现在还是凌晨"（而实际是上午 10:54）
-        2. 时间戳写在那里模型并不会真的去思考它。
-
-        现在的写法：
-        - 给准确的"现在"
-        - 用人话说的间隔（不给绝对时间戳，避免被当成"现在"）
-        - 明确写出本轮用户说的话（模型要回答的就是这一句）
-        - **直接告诉模型这一轮该怎么开口**（连续还是新开一次）
-        """
-        now_str = format_now(self.tz_offset_hours)
-        lines = [
-            f"- **现在**：{now_str}",
-        ]
-
-        last_dt = parse_sqlite_ts(last_conv_at)
-        if last_dt is None:
-            if current_input:
-                lines.append(f"- **用户本轮说的话**：{_one_line(current_input)}")
-            lines.append(
-                "- **这一轮**：这是用户的第一次说话，"
-                "主动开口、建立一点感情基础。"
-            )
-            return "\n".join(lines)
-
-        now_utc = datetime.now(timezone.utc)
-        gap_seconds = int((now_utc - last_dt).total_seconds())
-        gap_text = describe_gap(gap_seconds)
-
-        # 用人话的上一次说话时间（本地时区）
-        local_last = last_dt.astimezone(
-            timezone(timedelta(hours=self.tz_offset_hours))
-        )
-        lines.append(
-            f"- **用户上一次说话**："
-            f"{local_last.strftime('%m月%d日 %H:%M')}，距今 {gap_text}"
-        )
+    def _render_time_section(self, last_conv_at: str | None, current_input: str = "", *, last_group_exchange: dict | None = None) -> str:
+        """Channel-scoped times, without turning private inactivity into absence."""
+        lines=[f"- **现在**：{format_now(self.tz_offset_hours)}"]
+        now=datetime.now(timezone.utc)
+        zone=timezone(timedelta(hours=self.tz_offset_hours))
+        def display(stamp):
+            gap=describe_gap(max(0,int((now-stamp).total_seconds())))
+            return stamp.astimezone(zone).strftime('%m月%d日 %H:%M')+'，距今 '+gap
+        private_dt=parse_sqlite_ts(last_conv_at)
+        if private_dt is not None:
+            lines.append('- **本私聊上次交流**：'+display(private_dt))
+        group_dt=parse_sqlite_ts(last_group_exchange['created_at']) if last_group_exchange else None
+        if group_dt is not None and (private_dt is None or group_dt>private_dt):
+            name=json.dumps(last_group_exchange['name'],ensure_ascii=False)
+            lines.append(f'- **最近群内交流**：你在群 {name} 回应过，'+display(group_dt))
         if current_input:
             lines.append(f"- **用户本轮说的话**：{_one_line(current_input)}")
-
-        # 这一轮的性质（给模型的开口指引）
-        if gap_seconds < 10 * 60:
-            hint = (
-                "用户刚说完还没多久，话题是**连续**的——"
-                "直接接着往下谈，不要重新打招呼、不要随意改口背景。"
-            )
-        elif gap_seconds < 3 * 3600:
-            hint = (
-                f"用户距上次说话过了 {gap_text}，属于**同一次随意聊的延续**——"
-                "可以自然地接上上一句话，不必重新介绍。"
-            )
-        elif gap_seconds < 16 * 3600:
-            hint = (
-                f"用户今天之前来过，距上次说话过了 {gap_text}——"
-                "还是同一天的事，可以紧凑一下但不必重新报到身份。"
-            )
-        else:
-            hint = (
-                f"用户隔了 {gap_text} 才再来，这是**一次新的对话**——"
-                "之前的话题已经过去了，**不要假装刚才还在聊**；"
-                "可以自然地关心一下他这段时间过得怎么样。"
-            )
-        lines.append(f"- **这一轮**：{hint}")
-
+        if private_dt is None:
+            lines.append('- **本私聊记录**：没有更早的私聊消息。')
         return "\n".join(lines)
 
     def _render_persona_basics(self, persona_basics: dict | None) -> str:

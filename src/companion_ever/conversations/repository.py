@@ -569,6 +569,24 @@ class ConversationRepo:
             return None
         return row["last_at"]
 
+    def last_group_exchange(self,user,persona,*,before_id=None):
+        """Only this role's replies, inside a period it belonged to the group.
+
+        A timestamp signal survives extraction; it does not grant history access.
+        Unanswered proactive messages are not evidence of a renewed exchange.
+        """
+        row=self.conn.execute("SELECT m.created_at,c.name FROM conversation_log m "
+            "JOIN conversation c ON c.id=m.conversation_id LEFT JOIN generation g ON g.id=m.generation_id "
+            "WHERE c.user_id=? AND m.user_id=? AND c.kind='group' AND m.role='assistant' "
+            "AND m.sender_kind='persona' AND m.sender_id=? AND (? IS NULL OR m.id<?) "
+            "AND (g.id IS NULL OR g.origin='reply') AND ("
+            "EXISTS(SELECT 1 FROM conversation_member cm WHERE cm.conversation_id=c.id AND cm.persona_id=? "
+            "AND m.id>cm.joined_after_message_id AND (cm.left_after_message_id IS NULL OR m.id<=cm.left_after_message_id)) OR "
+            "EXISTS(SELECT 1 FROM conversation_membership_history h WHERE h.conversation_id=c.id AND h.persona_id=? "
+            "AND m.id>h.joined_after_message_id AND m.id<=h.left_after_message_id)) "
+            "ORDER BY m.created_at DESC,m.id DESC LIMIT 1",(user,user,persona,before_id,before_id,persona,persona)).fetchone()
+        return dict(row) if row else None
+
     def count(self, *, user_id: str, persona_id: str) -> int:
         """统计 user/assistant 对话总条数（不含 session_close marker）。"""
         row = self.conn.execute(
